@@ -1,0 +1,55 @@
+P01 data-source probe — 2026-09-16T16:39:53Z
+
+  [ok] gamma-events                     expect: 200 + list
+  [ok] gamma-tokenids-parseable         expect: clobTokenIds is a JSON string that parses to a list
+  [ok] E1-gamma-row-cap                 expect: 100 rows max regardless of limit= (paginate with offset)
+  [ok] clob-ok                          expect: 200
+  [ok] clob-book-fields                 expect: 200 + bids/asks/tick_size/min_order_size present
+  [ok] clob-market-order-gate-fields    expect: all five pre-order fields present
+  [ok] clob-spread                      expect: 200 + spread
+  [ok] clob-last-trade-price            expect: 200 + price
+  [ok] clob-l2-requires-auth            expect: 401 unauthenticated (auth boundary is real)
+  [ok] E2-trades-is-cached              expect: cf-cache-status present AND newest ts repeats across 8s => NOT a feed; use WebSocket
+  [ok] E5-trades-carry-identity         expect: rows embed name/pseudonym/bio/profileImage so no profile join is needed
+  [ok] data-positions                   expect: 200 with required param
+  [ok] data-activity                    expect: 200 with required param
+  [ok] data-value                       expect: 200 with required param
+  [ok] data-traded                      expect: 200 with required param
+  [ok] data-positions-needs-user        expect: 400 + explicit missing-param error when user omitted
+  [ok] E5-no-profile-endpoint           expect: 404 => identity comes from the trade row
+  [ok] activity-types                   expect: 200 + a type enum including REDEEM
+  [ok] redeem-payout-in-usdcsiz         expect: REDEEM rows: price==0 on all, payout in usdcSize (never compute REDEEM from price*size)
+  [ok] lb-volume                        expect: 200 + rows with amount
+  [ok] lb-profit                        expect: 200 + rows with amount
+  [ok] E4-no-pnl-endpoint               expect: 404 => we must compute PnL ourselves
+  [ok] E4-rank-unusable                 expect: documented as broken: 400 even when rank is supplied
+  [ok] E3-updown-volume-share           expect: up/down < 2% of top-100 markets' 24h volume (wedge 1 not viable as a standalone product)
+  [ok] E3-events-page-hides-updown      expect: up/down events absent from volume-ordered /events pages => volume lives on markets, not events
+  [ok] feeType-field-exists             expect: feeType is readable per market so platform fees need no category guesswork
+
+  measurements:
+    gamma_row_cap                      100
+    top100_events_24h_usd              53067011.56
+    top10_share_pct                    69.3
+    events_over_1m_24h                 4
+    updown_in_top100_events            0
+    data_trades_cf_cache_status        "HIT"
+    data_trades_newest_ts              1789576452
+    fills_per_sec_measured             18.52
+    median_fill_usd                    5.0
+    p90_fill_usd                       58.0
+    max_fill_usd                       30260.0
+    pct_fills_ge_1000                  0.8
+    cache_buster_works                 true
+    redeem_row_payout_fields           {"price": 0, "usdcSize": 419.963213, "size": 419.963213}
+    updown_in_top100_markets           0
+    top100_markets_24h_usd             45063591.76
+    updown_share_of_top100_markets_pct 0.0
+    paged_event_rows                   300
+    paged_events_24h_usd               59930072.1
+    updown_in_paged_events             0
+    fee_type_observable_per_market     ["crypto_fees_v2", "culture_fees", "economics_fees", "finance_prices_fees", "politics_fees", "sports_fees_v2"]
+    ws_dns                             "104.18.34.205"
+
+  26/26 checks passed
+  Note: an upstream change here means the spec is stale — re-open P01, do not edit this test.

@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,viewport-fit=cover">
+<title>PolyGM — Polymarket terminal</title>
+<style>
+:root{
+  --bg:#07090c; --panel:#0e1116; --panel2:#141922; --line:#1e242e;
+  --txt:#e6edf3; --dim:#8b97a7; --grn:#26d07c; --red:#ff5252; --amb:#ffb020; --blu:#4aa3ff;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;padding:0;background:var(--bg);color:var(--txt);
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Inter,sans-serif;font-size:14px}
+body{max-width:520px;margin:0 auto;min-height:100vh;padding-bottom:74px}
+header{position:sticky;top:0;z-index:20;background:rgba(7,9,12,.92);backdrop-filter:blur(10px);
+  border-bottom:1px solid var(--line);padding:10px 14px}
+.brand{display:flex;align-items:center;gap:8px;font-weight:800;letter-spacing:-.3px;font-size:16px}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--grn);box-shadow:0 0 10px var(--grn)}
+.dot.err{background:var(--red);box-shadow:0 0 10px var(--red)}
+.sub{color:var(--dim);font-size:11px;margin-top:2px;font-family:var(--mono)}
+.statbar{display:flex;gap:14px;margin-top:8px;font-family:var(--mono);font-size:11px;color:var(--dim);flex-wrap:wrap}
+.statbar b{color:var(--txt);font-weight:600}
+nav{position:fixed;bottom:0;left:0;right:0;z-index:30;background:rgba(10,12,16,.96);
+  backdrop-filter:blur(10px);border-top:1px solid var(--line);display:flex}
+nav button{flex:1;background:none;border:0;color:var(--dim);padding:11px 0 13px;font-size:11px;
+  font-family:inherit;display:flex;flex-direction:column;align-items:center;gap:3px;cursor:pointer}
+nav button.on{color:var(--grn)}
+nav svg{width:19px;height:19px}
+main{padding:10px 12px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:11px;margin-bottom:8px}
+.row{display:flex;justify-content:space-between;align-items:center;gap:10px}
+.tt{font-weight:600;font-size:13.5px;line-height:1.3}
+.mut{color:var(--dim);font-size:11px}
+.mono{font-family:var(--mono)}
+.up{color:var(--grn)} .dn{color:var(--red)}
+.pill{font-family:var(--mono);font-size:11.5px;padding:3px 8px;border-radius:7px;background:var(--panel2);border:1px solid var(--line);white-space:nowrap}
+.chips{display:flex;gap:6px;overflow-x:auto;padding:2px 0 8px;scrollbar-width:none}
+.chips::-webkit-scrollbar{display:none}
+.chip{flex:0 0 auto;background:var(--panel2);border:1px solid var(--line);color:var(--dim);
+  border-radius:999px;padding:5px 11px;font-size:12px;cursor:pointer;white-space:nowrap}
+.chip.on{background:#132a1f;border-color:#1f5c3d;color:var(--grn)}
+.olist{display:flex;flex-direction:column;gap:3px;margin-top:7px}
+.o{display:flex;justify-content:space-between;font-size:12px;padding:2px 0}
+.bar{height:3px;background:var(--panel2);border-radius:2px;overflow:hidden;margin-top:2px}
+.bar>i{display:block;height:100%;background:linear-gradient(90deg,#1d6f47,#26d07c)}
+.tape{display:flex;justify-content:space-between;gap:8px;padding:7px 0;border-bottom:1px solid var(--line);font-size:12px}
+.tape:last-child{border:0}
+.usd{font-family:var(--mono);font-weight:600;white-space:nowrap}
+.whale{background:#3a2a08;color:var(--amb);font-size:9px;padding:1px 5px;border-radius:4px;margin-left:5px;font-weight:700}
+.rank{color:var(--dim);font-family:var(--mono);width:22px}
+.btn{width:100%;padding:13px;border-radius:11px;border:0;font-weight:700;font-size:14px;
+  font-family:inherit;cursor:pointer;background:var(--grn);color:#04150c}
+.btn.ghost{background:var(--panel2);color:var(--txt);border:1px solid var(--line)}
+.btn.buy{background:var(--grn);color:#04150c}
+.btn.sell{background:var(--red);color:#2b0404}
+.sheet{position:fixed;inset:0;z-index:50;background:rgba(0,0,0,.6);display:none;align-items:flex-end}
+.sheet.on{display:flex}
+.sheetbox{background:var(--bg);width:100%;max-width:520px;margin:0 auto;border-radius:16px 16px 0 0;
+  border-top:1px solid var(--line);max-height:88vh;overflow:auto;padding:14px}
+.seg{display:flex;gap:6px;background:var(--panel2);padding:4px;border-radius:10px;margin:10px 0}
+.seg button{flex:1;padding:9px;border:0;border-radius:7px;background:none;color:var(--dim);font-weight:700;font-family:inherit;cursor:pointer}
+.seg button.on{background:var(--panel);color:var(--txt)}
+.dep{display:flex;justify-content:space-between;font-family:var(--mono);font-size:11px;padding:3px 0}
+.note{background:#141019;border:1px solid #3a2a5c;border-radius:10px;padding:10px;font-size:11.5px;color:#c9b8ea;line-height:1.5}
+.inp{width:100%;background:var(--panel2);border:1px solid var(--line);color:var(--txt);
+  border-radius:10px;padding:11px;font-size:15px;font-family:var(--mono)}
+.skel{height:64px;border-radius:12px;background:linear-gradient(90deg,#0e1116,#151b24,#0e1116);
+  background-size:200% 100%;animation:s 1.2s infinite;margin-bottom:8px}
+@keyframes s{0%{background-position:200% 0}100%{background-position:-200% 0}}
+h3{margin:16px 0 8px;font-size:12px;text-transform:uppercase;letter-spacing:.8px;color:var(--dim)}
+a{color:var(--blu)}
+</style>
+</head>
+<body>
+<header>
+  <div class="brand"><span class="dot" id="dot"></span> PolyGM <span class="mut" style="font-weight:400">prototype · live data</span></div>
+  <div class="sub" id="meta">connecting…</div>
+  <div class="statbar" id="statbar"></div>
+</header>
+
+<main id="view"></main>
+
+<nav>
+  <button data-t="markets" class="on">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 17l6-6 4 4 8-8"/><path d="M21 7v5h-5"/></svg>Markets</button>
+  <button data-t="tape">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h10"/></svg>Live tape</button>
+  <button data-t="whales">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s4-6 10-6 10 6 10 6-4 6-10 6S2 12 2 12z"/><circle cx="12" cy="12" r="2.5"/></svg>Whales</button>
+  <button data-t="trade">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7h13l-3-3M21 17H8l3 3"/></svg>Trade</button>
+</nav>
+
+<div class="sheet" id="sheet"><div class="sheetbox" id="sheetbox"></div></div>
+
+<script>
+const $=s=>document.querySelector(s);
+const fmtM=n=>n>=1e9?(n/1e9).toFixed(2)+'B':n>=1e6?(n/1e6).toFixed(2)+'M':n>=1e3?(n/1e3).toFixed(1)+'k':(n||0).toFixed(0);
+const pct=p=>((p||0)*100).toFixed(1)+'%';
+const ago=ts=>{const s=Math.max(0,Math.floor(Date.now()/1000-(ts||0)));return s<60?s+'s':s<3600?Math.floor(s/60)+'m':Math.floor(s/3600)+'h';};
+let S={events:[],tape:[],tapeStats:{},leaderboard:[],books:{},_meta:{}}, tab='markets', sort='vol';
+const paper=JSON.parse(localStorage.getItem('polygm_paper')||'[]');
+
+async function load(){
+  try{
+    const r=await fetch('/api/state'); S=await r.json();
+    $('#dot').className='dot'+((S._meta.errors||[]).length?' err':'');
+    $('#meta').textContent='cache '+S._meta.ageSecs+'s old · '+(S.events||[]).length+' events · '+Object.keys(S.books||{}).length+' books';
+  }catch(e){ $('#meta').textContent='offline: '+e.message; $('#dot').className='dot err'; }
+  render();
+}
+
+function statbar(){
+  const ev=S.events||[];
+  const v24=ev.reduce((a,e)=>a+(e.volume24hr||0),0);
+  const liq=ev.reduce((a,e)=>a+(e.liquidity||0),0);
+  const ts=S.tapeStats||{};
+  const tps=ts.spanSecs?(ts.count/ts.spanSecs).toFixed(1):'–';
+  return `<span>24h vol <b>$${fmtM(v24)}</b></span><span>liq <b>$${fmtM(liq)}</b></span>`+
+    `<span>tape <b>${tps}/s</b></span><span>wallets/300 <b>${ts.uniqueWallets||0}</b></span>`+
+    `<span>≥$1k trades <b>${ts.whales||0}</b></span>`;
+}
+
+function marketCard(e){
+  const ms=(e.markets||[]).slice().sort((a,b)=>b.volume24hr-a.volume24hr).slice(0,3);
+  const list=ms.map(m=>{
+    const p=m.prices&&m.prices[0]?m.prices[0]:0;
+    return `<div class="o"><span class="mut">${(m.question||'').slice(0,52)}</span>
+      <span class="mono">${(p*100).toFixed(1)}¢</span></div>
+      <div class="bar"><i style="width:${Math.min(100,p*100)}%"></i></div>`;
+  }).join('');
+  return `<div class="card" onclick="openM('${e.slug}')">
+    <div class="row"><div class="tt" style="flex:1">${e.title}</div>
+      <span class="pill up">$${fmtM(e.volume24hr)}</span></div>
+    <div class="row mut" style="margin-top:4px;font-size:11px">
+      <span>${e.nMarkets} markets · liq $${fmtM(e.liquidity)}</span>
+      <span>OI $${fmtM(e.openInterest)}</span></div>
+    ${e.nMarkets>1?`<div class="olist">${list}</div>`:''}
+  </div>`;
+}
+
+function render(){
+  $('#statbar').innerHTML=statbar();
+  const v=$('#view');
+  if(!S.events.length && !S.tape.length){v.innerHTML='<div class="skel"></div>'.repeat(6);return;}
+  if(tab==='markets'){
+    const chips=[['vol','Top volume'],['liq','Deepest'],['oi','Open interest'],['new','Ending soon']]
+      .map(([k,l])=>`<div class="chip ${sort===k?'on':''}" onclick="sort='${k}';render()">${l}</div>`).join('');
+    let ev=[...(S.events||[])];
+    if(sort==='liq')ev.sort((a,b)=>b.liquidity-a.liquidity);
+    else if(sort==='oi')ev.sort((a,b)=>b.openInterest-a.openInterest);
+    else if(sort==='new')ev.sort((a,b)=>new Date(a.endDate)-new Date(b.endDate));
+    else ev.sort((a,b)=>b.volume24hr-a.volume24hr);
+    v.innerHTML=`<div class="chips">${chips}</div>`+ev.map(marketCard).join('');
+  }
+  if(tab==='tape'){
+    v.innerHTML=`<div class="note" style="margin-bottom:10px">Every fill on Polymarket, newest first. <b>${S.tapeStats.whales||0}</b> of the last ${S.tapeStats.count||0} trades were ≥$1,000. Tap a row to open the market.</div>`+
+      (S.tape||[]).slice(0,80).map(t=>`<div class="tape" onclick="openSlug('${t.slug}')">
+        <div style="flex:1;min-width:0"><div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${t.title}</div>
+        <div class="mut">${t.side==='BUY'?'<span class="up">BUY</span>':'<span class="dn">SELL</span>'} ${t.outcome} @ ${(t.price*100).toFixed(1)}¢ · ${t.name} · ${ago(t.ts)}</div></div>
+        <div class="usd ${t.side==='BUY'?'up':'dn'}">$${fmtM(t.usd)}${t.usd>=1000?'<span class="whale">WHALE</span>':''}</div></div>`).join('');
+  }
+  if(tab==='whales'){
+    v.innerHTML=`<div class="note" style="margin-bottom:10px">All-time volume leaderboard, straight from Polymarket's own API. In production this becomes: realised PnL, win rate, avg hold time, category edge, and a one-tap <b>copy</b> button.</div>`+
+      (S.leaderboard||[]).map((w,i)=>`<div class="tape">
+        <span class="rank">${i+1}</span>
+        <div style="flex:1"><div>${w.name}</div><div class="mut mono">${(w.wallet||'').slice(0,10)}…${(w.wallet||'').slice(-6)}</div></div>
+        <div class="usd">$${fmtM(w.volume)}</div></div>`).join('');
+  }
+  if(tab==='trade'){
+    const pnl=paper.reduce((a,p)=>a+p.pnl,0);
+    v.innerHTML=`
+    <div class="card"><div class="row"><div><div class="tt">Portfolio</div>
+      <div class="mut">Not connected — paper mode</div></div>
+      <div style="text-align:right"><div class="mono ${pnl>=0?'up':'dn'}">${pnl>=0?'+':''}$${pnl.toFixed(2)}</div>
+      <div class="mut">${paper.length} fills</div></div></div>
+      <button class="btn" style="margin-top:12px" onclick="connect()">Connect wallet</button></div>
+    <h3>What "Connect wallet" does in the real build</h3>
+    <div class="note">
+      1. Bot creates a dedicated Polygon wallet for this Telegram user (key encrypted at rest, exportable).<br>
+      2. User deposits USDC/USDT from any chain → auto-converted to <b>pUSD</b>, Polymarket's collateral.<br>
+      3. Server holds CLOB V2 L2 creds (api key / secret / passphrase) and signs orders server-side.<br>
+      4. Every order carries your <b>builderCode</b> → you earn the builder fee on each match.<br>
+      5. Gas is covered by Polymarket's relayer, so users never touch POL/MATIC.
+    </div>
+    <h3>Paper fills</h3>
+    ${paper.length?paper.slice(0,20).map(p=>`<div class="tape"><div style="flex:1"><div>${p.q}</div>
+      <div class="mut">${p.side} ${p.out} @ ${(p.price*100).toFixed(1)}¢ · $${p.usd.toFixed(0)}</div></div>
+      <div class="usd mut">${ago(p.ts)} ago</div></div>`).join(''):'<div class="mut">Open any market → place a paper order. It never touches the chain.</div>'}`;
+  }
+}
+
+function bookRow(tid,label){
+  const b=S.books&&S.books[tid];
+  if(!b)return `<div class="dep"><span>${label}</span><span class="mut">book not cached (only top markets are polled in this prototype)</span></div>`;
+  return `<div class="dep"><span>${label}</span><span>${b.bestBid!==null?(b.bestBid*100).toFixed(1):'–'}¢ / ${b.bestAsk!==null?(b.bestAsk*100).toFixed(1):'–'}¢</span></div>
+  <div class="dep mut"><span>spread</span><span>${b.spread!==null?(b.spread*100).toFixed(2)+'¢':'–'} · ${b.bidLevels}/${b.askLevels} lvls · tick ${b.tick}</span></div>
+  <div class="dep mut"><span>depth bid / ask</span><span>$${fmtM(b.bidDepth)} / $${fmtM(b.askDepth)}</span></div>`;
+}
+
+window.openM=slug=>{
+  const e=(S.events||[]).find(x=>x.slug===slug); if(!e)return;
+  const ms=(e.markets||[]).slice().sort((a,b)=>b.volume24hr-a.volume24hr);
+  const opts=ms.slice(0,10).map(m=>`<option value="${m.tokenIds[0]||''}">${(m.question||'').slice(0,60)}</option>`).join('');
+  $('#sheetbox').innerHTML=`
+    <div class="row"><div class="tt" style="flex:1">${e.title}</div><button class="btn ghost" style="width:auto;padding:6px 12px" onclick="closeSheet()">✕</button></div>
+    <div class="mut mono" style="margin:4px 0 10px">24h $${fmtM(e.volume24hr)} · liq $${fmtM(e.liquidity)} · OI $${fmtM(e.openInterest)} · ${e.negRisk?'multi-outcome (negRisk)':'binary'}</div>
+    <h3>Order book</h3>
+    <select class="inp" id="sel">${opts}</select>
+    <div id="bk" style="margin-top:8px"></div>
+    <h3>Place order</h3>
+    <div class="seg"><button class="on" id="sBuy" onclick="side('BUY')">BUY YES</button><button id="sSell" onclick="side('SELL')">SELL</button></div>
+    <input class="inp" id="amt" value="50" inputmode="decimal">
+    <div class="mut" style="margin:6px 0 10px">Minimum order on Polymarket is 5 shares — the CLOB rejects anything smaller.</div>
+    <button class="btn buy" id="go" onclick="place()">Paper buy</button>
+    <div class="note" style="margin-top:10px">Prototype: <b>read-only</b>. No key, no order, no money. The production order path is <span class="mono">py-clob-client-v2</span> → signed CLOB V2 order (<span class="mono">timestamp, metadata, builder</span>) → <span class="mono">POST /order</span>.</div>`;
+  $('#sheet').classList.add('on');
+  $('#sel').onchange=()=>{const t=$('#sel').value;$('#bk').innerHTML=bookRow(t,'YES')};
+  $('#sel').onchange();
+  curEvent=e;
+};
+window.openSlug=s=>{const e=(S.events||[]).find(x=>x.slug===s); if(e)openM(s); else alert('That market is outside the cached top-60 in this prototype — production indexes all ~30k markets.');};
+window.closeSheet=()=>$('#sheet').classList.remove('on');
+$('#sheet').onclick=e=>{if(e.target.id==='sheet')closeSheet()};
+let curEvent=null, curSide='BUY';
+window.side=s=>{curSide=s;$('#sBuy').className=s==='BUY'?'on':'';$('#sSell').className=s==='SELL'?'on':'';
+  $('#go').className='btn '+(s==='BUY'?'buy':'sell');$('#go').textContent=s==='BUY'?'Paper buy':'Paper sell'};
+window.place=()=>{
+  const tid=$('#sel').value, b=S.books&&S.books[tid], usd=parseFloat($('#amt').value)||0;
+  const m=(curEvent.markets||[]).find(x=>x.tokenIds[0]===tid)||{};
+  const price=(curSide==='BUY'?(b&&b.bestAsk)||(m.prices&&m.prices[0])||0.5:(b&&b.bestBid)||(m.prices&&m.prices[0])||0.5);
+  paper.unshift({q:curEvent.title,out:(m.outcomes&&m.outcomes[0])||'Yes',side:curSide,price,usd,pnl:0,ts:Math.floor(Date.now()/1000)});
+  localStorage.setItem('polygm_paper',JSON.stringify(paper.slice(0,100)));
+  $('#go').textContent='✓ logged'; setTimeout(()=>{closeSheet();tab='trade';nav();},500);
+};
+window.connect=()=>alert('Prototype: no wallet. Production flow is documented on this screen and in PLAN.md §Architecture.');
+function nav(){document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('on',b.dataset.t===tab));render();}
+document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>{tab=b.dataset.t;nav()});
+window.render=render;
+load(); setInterval(load,10000);
+</script>
+</body>
+</html>

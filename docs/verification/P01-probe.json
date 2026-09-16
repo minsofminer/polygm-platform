@@ -1,0 +1,448 @@
+{
+  "started_at": "2026-09-16T16:39:38Z",
+  "findings": {
+    "E1": "Gamma caps page size at 100 rows regardless of limit=",
+    "E2": "data-api /trades is served from Cloudflare cache (cf-cache-status: HIT) => not a feed",
+    "E3": "5-min up/down markets are absent from top-100 markets by 24h volume",
+    "E4": "lb-api has /volume and /profit per window; /pnl 404s; /rank is unusable",
+    "E5": "trade rows embed identity fields (name/pseudonym/bio/profileImage) and /profile does not exist"
+  },
+  "measurements": {
+    "gamma_row_cap": 100,
+    "top100_events_24h_usd": 53067011.56,
+    "top10_share_pct": 69.3,
+    "events_over_1m_24h": 4,
+    "updown_in_top100_events": 0,
+    "data_trades_cf_cache_status": "HIT",
+    "data_trades_newest_ts": 1789576452,
+    "fills_per_sec_measured": 18.52,
+    "median_fill_usd": 5.0,
+    "p90_fill_usd": 58.0,
+    "max_fill_usd": 30260.0,
+    "pct_fills_ge_1000": 0.8,
+    "cache_buster_works": true,
+    "redeem_row_payout_fields": {
+      "price": 0,
+      "usdcSize": 419.963213,
+      "size": 419.963213
+    },
+    "updown_in_top100_markets": 0,
+    "top100_markets_24h_usd": 45063591.76,
+    "updown_share_of_top100_markets_pct": 0.0,
+    "paged_event_rows": 300,
+    "paged_events_24h_usd": 59019167.29,
+    "updown_in_paged_events": 0,
+    "fee_type_observable_per_market": [
+      "crypto_fees_v2",
+      "culture_fees",
+      "economics_fees",
+      "finance_prices_fees",
+      "politics_fees",
+      "sports_fees_v2"
+    ],
+    "ws_dns": "104.18.34.205"
+  },
+  "checks": [
+    {
+      "id": "gamma-events",
+      "finding": "E1/E5",
+      "url": "https://gamma-api.polymarket.com/events",
+      "expect": "200 + list",
+      "ok": true,
+      "observed": {
+        "status": 200,
+        "rows": 2
+      },
+      "note": ""
+    },
+    {
+      "id": "gamma-tokenids-parseable",
+      "finding": "E5",
+      "url": "https://gamma-api.polymarket.com/events?slug=fed-decision-in-september-762",
+      "expect": "clobTokenIds is a JSON string that parses to a list",
+      "ok": true,
+      "observed": {
+        "type": "str",
+        "count": 2
+      },
+      "note": ""
+    },
+    {
+      "id": "E1-gamma-row-cap",
+      "finding": "E1",
+      "url": "https://gamma-api.polymarket.com/events?limit=200",
+      "expect": "100 rows max regardless of limit= (paginate with offset)",
+      "ok": true,
+      "observed": {
+        "rows": 100
+      },
+      "note": ""
+    },
+    {
+      "id": "clob-ok",
+      "finding": "E2",
+      "url": "https://clob.polymarket.com/ok",
+      "expect": "200",
+      "ok": true,
+      "observed": 200,
+      "note": ""
+    },
+    {
+      "id": "clob-book-fields",
+      "finding": "E2",
+      "url": "https://clob.polymarket.com/book?token_id=\u2026",
+      "expect": "200 + bids/asks/tick_size/min_order_size present",
+      "ok": true,
+      "observed": {
+        "status": 200,
+        "keys": [
+          "asks",
+          "asset_id",
+          "bids",
+          "hash",
+          "last_trade_price",
+          "market",
+          "min_order_size",
+          "neg_risk"
+        ]
+      },
+      "note": ""
+    },
+    {
+      "id": "clob-market-order-gate-fields",
+      "finding": "E2",
+      "url": "https://clob.polymarket.com/markets/0x5e464d85eb49f22d876f3ed6168a7db5e2288e9ae1eb91effd2758e994676f86",
+      "expect": "all five pre-order fields present",
+      "ok": true,
+      "observed": {
+        "minimum_order_size": 5,
+        "minimum_tick_size": 0.001,
+        "neg_risk": true,
+        "accepting_orders": true,
+        "seconds_delay": 0
+      },
+      "note": ""
+    },
+    {
+      "id": "clob-spread",
+      "finding": "E2",
+      "url": "https://clob.polymarket.com/spread",
+      "expect": "200 + spread",
+      "ok": true,
+      "observed": {
+        "spread": "0.001"
+      },
+      "note": ""
+    },
+    {
+      "id": "clob-last-trade-price",
+      "finding": "E2",
+      "url": "https://clob.polymarket.com/last-trade-price",
+      "expect": "200 + price",
+      "ok": true,
+      "observed": {
+        "price": "0.001",
+        "side": "BUY"
+      },
+      "note": ""
+    },
+    {
+      "id": "clob-l2-requires-auth",
+      "finding": "E2",
+      "url": "https://clob.polymarket.com/data/trades",
+      "expect": "401 unauthenticated (auth boundary is real)",
+      "ok": true,
+      "observed": 401,
+      "note": ""
+    },
+    {
+      "id": "E2-trades-is-cached",
+      "finding": "E2",
+      "url": "https://data-api.polymarket.com/trades?limit=500",
+      "expect": "cf-cache-status present AND newest ts repeats across 8s => NOT a feed; use WebSocket",
+      "ok": true,
+      "observed": {
+        "cache_status": "HIT",
+        "newest_t0": 1789576452,
+        "newest_t8": 1789576452,
+        "identical": true
+      },
+      "note": "If this flips to MISS/STATIC, re-measure before changing the tape design."
+    },
+    {
+      "id": "E5-trades-carry-identity",
+      "finding": "E5",
+      "url": "https://data-api.polymarket.com/trades",
+      "expect": "rows embed name/pseudonym/bio/profileImage so no profile join is needed",
+      "ok": true,
+      "observed": [
+        "asset",
+        "bio",
+        "conditionId",
+        "eventSlug",
+        "icon",
+        "name",
+        "outcome",
+        "outcomeIndex",
+        "price",
+        "profileImage",
+        "profileImageOptimized",
+        "proxyWallet",
+        "pseudonym",
+        "side",
+        "size",
+        "slug",
+        "timestamp",
+        "title",
+        "transactionHash"
+      ],
+      "note": ""
+    },
+    {
+      "id": "data-positions",
+      "finding": "E5",
+      "url": "https://data-api.polymarket.com/positions?user=",
+      "expect": "200 with required param",
+      "ok": true,
+      "observed": {
+        "status": 200,
+        "sample": {
+          "proxyWallet": "0xffcf591e09d9fffcab04f1082ceb83fab6920fed",
+          "asset": "67858907214312671358677929716662443050645208262857719437608542365091707783980",
+          "conditionId": "0x7bd40478f4f85acee24b011a7f9b17cd8e9cf87619972dfafef9d619f04f3add",
+          "size": 1321.7828,
+          "avgPrice": 0.6212,
+          "initialValue": 821.1373,
+          "grossInitialValue": 823.557941,
+          "entryFeesUsdc": 2.4206,
+          "currentValue": 0,
+          "cashPnl": -821.1373,
+          "percentPnl": -99.9999,
+          "totalBought": 1321.7828,
+          "realizedPnl": -2.4206,
+          "percentRealizedPnl": -100,
+          "curPrice": 0,
+          "redeemable": true,
+          "mergeable": false,
+          "title": "Bitcoin Up or Down - July 21, 11:15AM-11:20AM ET",
+          "slug": "btc-updown-5m-1784646900",
+          "icon": "https://polymarket-upload.s3.us-east-2.amazonaws.com/BTC+fullsize.png",
+          "eventId": "725694",
+          "eventSlug": "btc-updown-5m-1784646900",
+          "outcome": "Down",
+          "outcomeIndex": 1,
+          "oppositeOutcome": "Up",
+          "oppositeAsset": "97496542129845755474915452152380205394922566198790691192084719599931924094410",
+          "endDate": "2026-07-21",
+          "negativeRisk": false
+        }
+      },
+      "note": ""
+    },
+    {
+      "id": "data-activity",
+      "finding": "E5",
+      "url": "https://data-api.polymarket.com/activity?user=",
+      "expect": "200 with required param",
+      "ok": true,
+      "observed": {
+        "status": 200,
+        "sample": {
+          "proxyWallet": "0xffcf591e09d9fffcab04f1082ceb83fab6920fed",
+          "timestamp": 1789576761,
+          "conditionId": "0xaa86994c14f77a9394cd61faa1a268fb2f4b4e18ed93371a9343d84799a71dcf",
+          "type": "TRADE",
+          "size": 7,
+          "usdcSize": 6.16,
+          "transactionHash": "0xf658b6aea3363064520a43c61454db3a9d42db885904ddd55ce2915210283da7",
+          "price": 0.88,
+          "asset": "90207473279132070650913463466369973292738027334921043704516504139919549258433",
+          "side": "BUY",
+          "outcomeIndex": 1,
+          "title": "Ethereum Up or Down - September 16, 12:35PM-12:40PM ET",
+          "slug": "eth-updown-5m-1789576500",
+          "icon": "https://polymarket-upload.s3.us-east-2.amazonaws.com/ETH+fullsize.jpg",
+          "eventSlug": "eth-updown-5m-1789576500",
+          "outcome": "Down",
+          "name": "gsdgsf3",
+          "pseudonym": "Thankful-Wingtip",
+          "bio": "",
+          "profileImage": "",
+          "profileImageOptimized": ""
+        }
+      },
+      "note": ""
+    },
+    {
+      "id": "data-value",
+      "finding": "E5",
+      "url": "https://data-api.polymarket.com/value?user=",
+      "expect": "200 with required param",
+      "ok": true,
+      "observed": {
+        "status": 200,
+        "sample": {
+          "user": "0xffcf591e09d9fffcab04f1082ceb83fab6920fed",
+          "value": 3227.6479
+        }
+      },
+      "note": ""
+    },
+    {
+      "id": "data-traded",
+      "finding": "E5",
+      "url": "https://data-api.polymarket.com/traded?user=",
+      "expect": "200 with required param",
+      "ok": true,
+      "observed": {
+        "status": 200,
+        "sample": {
+          "user": "0xffcf591e09d9fffcab04f1082ceb83fab6920fed",
+          "traded": 48365
+        }
+      },
+      "note": ""
+    },
+    {
+      "id": "data-positions-needs-user",
+      "finding": "E5",
+      "url": "https://data-api.polymarket.com/positions",
+      "expect": "400 + explicit missing-param error when user omitted",
+      "ok": true,
+      "observed": {
+        "status": 400,
+        "body": "b'{\"error\":\"required query param \\'user\\' not provided\"}'"
+      },
+      "note": ""
+    },
+    {
+      "id": "E5-no-profile-endpoint",
+      "finding": "E5",
+      "url": "https://data-api.polymarket.com/profile",
+      "expect": "404 => identity comes from the trade row",
+      "ok": true,
+      "observed": 404,
+      "note": ""
+    },
+    {
+      "id": "activity-types",
+      "finding": "E5",
+      "url": "https://data-api.polymarket.com/activity?user=",
+      "expect": "200 + a type enum including REDEEM",
+      "ok": true,
+      "observed": {
+        "TRADE": 260,
+        "REDEEM": 40
+      },
+      "note": ""
+    },
+    {
+      "id": "redeem-payout-in-usdcsiz",
+      "finding": "E5",
+      "url": "https://data-api.polymarket.com/activity?user=",
+      "expect": "REDEEM rows: price==0 on all, payout in usdcSize (never compute REDEEM from price*size)",
+      "ok": true,
+      "observed": {
+        "redeem_rows": 32,
+        "price_nonzero": 0,
+        "usdcsiz_positive": 18
+      },
+      "note": ""
+    },
+    {
+      "id": "lb-volume",
+      "finding": "E4",
+      "url": "https://lb-api.polymarket.com/volume?window=all",
+      "expect": "200 + rows with amount",
+      "ok": true,
+      "observed": {
+        "status": 200,
+        "top": {
+          "name": "swisstony",
+          "amount": 1854632178.9554565
+        }
+      },
+      "note": ""
+    },
+    {
+      "id": "lb-profit",
+      "finding": "E4",
+      "url": "https://lb-api.polymarket.com/profit?window=all",
+      "expect": "200 + rows with amount",
+      "ok": true,
+      "observed": {
+        "status": 200,
+        "top": {
+          "name": "swisstony",
+          "amount": 23630828.288838807
+        }
+      },
+      "note": ""
+    },
+    {
+      "id": "E4-no-pnl-endpoint",
+      "finding": "E4",
+      "url": "https://lb-api.polymarket.com/pnl",
+      "expect": "404 => we must compute PnL ourselves",
+      "ok": true,
+      "observed": 404,
+      "note": ""
+    },
+    {
+      "id": "E4-rank-unusable",
+      "finding": "E4",
+      "url": "https://lb-api.polymarket.com/rank?rank=volume&address=",
+      "expect": "documented as broken: 400 even when rank is supplied",
+      "ok": true,
+      "observed": {
+        "status": 400,
+        "body": "b'{\"error\":\"required query param \\'rank\\' not provided\"}'"
+      },
+      "note": ""
+    },
+    {
+      "id": "E3-updown-volume-share",
+      "finding": "E3",
+      "url": "https://gamma-api.polymarket.com/markets?order=volume24hr",
+      "expect": "up/down < 2% of top-100 markets' 24h volume (wedge 1 not viable as a standalone product)",
+      "ok": true,
+      "observed": {
+        "updown_count": 0,
+        "updown_usd": 0,
+        "top100_usd": 45063591.76,
+        "share_pct": 0.0
+      },
+      "note": ""
+    },
+    {
+      "id": "E3-events-page-hides-updown",
+      "finding": "E3",
+      "url": "https://gamma-api.polymarket.com/events?order=volume24hr (3 pages)",
+      "expect": "up/down events absent from volume-ordered /events pages => volume lives on markets, not events",
+      "ok": true,
+      "observed": {
+        "rows": 300,
+        "updown_events": 0,
+        "total_usd": 59019167.29
+      },
+      "note": "Cross-check: kit says $59.1M/24h for top-500 events; a 300-row page should approach it."
+    },
+    {
+      "id": "feeType-field-exists",
+      "finding": "E3",
+      "url": "https://gamma-api.polymarket.com/markets",
+      "expect": "feeType is readable per market so platform fees need no category guesswork",
+      "ok": true,
+      "observed": [
+        "crypto_fees_v2",
+        "culture_fees",
+        "economics_fees",
+        "finance_prices_fees",
+        "politics_fees",
+        "sports_fees_v2"
+      ],
+      "note": ""
+    }
+  ],
+  "failures": []
+}

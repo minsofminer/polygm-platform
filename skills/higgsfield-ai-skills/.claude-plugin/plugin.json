@@ -1,0 +1,30 @@
+{
+  "name": "higgsfield",
+  "version": "0.12.0",
+  "description": "Higgsfield AI skills for images, videos, complete brand systems, narrated explainers, YouTube thumbnails, browser games, Marketing Studio, engagement analysis, and Soul Character training.",
+  "author": {
+    "name": "Higgsfield AI",
+    "url": "https://higgsfield.ai"
+  },
+  "homepage": "https://higgsfield.ai",
+  "repository": "https://github.com/higgsfield-ai/skills",
+  "license": "MIT",
+  "keywords": [
+    "higgsfield",
+    "image-generation",
+    "video-generation",
+    "engagement-analysis",
+    "soul-character",
+    "marketing-studio",
+    "ai-video",
+    "ai-image",
+    "img2img",
+    "img2vid",
+    "ugc",
+    "avatar",
+    "brandkit",
+    "brand-identity",
+    "video-explainer",
+    "youtube-thumbnail"
+  ]
+}

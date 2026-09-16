@@ -1,0 +1,39 @@
+P01 quality gate
+
+  [ok]   C1 D1 · Wedge selection — 6,281 chars
+  [ok]   C1 D2 · Competitor teardown — 3,968 chars
+  [ok]   C1 D3 · Feature specification — 7,693 chars
+  [ok]   C1 D4 · Data model — 13,315 chars
+  [ok]   C1 D5 · Metrics — 2,637 chars
+  [ok]   C1 D6 · revenue model — 5,829 chars
+  [ok]   C2 feature table populated — 19 rows
+  [ok]   C2 every P0 feature names a data source host — 19 rows, all P0 sourced by host
+  [ok]   C3 all 19 required tables specified — 19/19 + `order_events`, `usdc_flows`
+  [ok]   C3 spec-added tables present — order_events, usdc_flows
+  [ok]   C3 ClickHouse-vs-Postgres rationale
+  [ok]   C3 reconciliation addressed
+  [ok]   C3 negRisk PnL addressed
+  [ok]   C4 D6 table parseable — missing rows: []
+  [ok]   C4 3 scenarios × 3 months shape — 9 columns
+  [ok]   C4 subscription price is stated — price=15.0
+  [ok]   C4 every D6 figure recomputes from its own inputs — 9 columns verified
+  [ok]   C5 builder-share row present — 9 cells
+  [ok]   C5 >60% builder share is flagged per the kit's rule — over-60 cols: [7, 8], flagged: [7, 8]
+  [ok]   C6 unknowns surfaced as [UNVERIFIED] — 25 markers
+  [ok]   C6 no hedged claims in prose — clean
+  [ok]   C6 every contested topic is flagged somewhere — 6/6 contested topics carry a marker
+  [ok]   C7 all five gate questions answered
+  [ok]   C7 honesty summary inside the gate section
+  [ok]   C8 data-source probe passes — failures: []
+  [ok]   C8 probe recorded E1 row cap — gamma_row_cap=100 (spec claims 100)
+  [ok]   C8 E2 still reproduces (data-api /trades is cached) — cf-cache-status=HIT — if this is now MISS, re-open D1/D3 before P5
+  [ok]   C8 spec quotes a median-fill *range*, not a single snapshot — no $lo–$hi range found; a 500-row tape sample is too volatile for one number
+  [ok]   C8 measured median fill falls inside the quoted range — measured=5.0 range=(5.0,6.0)
+  [ok]   C8 up/down volume share still supports rejecting wedge 1 — share=0.0%
+  [ok]   C9 cache claim in the spec matches the probe — probe says cf-cache-status=HIT; spec must assert 'cf-cache-status: **HIT**' (E2 is load-bearing for the tape design)
+  [ok]   C9 Gamma page-cap claim matches the probe exactly — probe=100, spec claims [100]
+  [ok]   C9 every feeType value cited in the spec was observed — cited-but-unobserved: none; observed: ['crypto_fees_v2', 'culture_fees', 'economics_fees', 'finance_prices_fees', 'politics_fees', 'sports_fees_v2']
+
+  33 passed, 0 failed
+  Gate holds: the checkable half of P01's quality gate passes, and D6's arithmetic was
+  recomputed from the document itself rather than asserted.

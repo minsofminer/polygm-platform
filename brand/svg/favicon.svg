@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <!-- Favicon: no background rect so the browser rounds/keeps transparency.
+       Strokes thickened so it survives 16px. -->
+  <polygon points="48,20 18,50 48,80 48,61 35,50 48,39" fill="#2e5cff"/>
+  <polygon points="52,20 82,50 52,80 52,61 65,50 52,39" fill="none" stroke="#7ba5ff" stroke-width="6" stroke-linejoin="miter"/>
+  <circle cx="50" cy="50" r="6" fill="#f1ce57"/>
+</svg>

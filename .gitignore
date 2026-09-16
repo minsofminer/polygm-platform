@@ -1,0 +1,24 @@
+# credentials — never here (workspace keeps them in /home/user/.secrets, outside this repo)
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+.secrets/
+
+# python / node / build
+__pycache__/
+*.pyc
+.venv/
+node_modules/
+dist/
+build/
+.next/
+out/
+.vercel/
+.supabase/
+brandkit/
+*.log
+
+# os
+.DS_Store
