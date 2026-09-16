@@ -37,6 +37,18 @@ No phase is reported as done on assertion. "It works" without a command that ran
 - When a check disagrees with the document, the **document** changes — never weaken the check. If a
   check is genuinely wrong, fix its logic and re-run the mutation suite that proves it bites.
 
+## Design-phase rules (P02, P03, P08–P11)
+
+- Colour is never justified by eye. `tools/colour_audit_lib.py` is the single WCAG/ΔE implementation;
+  `tools/colour-audit.py` **loads `brand/tokens.json`** (an auditor with its own copy of the palette
+  will cheerfully bless stale values — this actually happened during P02).
+- `brand/tokens.css` is generated. Never hand-edit it; edit `tokens.json`, run
+  `node tools/build-tokens.mjs`, then `tools/p02-gate-check.py`.
+- Any "verified at size N" claim must come from `tools/mark-legibility.py` or a real device render.
+  ImageMagick here silently drops stroked SVG paths, so a screenshot is not evidence.
+- Skills' paid-generation stages are skipped, not faked: if a tool is missing (`rsvg-convert` today),
+  say so and leave the ledger slot unapproved rather than simulating success.
+
 ## Code rules (apply from P04 on)
 
 - Money path: integers or `Decimal`, never `float`. Scale documented per field.

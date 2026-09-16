@@ -1,0 +1,172 @@
+{
+  "note": "exhaustive over POOL, \u0394E*ab worst-case across normal/deuteranopia/protanopia",
+  "themes": {
+    "dark": {
+      "canvas": "#0c0e13",
+      "eligible_at_3to1": 25,
+      "core6": [
+        "#0072B2",
+        "#f1ce57",
+        "#FF7F0E",
+        "#CC79A7",
+        "#7C4DEB",
+        "#e6edf3"
+      ],
+      "core6_worst_delta_e": 16.9,
+      "best8": [
+        "#f1ce57",
+        "#E69F00",
+        "#D55E00",
+        "#7C4DEB",
+        "#16C79A",
+        "#9BA6B2",
+        "#6b727b",
+        "#e6edf3"
+      ],
+      "best8_worst_delta_e": 11.3,
+      "best8_passes_10jnd": true,
+      "ratios": {
+        "#0072B2": 3.72,
+        "#f1ce57": 12.6,
+        "#FF7F0E": 7.62,
+        "#CC79A7": 6.31,
+        "#7C4DEB": 3.79,
+        "#e6edf3": 16.34
+      },
+      "no_candidates": [
+        {
+          "hex": "#D55E00",
+          "delta_e": 112.6,
+          "contrast": 4.99
+        },
+        {
+          "hex": "#FF7F0E",
+          "delta_e": 107.0,
+          "contrast": 7.62
+        },
+        {
+          "hex": "#E69F00",
+          "delta_e": 104.8,
+          "contrast": 8.57
+        },
+        {
+          "hex": "#FDC503",
+          "delta_e": 89.7,
+          "contrast": 12.1
+        },
+        {
+          "hex": "#E8C547",
+          "delta_e": 75.0,
+          "contrast": 11.5
+        },
+        {
+          "hex": "#EF7A5A",
+          "delta_e": 73.5,
+          "contrast": 6.99
+        }
+      ],
+      "adopted": [
+        "#f1ce57",
+        "#E69F00",
+        "#D55E00",
+        "#7C4DEB",
+        "#16C79A",
+        "#9BA6B2",
+        "#6b727b",
+        "#e6edf3"
+      ],
+      "adopted_size": 8,
+      "adopted_worst_delta_e": 11.3,
+      "adopted_contrast_floor": 3.0,
+      "adopted_contrasts": {
+        "#f1ce57": 12.6,
+        "#E69F00": 8.57,
+        "#D55E00": 4.99,
+        "#7C4DEB": 3.79,
+        "#16C79A": 8.89,
+        "#9BA6B2": 7.81,
+        "#6b727b": 3.97,
+        "#e6edf3": 16.34
+      }
+    },
+    "light": {
+      "canvas": "#ffffff",
+      "eligible_at_3to1": 10,
+      "core6": [
+        "#4378FF",
+        "#0072B2",
+        "#D55E00",
+        "#CC79A7",
+        "#7C4DEB",
+        "#009E73"
+      ],
+      "core6_worst_delta_e": 10.3,
+      "best8": [],
+      "best8_worst_delta_e": "see dark",
+      "best8_passes_10jnd": null,
+      "ratios": {
+        "#4378FF": 3.91,
+        "#0072B2": 5.19,
+        "#D55E00": 3.87,
+        "#CC79A7": 3.06,
+        "#7C4DEB": 5.1,
+        "#009E73": 3.42
+      },
+      "no_candidates": [
+        {
+          "hex": "#D55E00",
+          "delta_e": 110.8,
+          "contrast": 3.87
+        },
+        {
+          "hex": "#CC79A7",
+          "delta_e": 54.4,
+          "contrast": 3.06
+        },
+        {
+          "hex": "#B15CFF",
+          "delta_e": 31.9,
+          "contrast": 3.59
+        },
+        {
+          "hex": "#009E73",
+          "delta_e": 18.1,
+          "contrast": 3.42
+        },
+        {
+          "hex": "#144E8C",
+          "delta_e": 14.1,
+          "contrast": 8.41
+        },
+        {
+          "hex": "#6b727b",
+          "delta_e": 12.6,
+          "contrast": 4.86
+        }
+      ],
+      "adopted": [
+        "#4378FF",
+        "#144E8C",
+        "#D55E00",
+        "#EF7A5A",
+        "#CC79A7",
+        "#7C4DEB"
+      ],
+      "adopted_size": 6,
+      "adopted_worst_delta_e": 13.4,
+      "adopted_contrast_floor": 2.25,
+      "adopted_contrasts": {
+        "#4378FF": 3.91,
+        "#144E8C": 8.41,
+        "#D55E00": 3.87,
+        "#EF7A5A": 2.76,
+        "#CC79A7": 3.06,
+        "#7C4DEB": 5.1
+      }
+    }
+  },
+  "warm_on_both_canvases": [
+    "#D55E00",
+    "#CC79A7"
+  ]
+}

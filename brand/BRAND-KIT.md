@@ -81,7 +81,7 @@ renaming procedure; the mark is abstract, so a rename only touches wordmark text
     "borders": "1px #2d3037 (dark), no shadows except overlays",
     "forms": ["horizontal bars (tape, depth)", "diamond aperture (mark, bullets)", "thin rules"]
   },
-  "unknowns": ["final product name pending trademark check (P2 D1)", "light-theme launch timing (dark ships first)"]
+  "unknowns": ["final product name pending trademark check (P2 D1)", "light-theme launch timing (dark ships first)", "P02: typography.display name 'Instrument Sans Condensed' has no verifiable distribution (Google Fonts css2 -> HTTP 400, repo InstrumentType/Instrument-Sans -> 404, GitHub code search -> 0 hits). Proposed substitute: Archivo Narrow 600/700, OFL, latin subset measured 11,776 B. This is a PROPOSED field, so it may be revised; awaiting human approval before the lock is rewritten."]
 }
 ```
 
@@ -117,6 +117,10 @@ Re-run these on any palette edit — `../prompts/P02-branding.md` requires the t
 | `avatar-512.png` | Telegram/Discord avatar, circular-crop safe | fixed |
 | `og-1200x630.png` | social sharing card | fixed |
 | `brandboard.png` | identity board for reviews / decks | fixed |
+| `tokens.css` | **new (P02)** generated CSS custom properties, `:root` light + `[data-theme=dark]` | proposed — regenerate with `node tools/build-tokens.mjs` |
+| `SIZE-RULES.md` | **new (P02)** measured size floor (24px), favicon switch, 1-bit and crop rules | proposed |
+| `palette-search.json` | **new (P02)** exhaustive ΔE*ab search evidence for chart palette + NO hue | proposed — evidence, not an asset |
+| `tokens.json` | extended: `semantic.{light,dark}`, per-theme `chart` arrays, `rules` incl. never-same-row | palette roles `proposed` (values audit-verified); mark/typography `fixed` fields untouched |
 
 ---
 
