@@ -4,6 +4,48 @@ Format per phase: **built / verified / `[UNVERIFIED]`**. Newest first.
 
 ---
 
+## P03 — Design system · 2026-09-17
+
+**Built.** `docs/P03-design-system.md` (D0–D8, 1,290 lines): D0 records where the prompt's premises were
+stale against measurement; D1 foundations (4px spacing 12 steps + 3 named off-grid, 4 elevation levels where
+level 1 is a hairline not a shadow, density 22/28/36 with `min_touch_target` 44 never scaled, 7 breakpoints
+with xl=1280 as the full terminal, motion quoted from the vendored skill, layers 1000–1500); D2 31 primitives
++ 13 domain components over an 11-state contract, each with density, do/don't and an accessibility clause;
+D3 22 screens with route + endpoint per field; D4a four order-book states; D4b the colour-collision finding
+that overturns part of P02; D5 performance at 14.7–33.3 fills/sec; D6 a11y/i18n with WCAG 2.2 AA as the
+stated normative target; D7 deliverables; **D8 records what the verification found in itself**. New tooling:
+`tools/build-foundations.py` (owns D1, `--check` refuses hand-edited output), `tools/build-tokens.mjs`,
+`tools/build-tailwind-preset.mjs` (64 colours/15 spacing/7 screens/7 zIndex, refuses on JSON↔CSS
+disagreement), `tools/build-storybook-list.py` (**1,062** derived stories/66 roots), `tools/build-contrast-table.py
+--foundations` (generates and verifies D1's numbers), `tools/component-colour-audit.py` (per-row pairwise
+ΔE/ΔL with `CONTROL@` canaries), `tools/p03-gate-check.py` (**62 checks/8 groups**),
+`tools/p03-mutation-test.py`, `tools/repin-p02-digest.py` (classifies drift as added vs modified and refuses
+to re-pin audited rule changes without the gate re-run), `brand/specimen.html`, `web/DESIGN.md`.
+
+**Verified.** `python3 tools/p03-gate-check.py` → **62 passed, 0 failed, 0 skipped**;
+`python3 tools/p03-mutation-test.py` → **20/20 mutations caught** (19→20 took four rounds, each round's
+failure documented in D8). Regression gates still hold on the changed tree: `p01-gate-check.py` 33/33,
+`p02-gate-check.py` 69/69 (G10 asserts the strengthened `never-same-row` rule), `colour-audit.py` 0
+failures, `component-colour-audit.py --gate` exit 0. Every generator is idempotent and every cross-check
+agrees: `build-foundations --check`, `build-tokens --check`, `build-tailwind-preset --check`,
+`build-storybook-list --check`, `build-contrast-table --foundations --check`, `rename-wordmark --check`.
+Delegated checks (G1.6/G1.7/G3.8b) run the owning tool rather than re-deriving its arithmetic, which is the
+fix for P02's two-conflicting-numbers bug. Marker exemptions (`P03: anti-example`, `P03: nocode`) were tested
+in five states each so they cannot widen — a `nocode` marker in front of a code block is itself a failure.
+
+**`[UNVERIFIED]`.** (1) **Nothing was rendered.** No rasteriser or headless browser exists here, so no claim
+about how any of this *looks* — row heights, chip legibility at 11px, and the specimen's font metrics are
+computed from font binaries, not pixels. Closing step: P08's browser pass plus `review-animations`.
+(2) **Brand rasters still show the previous wordmark** (`brandboard.png` 1536×1024, `app-icon-512.png` and
+`avatar-512.png` actually 1254×1254, `og-1200x630.png` actually 1731×909) and cannot be regenerated here;
+D3.1 blocks shipping the landing page on the OG image until a true 1200×630 derivative exists.
+(3) **The alert-hue proposal is undecided.** `#CC79A7` is the only tested hue clearing ≥3:1 in both themes
+(worst ΔE 31.2); applying it changes a `fixed` Brand Lock field, so it waits for the brand owner — before
+P08 builds any coloured number. (4) **P02's buy/sell hue pair is unusable in light theme** (ΔL 0.008): the
+fallback in D4b is adopted for the terminal, but the palette itself is locked, so this is a documented
+consequence rather than a fix. (5) No deployment surface is claimed: `vercel`/`supabase` CLIs are absent from
+this workspace.
+
 ## P02 — Brand & identity · 2026-09-16
 
 **Built.** `docs/P02-brand.md` (D1–D8): 12 name candidates each carrying a *measured* collision result,
