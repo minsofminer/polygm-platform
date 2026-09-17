@@ -36,9 +36,30 @@ never set text — text in a money hue must use `*-text` tokens.* Zero brand cha
 design system already does. The `pnl-never-coloured-text` rule plus G6.6 of the gate already enforce the
 number case; this closes the small-label case.
 
-I recommend **A at the next scheduled brand revision**, and treat B as done. A is a two-value palette change
-(`light.action.sell` → `#b91c1c`, clearing 6.47:1 / 5.93:1) and would restore the option of a coloured small
-label; it touches a `fixed` field, so it waits for you. If you prefer A, the sequence the tooling enforces is
+### Decision, taken and closed (2026-09-17)
+
+**A is declined on measurement, not deferred.** `tools/p04-hue-search.py` swept the whole red family in both
+lightness directions against all four constraints (4.5:1 on `bg.base` AND `bg.elevated`; ΔE≥10 or ΔL≥0.12 vs
+the buy hue; ΔE≥10 vs `outcome.no` and `outcome.yes`; ΔE≥10 vs `alert.high`):
+
+* **dark: zero candidates.** No same-family red lighter than `#ef4444` clears both backgrounds; every lighter
+  candidate collides with `outcome.no` (ΔE 4.8 at the first step up), and the collision never resolves before
+  the hue stops being recognisably the brand red.
+* **light: the first candidate that clears contrast everywhere is `#7e1616`** — 10.43:1 / 9.56:1 and clean on
+  every separation test, but that is a maroon, not the current red, and it was `#b91c1c` (6.47 / 5.93) that
+  looked attractive. `#b91c1c` is NOT clean: 8.4 ΔE from `alert.high` and 9.9 from `outcome.no`.
+
+So a recolour could only restore "small coloured text" by changing the brand's red into a different colour —
+the opposite of a minimal fix. **B is the final design**, and the search is recorded so nobody reopens A by
+eyeballing one light-theme hex and calling it good.
+
+The search also exposed an audit gap I closed: `alert.high` had never been compared against money hues or
+book-ladder rows at all. Adding that coverage produced 7 findings, and **all 7 were my audit model's fault,
+not the palette's** — I had written the forbidden compositions into the rows (a bare warning edge, a gold rule
+inside the compared pair), which is precisely what `rules.no-alert-hue-inside-a-compared-pair` and
+`whale-flag-is-a-badge-not-a-dot` forbid. Corrected the model to the legal composition (warning = word +
+badge, ladder = words only); 0 findings, 6/6 canaries, and the ladder's `outcome.no ↔ alert.high` ΔE 2.7
+collision is now prevented by rule scope rather than by row scope. If you prefer A, the sequence the tooling enforces is
 in the script's footer, and `tools/repin-p02-digest.py --apply --ack=color` refuses to re-pin the certified
 palette until `colour-audit` and both phase gates pass — so an approved recolour cannot quietly go unaudited.
 

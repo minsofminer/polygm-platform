@@ -54,7 +54,18 @@ def rows() -> dict:
         "PositionRow": ("bg.base", [("outcome chip word", "text.primary"), ("outcome chip edge", "outcome.yes", "nontext"),
                                     ("outcome chip edge", "outcome.no", "nontext"),
                                     ("pnl number", "text.primary"), ("pnl glyph +", "text.primary"),
-                                    ("pnl glyph −", "text.primary")]),
+                                    ("pnl glyph −", "text.primary"),
+                                    # the pair P03's money-hue search was about, never previously audited:
+                                    # a warning edge beside a money edge. It collides (ΔE 8 in light) but the
+                                    # composition is legal only because the warning is a non-text edge here;
+                                    # listed so a future recolour cannot pass this audit by fixing contrast
+                                    # while breaking separation.
+                                    ("warning word", "text.primary"),
+                                    # D4b decision 3 / rules.whale-flag-is-a-badge-not-a-dot: a word PLUS an
+                                    # area. An icon alone is not enough for the audit's own rule, and the
+                                    # audit is right - 1.4.1 wants a non-colour channel plus a region.
+                                    ("warning badge icon", "alert.high", "nontext"),
+                                    ("side edge", "action.sell", "nontext")]),
         "TapeRow": ("bg.elevated", [("side pill word", "text.primary"), ("side pill edge", "action.buy", "nontext"),
                                     ("side pill edge", "action.sell", "nontext"),
                                     ("outcome chip word", "text.primary"),
@@ -70,7 +81,14 @@ def rows() -> dict:
                                       ("residual warning text+icon", "text.primary")]),
         "OrderBook ladder": ("bg.base", [("level price", "text.primary"),
                                          ("bid depth bar", "outcome.yes", "nontext"),
-                                         ("ask depth bar", "outcome.no", "nontext")]),
+                                         ("ask depth bar", "outcome.no", "nontext"),
+                                         # rules.no-alert-hue-inside-a-compared-pair: the ladder's warning is
+                                         # words + an icon in text.primary, never a coloured rule, because a
+                                         # gold line beside two compared prices reads as a third price. The
+                                         # first version of this row modelled the FORBIDDEN composition (a bare
+                                         # warning edge) and the audit correctly reported 7 findings, which is
+                                         # the audit being right and the model being wrong.
+                                         ("residual warning word", "text.primary")]),
         # CONTROLS: compositions the rules exist to forbid, audited with every exemption disabled.
         # They MUST fail; if one passes, a rule has been weakened (asserted in main()).
         "CONTROL@bare alert dot inside a compared pair": ("bg.elevated", [("no", "outcome.no"), ("flag", "alert.high")]),
