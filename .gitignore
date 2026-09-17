@@ -1,24 +1,15 @@
-# credentials — never here (workspace keeps them in /home/user/.secrets, outside this repo)
-.env
-.env.*
-!.env.example
-*.pem
-*.key
-.secrets/
-
-# python / node / build
+# build/runtime state, never committed
+var/
 __pycache__/
 *.pyc
-.venv/
+.pytest_cache/
+.coverage
+htmlcov/
 node_modules/
+.env
+.env.local
+*.db
+*.db-wal
+*.db-shm
 dist/
-build/
-.next/
-out/
-.vercel/
-.supabase/
-brandkit/
-*.log
-
-# os
-.DS_Store
+coverage/

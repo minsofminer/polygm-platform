@@ -1,0 +1,114 @@
+name: p04 gates
+
+# Everything this repo can prove without a paid account or a Docker daemon is in the `checks` job, and it is
+# the same set `make check` runs locally, so "green on CI" and "green on my laptop" are one claim.
+#
+# HONEST STATUS: the build repo currently has no git remote configured (`git remote -v` is empty), so this
+# workflow has never been executed by a runner. It is written to be run, and the container job below is the
+# one that closes the `[UNVERIFIED]` compose/Dockerfile gap documented in
+# docs/P04-backend-architecture.md D6/D9. If you are reading this in a clone that DOES have a remote and this
+# job is red, believe the job, not the doc.
+"on":
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  PGM_LOG_FORMAT: json
+  PYTHONDONTWRITEBYTECODE: "1"
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+      - name: install the pinned set
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-dev.txt
+      # The env report is an artifact, not a step outcome: when a phase passes here and fails on a laptop,
+      # the difference is a missing tool, and this file is how you find that out after the fact.
+      - name: environment report
+        run: python3 tools/doctor.py | tee docs/verification/CI-doctor.txt
+      - name: lint (money path, secrets, float bans) + canary that every rule fires
+        run: |
+          python3 tools/lint-rules.py
+          python3 tools/lint-rules.py --canary
+      - name: openapi contract audit + auditor self-test
+        run: |
+          python3 tools/check-openapi.py
+          python3 tools/check-openapi.py --self-test
+      - name: unit and integration tests
+        run: make test
+      - name: end-to-end envelope demo over real sockets
+        run: make envelope
+      - name: P04 gate (the floor)
+        run: python3 tools/p04-gate-check.py
+      - name: earlier phase gates must not rot
+        run: |
+          python3 tools/p01-gate-check.py
+          python3 tools/p02-gate-check.py
+          python3 tools/p03-gate-check.py
+          python3 tools/component-colour-audit.py --gate
+      - name: P04 mutation harness - proves the gate can fail
+        run: python3 tools/p04-mutation-test.py
+      - name: generated artefacts are current
+        run: |
+          python3 tools/build-sqlite-migrations.py --check
+          python3 tools/run-sql.py --check
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: gate-outputs
+          path: docs/verification/
+          if-no-files-found: ignore
+
+  # The job that makes the compose claim real. `make dev` is unverifiable from the build sandbox (no docker),
+  # so this is where "docker compose up works on a clean machine" is either proven or disproven.
+  containers:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: compose file is valid (interpolation included)
+        run: docker compose config -q
+      - name: build the two images (no :latest, non-root, pinned base)
+        run: |
+          docker build -f services/api/Dockerfile -t openout-api:ci .
+          docker build -f services/executor-mock/Dockerfile -t openout-mock:ci .
+      - name: bring up the stack and place an order against executor-mock
+        run: |
+          cp .env.example .env
+          docker compose up -d --wait postgres pgbouncer redis executor-mock
+          docker compose run --rm migrate
+          docker compose run --rm --profile devdata seed
+          docker compose up -d api
+          for i in $(seq 1 30); do
+            curl -fsS localhost:8080/readyz && break || sleep 2
+          done
+          curl -fsS localhost:8080/healthz
+          curl -sS -o /tmp/order.json -w '%{http_code}\n' -X POST localhost:8080/v1/orders \
+            -H 'content-type: application/json' -H 'x-user-id: u-demo' \
+            -H 'Idempotency-Key: ci-smoke-0001' \
+            -d '{"marketId":"0xM1","tokenId":"0xT1","side":"BUY","price":"0.50","size":"10"}' \
+            | grep -q '^202$'
+          grep -q '"state": *"queued"' /tmp/order.json
+      - name: "logs on failure (compose logs can carry a pasted value; lint-rules is what keeps that false)"
+        if: failure()
+        run: docker compose logs --no-color | tail -n 200

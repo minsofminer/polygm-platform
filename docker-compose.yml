@@ -1,0 +1,147 @@
+# P04 development stack. `make dev` is the entry point; this file is what it runs.
+#
+# Why the Postgres + pgBouncer pair (D2): the venue needs ~30k markets of backfill plus a 15-33 msg/s tape,
+# and every read endpoint is cache-fronted. pgBouncer in transaction mode is what keeps a FastAPI worker pool
+# from exhausting Postgres connections when 500 terminals poll at once. It is NOT here for looks: Gamma's
+# 300 req/10s budget means our own fan-out has to be rate-limited somewhere, and a pooler is the cheapest
+# place to do it.
+#
+# NOTE (honest scope, restated in docs/P04-backend-architecture.md): this compose file has not been executed
+# in the build environment, because `docker` is not installed there. It is written to be correct, the
+# migrations are validated by `tools/build-sqlite-migrations.py --check` plus the SQLite test suite, and the
+# service code is validated by `make test`; the *container wiring* is [UNVERIFIED] until someone with Docker
+# runs `make dev`.
+name: polygm   # repo/engine prefix (see docs/AGENTS-BUILD.md): the product is
+             # Openout; PGM_*/POLYGM_* names stay until a rename is scheduled deliberately
+
+x-env: &env
+  # `required: false` needs Compose >= 2.24. Pinned in the header rather than discovered at 3am: without
+  # it, a fresh clone with no .env fails with "env file .env not found" - and the fix (copy .env.example)
+  # is not obvious from that message.
+  env_file: [{path: .env, required: false}]
+  environment:
+    POLYGM_ENGINE: postgres
+    PGM_DB_URL: postgresql://polygm:polygm@pgbouncer:6432/polygm
+    PGM_REDIS_URL: redis://redis:6379/0
+    PGM_MOCK_CLOB_URL: http://executor-mock:8090
+    PGM_LOG_FORMAT: json
+  restart: unless-stopped
+  depends_on:
+    postgres: {condition: service_healthy}
+    redis: {condition: service_started}
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: polygm
+      POSTGRES_PASSWORD: polygm          # dev-only. Compose refuses to start without .env setting
+      POSTGRES_DB: polygm                 # POLYGM_DEV_DB_PASSWORD for a machine that is not a laptop:
+    command: ["postgres", "-c", "shared_preload_libraries=", "-c", "jit=off",
+              "-c", "max_connections=200"]
+    volumes: ["pg-data:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U polygm -d polygm"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    ports: ["127.0.0.1:5432:5432"]
+
+  pgbouncer:
+    image: edoburu/pgbouncer:1.23.1
+    environment:
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_USER: polygm
+      DB_PASSWORD: polygm
+      POOL_MODE: transaction            # required for FastAPI/asyncpg: session mode pins a server conn
+      MAX_DB_CONNECTIONS: "100"
+      DEFAULT_POOL_SIZE: "20"
+      MIN_POOL_SIZE: "2"
+      IGNORE_STARTUP_PARAMS: "application_name"
+    depends_on:
+      postgres: {condition: service_healthy}
+    ports: ["127.0.0.1:6432:6432"]
+
+  redis:
+    image: redis:7-alpine
+    # Only the cross-request caches live here (flag keep-last-snapshot, market/book projections, rate-limit
+    # counters). Idempotency keys are NOT in Redis by design: a cache that evicts an in_progress marker is a
+    # double-spend. See polygm_core.risk.idempotency.
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory", "256mb",
+              "--maxmemory-policy", "allkeys-lru"]
+    ports: ["127.0.0.1:6379:6379"]
+
+  api:
+    <<: *env
+    build: {context: ., dockerfile: services/api/Dockerfile}
+    command: ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8080", "--proxy-headers"]
+    volumes: ["./services/api:/srv/app/services/api", "./packages:/srv/app/packages",
+              "./db:/srv/app/db", "./brand:/srv/app/brand"]
+    ports: ["127.0.0.1:8080:8080"]
+    depends_on:
+      executor-mock: {condition: service_started}
+      migrate: {condition: service_completed_successfully}   # api refuses traffic until the schema is there
+    # no `profiles:`: `docker compose up` must bring up the whole P04 surface, and the P05 services above are
+    # absent rather than "present but disabled", because a disabled service is a lying service.
+
+  migrate:
+    <<: *env
+    build: {context: ., dockerfile: services/api/Dockerfile}
+    command: ["python3", "tools/run-sql.py", "--dir", "db/migrations", "--url",
+              "postgresql://polygm:polygm@postgres:5432/polygm"]
+    depends_on:
+      postgres: {condition: service_healthy}
+    restart: "no"
+
+  # Dev data only, behind a Compose PROFILE rather than an env var read inside a shell string: `make
+  # dev-data` runs it, `docker compose up` does not, so it cannot ride along into a real deployment. The API
+  # must never seed itself at import (a process that inserts rows on boot mutates data on every restart), but
+  # `make dev` without this yields an empty terminal where every market 404s - which is exactly what the
+  # first run of tools/envelope-demo.py did to itself.
+  seed:
+    <<: *env
+    profiles: ["devdata"]
+    build: {context: ., dockerfile: services/api/Dockerfile}
+    command: ["python3", "tools/run-sql.py", "--file", "db/seed.sql", "--url",
+              "postgresql://polygm:polygm@postgres:5432/polygm"]
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+    restart: "no"
+
+  # ---- P05/P06/P09 services: DECLARED here, NOT built, on purpose -------------------------------
+  # Compose fails to start if a `build:` target names a Dockerfile that does not exist, so a file that
+  # "documents the intended topology" but cannot come up would be worth less than this comment. The
+  # services below are the ones the phases after this one own; keep their names, env anchor and commands
+  # here so P05 adds a Dockerfile instead of inventing a contract:
+  #
+  #   ingest     services/ingest     `python3 -m ingest.main --mode backfill-then-live`
+  #              backfill BEFORE the live tape, in one service: starting the WS before the market list is
+  #              loaded produces trades referencing tokens nobody inserted (FK failures at peak load).
+  #   executor   services/executor   `python3 -m executor.main --transport mock`
+  #              `mock` is the only transport that can start here: there is no signer until P06, and real
+  #              funds stay gated behind P13/P14 (kit rule 7), so the dangerous transport is a flag, never
+  #              a default.
+  #   signals    services/signals    `python3 -m signals.main`
+  #   worker     services/worker     `python3 -m worker.main --jobs reconcile,stuck-intents,cash-sync,expire-idem`
+  #              `stuck-intents` walks `WHERE state='uncertain'` (the partial index in 0002 exists for it):
+  #              the state where money can be double-spent or silently lost must page a human.
+  #   billing    services/billing    `python3 -m billing.main`
+  #   web        ./web               vite dev server on 5173, VITE_API_BASE=http://localhost:8080
+  #              web/ is a design-system package until P07 lands the app; there is no Dockerfile to build.
+
+  executor-mock:
+    build: {context: ., dockerfile: services/executor-mock/Dockerfile}
+    command: ["python3", "mock_clob.py", "--host", "0.0.0.0", "--port", "8090"]
+    ports: ["127.0.0.1:8090:8090"]
+
+  # web/ — see the note above: the design-system package has no app or Dockerfile until P07. When it
+  # lands, the block to restore is:
+  #   web:
+  #     build: {context: ./web, dockerfile: Dockerfile.dev}
+  #     environment: {VITE_API_BASE: "http://localhost:8080", POLL_TRADING_MS: "250", POLL_MARKET_MS: "1000"}
+  #     volumes: ["./web:/srv/web", "/srv/web/node_modules"]
+  #     ports: ["127.0.0.1:5173:5173"]
+  #     depends_on: [api]
+
+volumes: {pg-data: {}}

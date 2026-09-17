@@ -1,0 +1,108 @@
+{
+  "append_only": [
+    "cash_ledger",
+    "fills",
+    "tape_trades",
+    "builder_attribution",
+    "position_snapshots",
+    "audit_log",
+    "flag_audit",
+    "alert_fires",
+    "kill_switch_state",
+    "referral_events"
+  ],
+  "tables": [
+    "alert_fires",
+    "alert_rules",
+    "audit_log",
+    "automation_rules",
+    "balances",
+    "book_levels",
+    "builder_attribution",
+    "cash_ledger",
+    "copy_configs",
+    "entitlements",
+    "events",
+    "feature_flags",
+    "fills",
+    "flag_audit",
+    "idempotency_keys",
+    "kill_switch_state",
+    "markets",
+    "order_intents",
+    "orders",
+    "position_lots",
+    "position_snapshots",
+    "referral_events",
+    "referrals",
+    "subscriptions",
+    "tape_trades",
+    "tokens",
+    "users",
+    "watchlist_items",
+    "watchlists"
+  ],
+  "files": {
+    "0001_core.sql": {
+      "dropped": [
+        "PG-only statement: CREATE EXTENSION IF NOT EXISTS pgcrypto;",
+        "generated column over a PG-only function - the service computes it on sqlite",
+        "partial/expression index: CREATE INDEX markets_ends_ix  ON markets (end_ts) WHERE accepting_orde",
+        "partial/expression index: CREATE INDEX idem_age_ix ON idempotency_keys (created_ms) WHERE state "
+      ],
+      "check_clauses_reordered": [
+        "markets"
+      ]
+    },
+    "0002_money.sql": {
+      "dropped": [
+        "partial/expression index: CREATE INDEX intents_stuck_ix ON order_intents (updated_ms) WHERE stat",
+        "partial/expression index: CREATE INDEX lots_user_token_ix ON position_lots (user_id, token_id) W",
+        "partial/expression index: CREATE INDEX snap_delta_ix ON position_snapshots (observed_ms DESC) WH",
+        "partial/expression index: CREATE INDEX attribution_day_ix ON builder_attribution (date_trunc('da"
+      ],
+      "check_clauses_reordered": [
+        "balances",
+        "orders",
+        "position_lots",
+        "builder_attribution"
+      ]
+    },
+    "0004_product.sql": {
+      "dropped": [
+        "partial/expression index: CREATE INDEX alert_rules_live_ix ON alert_rules (enabled, kind) WHERE ",
+        "expression UNIQUE(lower(name)) -> plain UNIQUE(user_id): sqlite forbids expressions in UNIQUE/PRIMARY KEY",
+        "CHECK using a PG-only expression (asserted in the API/CI instead): detail_json     JSONB NOT NULL DEFAULT '{}'  CHECK (jsonb_ty",
+        "CHECK using a PG-only expression (asserted in the API/CI instead): CONSTRAINT no_secret_shapes CHECK (detail_json::text !~ '(\"\""
+      ],
+      "check_clauses_reordered": [
+        "alert_rules",
+        "copy_configs",
+        "automation_rules"
+      ]
+    },
+    "0005_triggers.sql": {
+      "dropped": [
+        "PG-only statement: CREATE OR REPLACE FUNCTION polygm_reject_mutation() RETURNS trigger LANGUAGE p",
+        "PG-only statement: CREATE OR REPLACE FUNCTION polygm_immutable_columns() RETURNS trigger LANGUAGE",
+        "PG-only statement: CREATE TRIGGER append_only_cash_ledger          BEFORE UPDATE OR DELETE ON cas",
+        "PG-only statement: CREATE TRIGGER append_only_fills                BEFORE UPDATE OR DELETE ON fil",
+        "PG-only statement: CREATE TRIGGER append_only_tape_trades          BEFORE UPDATE OR DELETE ON tap",
+        "PG-only statement: CREATE TRIGGER append_only_builder_attribution  BEFORE UPDATE OR DELETE ON bui",
+        "PG-only statement: CREATE TRIGGER append_only_position_snapshots   BEFORE UPDATE OR DELETE ON pos",
+        "PG-only statement: CREATE TRIGGER append_only_audit_log            BEFORE UPDATE OR DELETE ON aud",
+        "PG-only statement: CREATE TRIGGER append_only_flag_audit           BEFORE UPDATE OR DELETE ON fla",
+        "PG-only statement: CREATE TRIGGER append_only_alert_fires          BEFORE UPDATE OR DELETE ON ale",
+        "PG-only statement: CREATE TRIGGER append_only_kill_switch_state    BEFORE UPDATE OR DELETE ON kil",
+        "PG-only statement: CREATE TRIGGER append_only_referral_events      BEFORE UPDATE OR DELETE ON ref",
+        "PG-only statement: CREATE TRIGGER immutable_id_order_intents BEFORE UPDATE ON order_intents FOR E",
+        "PG-only statement: CREATE TRIGGER immutable_id_orders        BEFORE UPDATE ON orders        FOR E",
+        "PG-only statement: DO $$",
+        "PG-only statement: CREATE OR REPLACE FUNCTION polygm_reject_short_id() RETURNS trigger LANGUAGE p",
+        "PG-only statement: CREATE TRIGGER id_length_intents BEFORE INSERT ON order_intents FOR EACH ROW E",
+        "PG-only statement: ALTER TABLE order_intents ADD CONSTRAINT notional_tick_aligned CHECK ("
+      ],
+      "check_clauses_reordered": []
+    }
+  }
+}

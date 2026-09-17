@@ -1,0 +1,16 @@
+# Pinned to the versions this phase was actually developed and tested against (measured in the
+# build environment), so `make doctor` here and `pip install -r requirements.txt` there resolve to the
+# same set. Nothing in this file was chosen from memory: every pin is a version measured as present.
+fastapi==0.141.1
+starlette==1.6.0
+pydantic==2.13.4
+uvicorn[standard]==0.53.0
+PyYAML==6.0.3
+httpx==0.28.1
+# Postgres driver. Installed in the image; the dev/CI suite runs on the stdlib sqlite3 driver instead.
+asyncpg==0.30.0
+redis==5.2.1
+# The venue client. V2 ONLY (P04 constraint 1): py-clob-client (V1) is deliberately absent so an import
+# of it fails at install time rather than at 3am. 1.1.0 is the current release, verified against PyPI
+# during this phase.
+py-clob-client-v2==1.1.0

@@ -182,3 +182,38 @@ checkpoint, so the D2 "steps to first trade" column is honestly empty and needs 
 wallet. Also open: Polygon RPC/pUSD-CTF addresses, deep `/activity` history, Kalshi API, builder
 profile queries, Telegram Stars net take, infra prices, and the $2k-vs-$10k whale threshold
 (0.2–1.2% of fills are ≥$1k on a 500-row sample, which is too small to set it).
+
+## P04 — backend architecture and scaffold (this session)
+
+**Built.** `packages/polygm_core` (dependency-free: `money/cents`, `risk/gate`, `risk/idempotency`,
+`ledger/ledger`, `config/flags`, `executor/executor`), `services/api/app.py`, `services/executor-mock/`
+(`mock_clob.py` + `transport.py`), five Postgres migrations + the generated SQLite subset + `DROPPED.json`,
+`db/seed.sql` (generated, time-relative), `contracts/openapi.yaml` (9 paths), `tools/` (`check-openapi.py`,
+`envelope-demo.py`, `p04-gate-check.py`, `p04-mutation-test.py`, `run-sql.py`, `build-sqlite-migrations.py`,
+`lint-rules.py`, `doctor.py`), `tests/` (156 tests, stdlib unittest), `docker-compose.yml` (6 services + a
+profile-guarded `seed`), `Makefile` (30 targets), `.env.example` (27 documented vars), two non-root
+Dockerfiles, and `.github/workflows/ci.yml`. `docs/P04-backend-architecture.md` carries D1–D9.
+
+**Verified, in this environment only:** `make test` 156 OK · `check-openapi` 82/82 with 13/13 canaries ·
+`p04-gate-check` 55/55 · `envelope-demo` 12 steps over real TCP sockets (the money path: 10 × $0.50 =
+`notionalMicro: 5000000`) · `p04-mutation-test` **24/24 mutants caught, 0 uncaught** · `lint-rules` clean with
+8/8 rules firing · P01/P02/P03 gates and the colour gate still green · `docker`/`psql`/`sqlite3 CLI` absent, so
+compose, the Dockerfiles, CI and the Postgres dialect are `[UNVERIFIED]` and labelled as such in the doc.
+
+**Three findings worth the ink**, because each one was a *checker* being wrong rather than the product:
+1. `db/seed.sql` froze wall-clock at generation time, so a freshly seeded dev DB read 18 min stale and the gate
+   answered `STALE_QUOTE` to every order — a correct program shipping an unusable demo. Now `{{NOW_MS}}` is
+   expanded per engine by `tools/run-sql.py`, and the gate greps the seed for absolute 13-digit stamps.
+2. The secret scan used `git grep`, i.e. it only ever looked at *committed* files — which meant it was scanning
+   P01–P03 and reporting "clean" about an entire uncommitted phase. It now walks
+   `git ls-files --cached --others --exclude-standard`, verification logs included, with the lint canary
+   exempted by exact line through `tools/secret-scan-allowlist.json` and a companion check that fails if an
+   exemption stops matching a real line (so the allowlist cannot become a hiding place).
+3. `yaml.safe_load` forgives a duplicate mapping key. The compose file had one (`restart:` twice under `seed`)
+   and every check that parsed it was satisfied while `docker compose up` would have aborted. `yaml_strict`
+   now rejects duplicates in the gate, with a mutant (`compose-duplicate-key`) that plants one.
+
+The mutation harness is the part of this phase I would defend hardest: it found **three** rules the gate only
+asserted in prose (`tick-raw-string`, `price-is-a-number`, `no-append-only-trigger`), and each one became a
+test or an audit check rather than a paragraph. Two of the three were genuine coverage gaps in code I had
+already called finished.
