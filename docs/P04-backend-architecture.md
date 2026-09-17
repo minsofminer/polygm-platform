@@ -543,6 +543,14 @@ Run in this workspace, all of it after the last edit (2026-09-17):
 | `tools/run-sql.py --check` | ledger records applied files, refuses drift |
 | `python3 tools/doctor.py` | reports the missing tools below rather than working around them |
 
+**Re-verified after P05 landed** (same day, because a phase that breaks the last phase's gate has not finished):
+221 tests OK · P04 gate 55/55 · `make probe-fresh` re-run against the live venue (it found `cache_buster_works`
+reading false, which turned out to be a measurement that compared two *busted* fetches to each other; the tool
+now compares busted against plain and records the 0/3–3/3 count, and the re-run confirms the buster still
+works — plain newest ts 1789645254 vs busted 1789645554, 5 minutes newer). Two checker defects surfaced during
+that re-verification and are fixed here, not worked around: the migration-chain test asserted a file count
+(`== 4`) instead of the property the migrator needs, and `CORE_STDLIB` was missing `statistics`.
+
 **Not verified, and why:** `docker` and `docker-compose` are absent, so no image was built and no container
 network was exercised (`[UNVERIFIED]` for compose, Dockerfiles, and their healthchecks); `psql` and the
 `sqlite3` CLI are absent, so the Postgres dialect has been read, linted and translated but never executed
