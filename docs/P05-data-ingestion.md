@@ -47,8 +47,17 @@ insider-suspect as a conjunction with `publishable=False` always, cluster by win
 index for big fills, rollups, labels + history, signals/state/deliveries, user rules) and the regenerated SQLite
 subset. 43 ingest tests + 22 signal tests; **221 tests OK**.
 
+## The chaos run (300 s WS outage, 2026-09-17T12:14Z, docs/verification/P05-chaos-output.txt)
+
+A stale indicator held for all 300 samples; zero duplicate alerts; the two clocks genuinely collided (live WS
+trades seen while REST booked 10,412 overlapping rows through the UNIQUE dedupe key); the book matched the
+venue within one tick after reconnect and the resync machinery engaged 79 times; the tape kept filling from REST
+while the socket was dead (+127 rows). **Check C is inconclusive and the run is red because of it**: the
+reference query pages /trades by offset and reaches only ~50-100 s, so the first two thirds of the outage were
+never compared. That is recorded rather than smoothed over, and it is the first item below.
+
 ## Still open for this phase
-1. `tools/p05-chaos-test.py` is running now (300 s outage; output lands in `docs/verification/P05-chaos-output.txt`).
+1. Make check C conclusive: time-window the reference query in `venue_fills_in_window`, re-run the 300 s outage, and keep the run red until it passes.
 2. Alert fanout + Telegram budget/SLO (D7) — `alert_deliveries` exists, the dispatcher does not yet.
 3. `ingest/main.py` — the process wiring those modules into a loop that writes rows (the pieces are tested,
    the loop is not).
