@@ -1,4 +1,4 @@
-"""Shared colour maths for PolyGM's design gates. ONE implementation, imported by:
+"""Shared colour maths for Openout's design gates. ONE implementation, imported by:
 tools/colour-audit.py, tools/build-contrast-table.py, tools/p02-gate-check.py, tools/palette-search.py.
 
 Rationale: the P02 doc table and the gate initially carried two separate copies of the WCAG formula

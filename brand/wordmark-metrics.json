@@ -1,0 +1,24 @@
+{
+  "family": "Archivo Narrow",
+  "weight": 700,
+  "text": "Openout",
+  "subset_bytes": 11776,
+  "subset_files": 1,
+  "units_per_em": 1000,
+  "glyphs_covered": 7,
+  "glyphs_requested": 7,
+  "advance_em": [
+    0.638,
+    0.501,
+    0.456,
+    0.501,
+    0.501,
+    0.501,
+    0.273
+  ],
+  "width_em": 3.371,
+  "letter_spacing_em": 0.02273,
+  "width_svg_units": 155.3,
+  "width_svg_units_no_trailing_ls": 154.3,
+  "note": "measured from the Google Fonts latin subset hmtx advances; Instrument Sans Condensed is not on Google Fonts, so Archivo Narrow is the condensed proxy \u2014 a wider face than ISC, i.e. this is an upper bound"
+}

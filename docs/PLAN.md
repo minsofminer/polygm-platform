@@ -1,4 +1,6 @@
-# PolyGM — "gmgn.ai for Polymarket"
+# Openout — "gmgn.ai for Polymarket"
+
+> Working name during specification: `PolyGM`. Renamed per P02 D2 — see `brand/BRAND-KIT.md`.
 ### Build plan, revenue model, budget and risks
 *Prepared 16 Sep 2026. Every market figure below was pulled live from Polymarket's public APIs today or verified against a named source.*
 

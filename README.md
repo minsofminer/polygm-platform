@@ -1,6 +1,7 @@
-# PolyGM — build workspace
+# Openout — build workspace
 
-Implementation of the PolyGM build kit (`minsofminer/polygm`), one prompt at a time, in order.
+Implementation of the Openout build kit (specified in `minsofminer/polygm`, working name
+`PolyGM`), one prompt at a time, in order.
 **This repo holds the product. `polygm` (the kit) holds the spec.**
 
 Origin: `https://github.com/minsofminer/polygm` @ `470f729` (cloned 2026-09-16). Docs, brand kit and

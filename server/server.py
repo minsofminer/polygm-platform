@@ -1,5 +1,5 @@
 """
-PolyGM prototype — "gmgn.ai for Polymarket"
+Openout prototype — "gmgn.ai for Polymarket" (working name: PolyGM)
 
 Read-only backend. Talks to three public Polymarket APIs (no auth required):
   - Gamma  https://gamma-api.polymarket.com   market/event metadata
@@ -256,5 +256,5 @@ if __name__ == "__main__":
     print("warming cache from live Polymarket APIs...")
     refresh()
     threading.Thread(target=loop, daemon=True).start()
-    print(f"PolyGM prototype on http://{HOST}:{PORT}")
+    print(f"Openout prototype on http://{HOST}:{PORT}")
     ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()

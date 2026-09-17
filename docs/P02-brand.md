@@ -387,3 +387,27 @@ never the series colour", "fee is always labelled max, never exact".
    raster was computed analytically instead. Install it (or approve my installing it) and I'll produce
    the real 16/40/512 rasters and the brandbook.
 3. WHOIS/registrant and USPTO/EUIPO clearance — neither reachable from this sandbox. `[UNVERIFIED]`.
+
+
+---
+
+## Addendum — rename executed (2026-09-17)
+
+The conditional above became real: the name was approved and `PolyGM` → **`Openout`** was applied.
+
+| Item | State now |
+|---|---|
+| `brand_context.name` | `Openout` |
+| `svg/lockup-horizontal.svg` | **regenerated, not hand-edited** — `node tools/rename-wordmark.mjs PolyGM Openout` rebuilds the mark geometry *from* `svg/mark.svg` and refuses to write unless geometry, `viewBox`, text metrics and the font fallback all match. `brand/BRAND-KIT.md` pins `brand_lock.geometry_sha256 = c33b4d5fd82b7acd`; editing `mark.svg` and re-pinning in one change is also refused. |
+| lockup width | measured, not estimated: `brand/wordmark-metrics.json` holds real `hmtx` advances (Archivo Narrow 700, `Openout` = **155.3** units @ 44px). Character-count arithmetic would have set the viewBox to 226 and clipped the wordmark by 29 units. |
+| `tokens.css` | regenerated; header now reads `/* Openout design tokens … */`. `build-tokens.mjs` blocks generation if `tokens.json`, the Brand Lock name, and the lockup wordmark disagree. |
+| `mark.svg`, `mark-mono-*.svg`, `favicon.svg` | **unchanged** — `fixed`. The `PolyGM` strings still inside them are `aria-label` surfaces, not the lockup; the rule is "a rename touches wordmark text". |
+
+### Two defects in the P02 raster assets, found while doing the rename and NOT fixed
+
+Both are `fixed` rows and one contains the old wordmark, so they need an approval step of their own:
+
+1. **Filenames overstate nothing but misdescribe.** `avatar-512.png` and `app-icon-512.png` are actually **1254×1254**; `og-1200x630.png` is **1731×909** (aspect 1.904:1 against the 1.91:1 OG convention). A 512px avatar will therefore arrive over-weight, and the OG card is not the documented size.
+2. **Three of the four rasters still render `PolyGM`** (`avatar-512.png`, `og-1200x630.png`, `brandboard.png`; `app-icon-512.png` measured mark-only at 0.36% ink outside the mark disc). They cannot be honestly re-rendered here: `rsvg-convert`/`inkscape` are absent and ImageMagick's MSVG renderer drops the mark's stroked polygon (proved in P02), and the approved `logo/concept-b-binary.png` is itself pre-rename. Resizing a raster containing the old wordmark would distort it into a third wrong thing.
+
+`brandboard.png` additionally cannot be produced at all — the skill's brandbook stage is `blocked:needs_user_permission`.
