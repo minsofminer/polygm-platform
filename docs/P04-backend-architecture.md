@@ -544,12 +544,22 @@ Run in this workspace, all of it after the last edit (2026-09-17):
 | `python3 tools/doctor.py` | reports the missing tools below rather than working around them |
 
 **Re-verified after P05 landed** (same day, because a phase that breaks the last phase's gate has not finished):
-221 tests OK · P04 gate 55/55 · `make probe-fresh` re-run against the live venue (it found `cache_buster_works`
-reading false, which turned out to be a measurement that compared two *busted* fetches to each other; the tool
-now compares busted against plain and records the 0/3–3/3 count, and the re-run confirms the buster still
-works — plain newest ts 1789645254 vs busted 1789645554, 5 minutes newer). Two checker defects surfaced during
-that re-verification and are fixed here, not worked around: the migration-chain test asserted a file count
-(`== 4`) instead of the property the migrator needs, and `CORE_STDLIB` was missing `statistics`.
+221 tests OK · P04 gate 55/55 · `tools/lint-rules.py` had to learn that `statistics` is stdlib (that rule is
+about third-party dependencies, not the standard library), and the migration-chain test was rewritten after it
+failed on P05's `0006_ingest.sql` for the wrong reason — it asserted a file count where the migrator's actual
+requirement is "strictly increasing and unique".
+
+`make probe-fresh` (the new cache check) came back **red, and it stays red** — this is a report, not a pass:
+- `cache_buster_works: recorded true -> now false`, even after the measurement was fixed to compare a busted
+  request against a plain one (it had been comparing two busted requests, which reads "quiet tape" as "cache
+  policy change"). `tools/p05-capture-fixtures.py --check`, minutes apart, saw a busted request return data 5
+  minutes newer than the plain one. So the honest statement is **unreliable, not "broken"**: it cannot be a
+  design dependency, and P05's tape is WS-first with REST as catch-up for exactly that reason. P01's spec line
+  "a cache buster works" needs the qualifier "usually, not always" before P06 builds anything on it.
+- Two P01 checks that were green are now failing on their own: `clob-book-fields` and `clob-spread`. The venue
+  moved under us between the P01 capture and now. P06's order builder reads those payloads, so this is the
+  first thing to re-verify in that phase, not something to re-pin here — re-saving the probe record would
+  convert an upstream change into silence, which is the one outcome `--check-cache` exists to prevent.
 
 **Not verified, and why:** `docker` and `docker-compose` are absent, so no image was built and no container
 network was exercised (`[UNVERIFIED]` for compose, Dockerfiles, and their healthchecks); `psql` and the

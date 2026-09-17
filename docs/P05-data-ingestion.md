@@ -63,6 +63,13 @@ never compared. That is recorded rather than smoothed over, and it is the first 
 Re-verified after P05 landed: 221 tests OK, P04 gate **55/55**, `tools/lint-rules.py` had to learn that
 `statistics` is stdlib (the core rule is about third-party dependencies, not the standard library).
 
+## Upstream, right now (2026-09-17T12:2xZ, from `make probe-fresh`)
+
+- `clob-book-fields` and `clob-spread` (P01's checks) are FAILING: the CLOB payloads changed shape. First thing
+  to re-verify in P06, before any order builder is written against them.
+- The edge cache on `/trades` is inconsistent under busting (once newer, once identical, minutes apart). The
+  design already treats the WebSocket as the tape and REST as catch-up; nothing may depend on cache busting.
+
 ## Still open for this phase
 1. Make check C conclusive: time-window the reference query in `venue_fills_in_window`, re-run the 300 s outage, and keep the run red until it passes.
 2. Alert fanout + Telegram budget/SLO (D7) — `alert_deliveries` exists, the dispatcher does not yet.
