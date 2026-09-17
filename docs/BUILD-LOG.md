@@ -6,7 +6,7 @@ Format per phase: **built / verified / `[UNVERIFIED]`**. Newest first.
 
 ## P03 — Design system · 2026-09-17
 
-**Built.** `docs/P03-design-system.md` (D0–D8, 1,290 lines): D0 records where the prompt's premises were
+**Built.** `docs/P03-design-system.md` (D0–D8, 1,283 lines): D0 records where the prompt's premises were
 stale against measurement; D1 foundations (4px spacing 12 steps + 3 named off-grid, 4 elevation levels where
 level 1 is a hairline not a shadow, density 22/28/36 with `min_touch_target` 44 never scaled, 7 breakpoints
 with xl=1280 as the full terminal, motion quoted from the vendored skill, layers 1000–1500); D2 31 primitives
