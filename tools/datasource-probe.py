@@ -186,9 +186,22 @@ def probe(r: Report, deep: bool = True) -> None:
                 max_fill_usd=round(max(notionals), 2),
                 pct_fills_ge_1000=round(100 * sum(1 for n in notionals if n >= 1000) / len(notionals), 1),
             )
-        # cache-buster test: does a query param defeat the cache?
-        s3, t3, h3 = get(u + "&_=%d" % int(time.time()))
-        r.measurements["cache_buster_works"] = (t3[0]["timestamp"] if isinstance(t3, list) and t3 else None) != fresh1
+        # Cache-buster test: does a query param defeat the edge cache? Sampled three times on purpose. A
+        # single comparison of two requests a second apart reads "no newer trade arrived yet" as "the buster
+        # does not work" whenever the tape is quiet — which is exactly what the first run of
+        # `make probe-fresh` reported as venue drift. Three samples with a 1 s gap cannot be answered by one
+        # quiet second, and the count is recorded next to the boolean so a reader can see WHY it flipped.
+        busts, prev = 0, fresh1
+        for _ in range(3):
+            time.sleep(1.0)
+            s3, t3, h3 = get(u + "&_=%d" % int(time.time() * 1000))
+            newest = t3[0]["timestamp"] if (s3 == 200 and isinstance(t3, list) and t3) else None
+            if newest is not None:
+                if newest != prev:
+                    busts += 1
+                prev = newest
+        r.measurements["cache_buster_works"] = busts > 0
+        r.measurements["cache_bust_newer_of_3"] = "%d/3" % busts
 
     # ---------------------------------------------------------------- Data API
     s, tl, _ = get(f"{DATA}/trades?limit=20")
@@ -331,11 +344,75 @@ def probe(r: Report, deep: bool = True) -> None:
         r.measurements["ws_dns"] = f"ERR {e!r}"
 
 
+# The claims P05's ingest code is written against. Everything else in `measurements` moves with the market and
+# is reported informationally, because "fills/sec changed" is a Tuesday, not a broken spec.
+# The claims P05's ingest code is written against. Everything else in `measurements` moves with the market and
+# is reported informationally, because "fills/sec changed" is a Tuesday, not a broken spec. `redeem_*` is
+# deliberately absent: it is a SAMPLE OF ONE ROW, so its values change every run while the RULE behind it
+# ("price==0, payout in usdcSize") is asserted by the named check `redeem-payout-in-usdcsiz`, and the
+# failing-check-id set below is what compares that. Listing the sample as structural is how a checker starts
+# crying wolf, and a checker that cries wolf gets muted.
+STABLE_MEASUREMENTS = ("gamma_row_cap", "paged_event_rows", "data_trades_cf_cache_status", "cache_buster_works",
+                       "fee_type_observable_per_market", "cache_bust_newer_of_3")
+
+
+def check_cache(path: str, payload: dict) -> int:
+    """Compare a fresh probe against the recorded one and report drift in the structural claims.
+
+    Exit codes are the contract, and they are why `make probe-fresh` does not wrap this in `|| echo`:
+    0 = the venue still behaves as recorded; 1 = it does not, so P01's spec is stale and must be re-opened
+    before P05's code is trusted; 3 = the venue could not be reached, which is not a finding about anything.
+    """
+    fresh = payload
+    try:
+        cached = json.load(open(path))
+    except FileNotFoundError:
+        print("no cached probe at %s — run `python3 tools/datasource-probe.py --save %s` first" % (path, path))
+        return 3
+    except json.JSONDecodeError as e:
+        print("cached probe at %s is not valid JSON: %s" % (path, e))
+        return 1
+    drift, same, absent = [], [], []
+    a, b = cached.get("measurements") or {}, fresh.get("measurements") or {}
+    for k in STABLE_MEASUREMENTS:
+        if k not in a or k not in b:
+            absent.append(k)
+            continue
+        if k == "cache_bust_newer_of_3":
+            # "3/3" vs "1/3" is the tape being quiet, not the cache changing; "0/3" is the claim failing.
+            (drift if str(new_ := b[k]).startswith("0") and not str(a[k]).startswith("0") else same).append(
+                (k, a[k], b[k]))
+            continue
+        (same if a[k] == b[k] else drift).append((k, a[k], b[k]))
+    print("probe cache check against %s (recorded %s)" % (path, cached.get("started_at")))
+    for k, old, new in same:
+        print("  same   %-34s %s" % (k, json.dumps(old, default=str)[:60]))
+    for k, old, new in drift:
+        print("  DRIFT  %-34s recorded %s -> now %s" % (k, json.dumps(old, default=str)[:48],
+                                                        json.dumps(new, default=str)[:48]))
+    for k in absent:
+        print("  MISSING on one side: %s (the probe changed shape; that is a P01-code change, not a venue one)" % k)
+    old_fails, new_fails = set(cached.get("failures") or []), set(fresh.get("failures") or [])
+    if new_fails - old_fails:
+        print("  newly FAILING checks: %s" % ", ".join(sorted(new_fails - old_fails)))
+    if old_fails - new_fails:
+        print("  no longer failing: %s" % ", ".join(sorted(old_fails - new_fails)))
+    if drift or absent or (new_fails - old_fails):
+        print("\n  The venue changed under us. Re-open P01 and correct the spec BEFORE writing more ingest "
+              "code on top of it — do not edit this tool to make the diff go away.")
+        return 1
+    print("\n  %d structural claims unchanged; %d measurements moved (expected)"
+          % (len(same), len(set(a) - set(STABLE_MEASUREMENTS))))
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--fast", action="store_true", help="skip the 8s cache-staleness wait")
     ap.add_argument("--save", metavar="PATH")
+    ap.add_argument("--check-cache", metavar="PATH", nargs="?", const="docs/verification/P01-probe.json",
+                    help="re-probe and diff the structural claims against a recorded run (exit 1 on drift)")
     a = ap.parse_args()
 
     r = Report(started_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
@@ -350,6 +427,15 @@ def main() -> int:
     if a.save:
         with open(a.save, "w") as fh:
             json.dump(payload, fh, indent=2, default=str)
+    if a.check_cache:
+        if not a.json:
+            print("re-probing, then diffing against", a.check_cache)
+        unreachable = [c for c in r.checks if not c.ok and "unreachable" in str(c.observed).lower()]
+        if unreachable or r.measurements.get("gamma_row_cap") in (None, 0):
+            print("venue unreachable, so this says nothing about the spec: %s"
+                  % ", ".join(c.id for c in unreachable) or "gamma returned nothing")
+            return 3
+        return check_cache(a.check_cache, payload)
     if a.json:
         print(json.dumps(payload, indent=2, default=str))
     else:

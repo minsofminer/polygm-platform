@@ -114,7 +114,8 @@ probe:
 # CI runs this one; a human does not, because it takes ~40s and hits the venue. It exists so "the venue still
 # behaves the way P01 measured" is a check and not a memory. If the network is blocked, it says SO.
 probe-fresh:
-	@$(PY) tools/datasource-probe.py --check-cache || echo "[warn] probe could not reach the venue; using the cached P01 result"
+	@$(PY) tools/datasource-probe.py --check-cache; rc=$$?; \
+	 if [ $$rc -eq 3 ]; then echo "[warn] venue unreachable — no claim made either way"; exit 0; fi; exit $$rc
 
 p01:
 	$(PY) tools/p01-gate-check.py
