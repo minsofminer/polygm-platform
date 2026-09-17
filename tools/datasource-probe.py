@@ -352,8 +352,14 @@ def probe(r: Report, deep: bool = True) -> None:
 # ("price==0, payout in usdcSize") is asserted by the named check `redeem-payout-in-usdcsiz`, and the
 # failing-check-id set below is what compares that. Listing the sample as structural is how a checker starts
 # crying wolf, and a checker that cries wolf gets muted.
+# `fee_type_observable_per_market` is NOT here, and the reason is the same as `redeem_row_payout_fields`: it is
+# a set collected from whichever top-100 sample the run happened to see, so it changed between two runs on the
+# same day (`sports_fees_v3` out, `finance_prices_fees` in) while nothing about the *spec* changed. Listing a
+# sample as structural turns the checker into a coin flip, and a coin-flip checker gets ignored, which is worse
+# than no checker. The structural claim that IS made about fees lives in a named check (the field exists and is
+# a non-empty string), and the enum is documented as open-ended in docs/P05-data-ingestion.md.
 STABLE_MEASUREMENTS = ("gamma_row_cap", "paged_event_rows", "data_trades_cf_cache_status", "cache_buster_works",
-                       "fee_type_observable_per_market", "cache_bust_newer_of_3")
+                       "cache_bust_newer_of_3")
 
 
 def check_cache(path: str, payload: dict) -> int:

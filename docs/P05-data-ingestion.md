@@ -68,15 +68,21 @@ never compared. That is recorded rather than smoothed over, and it is the first 
 Re-verified after P05 landed: 221 tests OK, P04 gate **55/55**, `tools/lint-rules.py` had to learn that
 `statistics` is stdlib (the core rule is about third-party dependencies, not the standard library).
 
-## Upstream, right now (2026-09-17T12:2xZ, from `make probe-fresh`)
+## Upstream, right now (2026-09-17T12:5xZ)
 
-- `clob-book-fields` and `clob-spread` (P01's checks) are FAILING: the CLOB payloads changed shape. First thing
-  to re-verify in P06, before any order builder is written against them.
-- The edge cache on `/trades` is inconsistent under busting (once newer, once identical, minutes apart). The
-  design already treats the WebSocket as the tape and REST as catch-up; nothing may depend on cache busting.
-
-Also re-verified after P05 landed: P04 gate **55/55**, and `tools/lint-rules.py` had to learn that
-`statistics` is stdlib (the core's "no third-party imports" rule is about dependencies, not the stdlib).
+- `make probe-fresh` reported `clob-book-fields` and `clob-spread` newly failing, and I wrote here that the CLOB
+  payloads had changed shape. **That was wrong and the note is replaced, not deleted:** a re-run has both
+  passing with every documented field present, so they were transients. The real defect was in the checker —
+  it printed failing ids with no status and no payload — and `--check-cache` now prints both and labels each
+  line `TRANSIENT?` or `SHAPE`. `GET /book` keys, re-measured: `asks, asset_id, bids, hash, last_trade_price,
+  market, min_order_size, neg_risk, tick_size, timestamp`.
+- **The fee enum is open-ended.** Seven values across two runs of the same top-100 sample: `crypto_fees_v2`,
+  `culture_fees`, `economics_fees`, `finance_prices_fees`, `politics_fees`, `sports_fees_v2`, `sports_fees_v3`
+  — and the sets differed run to run, which is why `fee_type_observable_per_market` is no longer treated as a
+  structural claim. Design consequence, and it is a money consequence: an unrecognised `feeType` means
+  *charged and flagged*, never *free*, and no code may branch on "is this in the list I hard-coded".
+- The edge cache on `/trades` is inconsistent under busting (once newer, once identical, minutes apart), so the
+  WebSocket is the tape and REST is the catch-up; nothing may depend on cache busting.
 
 ## Still open for this phase
 1. Make check C conclusive: time-window the reference query in `venue_fills_in_window`, re-run the 300 s outage, and keep the run red until it passes.

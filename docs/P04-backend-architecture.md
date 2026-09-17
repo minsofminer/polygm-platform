@@ -556,10 +556,19 @@ requirement is "strictly increasing and unique".
   minutes newer than the plain one. So the honest statement is **unreliable, not "broken"**: it cannot be a
   design dependency, and P05's tape is WS-first with REST as catch-up for exactly that reason. P01's spec line
   "a cache buster works" needs the qualifier "usually, not always" before P06 builds anything on it.
-- Two P01 checks that were green are now failing on their own: `clob-book-fields` and `clob-spread`. The venue
-  moved under us between the P01 capture and now. P06's order builder reads those payloads, so this is the
-  first thing to re-verify in that phase, not something to re-pin here — re-saving the probe record would
-  convert an upstream change into silence, which is the one outcome `--check-cache` exists to prevent.
+- Two P01 checks that were green reported as newly failing (`clob-book-fields`, `clob-spread`). **My first
+  read — "the venue moved, P06 must re-verify the payloads" — was wrong.** A clean re-run has both passing
+  with every field present (`/book` still carries `tick_size` and `min_order_size`; `/spread` still returns
+  `spread`), so they were transients. Two fixes came out of that, one in the tool and one in how I report:
+  `--check-cache` used to print newly-failing checks as bare **ids**, with neither status nor payload, so a
+  timeout was indistinguishable from a schema change — it now prints both and labels the line `TRANSIENT?` or
+  `SHAPE`; and I should not have concluded anything from a list of ids when the tool had the evidence and
+  simply wasn't showing it.
+- What *is* genuinely unstable: `fee_type_observable_per_market` differed between two runs the same day
+  (`sports_fees_v3` out, `finance_prices_fees` in) because it is a sample of whatever the top-100 happened to
+  contain. It has been removed from the stable set for that reason — a checker that flips a coin gets ignored —
+  and the durable conclusion is recorded in P05: **the fee enum is open-ended (7 values observed), so
+  "unknown fee type" must mean "treat as charged, flag it", never "not in the list, therefore free".**
 
 **Not verified, and why:** `docker` and `docker-compose` are absent, so no image was built and no container
 network was exercised (`[UNVERIFIED]` for compose, Dockerfiles, and their healthchecks); `psql` and the
