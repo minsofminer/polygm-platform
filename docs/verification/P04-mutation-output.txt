@@ -1,30 +1,31 @@
-copying the tree to /tmp/p04-mutation-negdrpa_/baseline and checking the CLEAN gate first
+copying the tree to /tmp/p04-mutation-821o0rf4/baseline and checking the CLEAN gate first
   baseline: P04 gate: 54/54 checks passed
-  float-in-money             caught by: FAIL lint-rules clean (lint-rules: 34 files scanned, 1 findings)
-  no-roundtrip-guard         caught by: FAIL suite: 156 tests, exit 1, tail 'FAILED (failures=1)'
-  numeric-money-column       caught by: FAIL suite: 156 tests, exit 1, tail 'FAILED (failures=3)'
-  generated-sql-stale        caught by: FAIL suite: 105 tests, exit 1, tail '<sys>:0: ResourceWarning: unclosed database in <sqlite3.Conn'
-  kill-switch-not-first      caught by: FAIL suite: 156 tests, exit 1, tail 'FAILED (failures=2)'
-  denial-spends-cap          caught by: FAIL suite: 156 tests, exit 1, tail 'FAILED (failures=13)'
-  tick-raw-string            caught by: FAIL suite: 156 tests, exit 1, tail 'FAILED (failures=3)'
+  float-in-money             caught by: FAIL lint-rules clean (lint-rules: 47 files scanned, 1 findings)
+  no-roundtrip-guard         caught by: FAIL suite: 221 tests, exit 1, tail '<sys>:0: ResourceWarning: unclosed database in <sqlite3.Conn'
+  numeric-money-column       caught by: FAIL suite: 221 tests, exit 1, tail '<sys>:0: ResourceWarning: unclosed database in <sqlite3.Conn'
+  generated-sql-stale        caught by: FAIL suite: 170 tests, exit 1, tail 'FAILED (failures=1, errors=16)'
+  kill-switch-not-first      caught by: FAIL suite: 221 tests, exit 1, tail '<sys>:0: ResourceWarning: unclosed database in <sqlite3.Conn'
+  denial-spends-cap          caught by: FAIL suite: 221 tests, exit 1, tail '<sys>:0: ResourceWarning: unclosed database in <sqlite3.Conn'
+  tick-raw-string            caught by: FAIL suite: 221 tests, exit 1, tail '<sys>:0: ResourceWarning: unclosed database in <sqlite3.Conn'
   limits-frozen-at-import    caught by: FAIL limits come from flags at request time, not a module constant
   key-not-released           caught by: FAIL every denial after begin() releases the key (5 returns audited, 1 unpaired)
-  insert-not-upsert          caught by: FAIL suite: 156 tests, exit 1, tail 'FAILED (failures=1)'
+  insert-not-upsert          caught by: FAIL suite: 221 tests, exit 1, tail '<sys>:0: ResourceWarning: unclosed database in <sqlite3.Conn'
   price-is-a-number          caught by: FAIL openapi audit: 80 checks passed, 2 failed
-  contract-loses-202         caught by: FAIL suite: 156 tests, exit 1, tail 'FAILED (failures=1)'
-  undeclared-202             caught by: FAIL suite: 156 tests, exit 1, tail 'FAILED (failures=1)'
-  detail-leak                caught by: FAIL suite: 156 tests, exit 1, tail 'FAILED (failures=1)'
-  gate-telemetry-dropped     caught by: FAIL suite: 156 tests, exit 1, tail 'FAILED (errors=1)'
+  contract-loses-202         caught by: FAIL suite: 221 tests, exit 1, tail '<sys>:0: ResourceWarning: unclosed database in <sqlite3.Conn'
+  undeclared-202             caught by: FAIL suite: 221 tests, exit 1, tail '<sys>:0: ResourceWarning: unclosed database in <sqlite3.Conn'
+  detail-leak                caught by: FAIL suite: 221 tests, exit 1, tail '<sys>:0: ResourceWarning: unclosed database in <sqlite3.Conn'
+  gate-telemetry-dropped     caught by: FAIL suite: 221 tests, exit 1, tail '<sys>:0: ResourceWarning: unclosed database in <sqlite3.Conn'
   readyz-never-recovers      caught by: FAIL readiness REFRESHES the store, so a pod recovers without a restart
   truthy-flag-on             caught by: FAIL numeric flags never carry `on` (bool(1234) would enable a feature)
   seed-literal-timestamp     caught by: FAIL seed.sql stamps with {{NOW_MS}}, never an absolute timestamp (1 literals found)
-  no-append-only-trigger     caught by: FAIL suite: 156 tests, exit 1, tail 'FAILED (failures=1)'
+  no-append-only-trigger     caught by: FAIL suite: 221 tests, exit 1, tail '<sys>:0: ResourceWarning: unclosed database in <sqlite3.Conn'
   compose-missing-dockerfile caught by: FAIL every compose build target exists (7 services, 1 missing)
   pipe-tail                  caught by: FAIL no make recipe pipes a check into tail (a pipe hides the exit status) (1 found)
   make-calls-missing-tool    caught by: FAIL every tool a make target runs is on disk (13 referenced, 1 missing)
   compose-duplicate-key      caught by: FAIL compose parses with NO duplicate mapping keys (148 lines)
-  planted-secret-untracked   caught by: FAIL lint-rules clean (lint-rules: 34 files scanned, 1 findings)
+  planted-secret-untracked   caught by: FAIL lint-rules clean (lint-rules: 47 files scanned, 1 findings)
 
 mutation report: 24 caught, 0 NOT caught, 0 mutant-construct errors (24 mutants)
 
 A missed mutant is not a pass for the product — it is a rule the gate only states in prose.
+exit=0
