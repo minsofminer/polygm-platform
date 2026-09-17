@@ -11,6 +11,7 @@ ledger table, and the append-only rule (P04 rule 4) is enforced in the schema, n
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -101,6 +102,10 @@ HEALTH_RESPONSES: dict[int, dict] = {}
 KILL_RESPONSES = {422: {"description": "reason missing or outside 4-400 characters"},
                   503: {"description": "no admin token configured; the endpoint is closed, not open"}}
 MARKET_RESPONSES = {404: {"description": "no such market"}}
+# The durable-fill read added by P05. `422` is declared because FastAPI emits it on a bad `limit` regardless of
+# whether the handler checks, and the OpenAPI audit treats an undocumented status as a lie by omission.
+FILLS_RESPONSES = {404: {"description": "no such market"},
+                   422: {"description": "limit outside 1..1000, or a non-numeric `since`"}}
 BOOK_RESPONSES = {404: {"description": "no such market, or a market with no order book"},
                   422: {"description": "depth outside 1-400"}}
 INTENT_RESPONSES = {404: {"description": "no such intent, or it belongs to another user (never 403: an "
@@ -350,9 +355,40 @@ app.openapi = _openapi      # type: ignore[method-assign]
 
 # --------------------------------------------------------------------------- #
 # reads — every one carries asOf + staleAfter (P04 D4 rule: a price without a timestamp is a rumour)
-def _stamped(payload: dict, *, ttl_ms: int, stale_ms: int) -> dict:
+def _anon(wallet: str) -> str:
+    """A stable pseudonym for a counterparty address.
+
+    Stable so a client can group by trader across requests, keyed so it cannot be reversed to an address by
+    someone who does not have our secret, and truncated because it appears in a URL-cacheable list. This is the
+    only way a fill log may show a counterparty at all: the venue's payload carries the address, and an API
+    that echoes it turns a public tape into an address book of our users' counterparties.
+    """
+    return "w_" + hashlib.sha256(("polygm-anon:" + str(wallet)).encode()).hexdigest()[:10]
+
+
+def _shares(micro: int) -> str:
+    """Shares, not dollars: the venue quotes size in shares and `fmt_usdc` would imply a $1 cap.
+
+    The trailing `.` strip is not cosmetic. `f"{5_000_000 / 1e6:.6f}".rstrip("0")` is `"5."`, which fails the
+    contract's own `^[0-9]+(\.[0-9]{1,6})?$` pattern — a bug that sat in the book route's inline formatting too,
+    invisible until a seed used a whole number of shares, and `fmt_usdc` in the money module already had the
+    correct two-step strip. Numbers that leave this file must be strings a schema accepts, not "close enough".
+    """
+    return f"{int(micro) // 10 ** 6}.{int(micro) % 10 ** 6:06d}".rstrip("0").rstrip(".") or "0"
+
+
+def _stamped(payload: dict, *, ttl_ms: int, stale_ms: int, as_of_ms: int | None = None) -> dict:
+    """Stamp a read with the clock the client needs to decide "is this live?".
+
+    `asOf` is the AGE OF THE DATA, not the time we answered, and `staleAfter` is derived from the same number.
+    Both used to be `now`, which made a response built from a ten-minute-old book say "fresh for two more
+    seconds" while `ageMs` on the same object said 600000 — two fields describing the same fact, disagreeing,
+    and the one a UI reads naively is the reassuring one. That is precisely the failure P05's gate exists to
+    catch ("the UI showed a stale indicator the whole time"), so the arithmetic now comes from the source row.
+    """
     now = _now_ms()
-    return {**payload, "asOf": now, "staleAfter": now + stale_ms,
+    as_of = int(as_of_ms) if as_of_ms else now
+    return {**payload, "asOf": as_of, "staleAfter": as_of + stale_ms, "serverAsOf": now,
             "cache": {"ttlMs": ttl_ms, "key": payload.get("cacheKey"),
                       "public": ttl_ms > 0, "immutable": False}}
 
@@ -467,9 +503,58 @@ def get_tape(request: Request,
     rows = rows[:limit]
     out = [{"price": fmt_usdc(r[0]), "size": fmt_usdc(r[1]), "side": r[2], "maker": bool(r[3]),
             "exchangeTs": r[4], "ingestMs": r[5]} for r in rows]
+    # the newest fill's venue timestamp is the age of this answer; an empty tape has no data age, and `now` is
+    # then honest (there is nothing older being misrepresented)
     return _stamped({"cacheKey": f"tape:{market_id}:{since}", "rows": out,
                      "nextCursor": (rows[-1][4] if has_more and rows else None)},
-                    ttl_ms=500, stale_ms=flags().stale_ms_tape)
+                    ttl_ms=500, stale_ms=flags().stale_ms_tape,
+                    as_of_ms=(max((r[4] for r in rows), default=None)))
+
+
+@app.get("/v1/markets/{market_id}/fills", responses=FILLS_RESPONSES)
+def get_market_fills(market_id: str, request: Request,
+                     since: int | None = Query(default=None, ge=0),
+                     limit: int = Query(default=100, ge=1, le=1000)):
+    """The fills P05's ingest actually stored, which is a different table from `/v1/tape`'s `tape_trades`.
+
+    Both exist on purpose, and the distinction is the phase: `tape_trades` is the P04 fixture the risk gate and
+    the tape widget were built against, while `tape_fills` is the durable, deduplicated log the venue's tape
+    lands in — the one the rollups, the whale percentile and the leaderboard read. Serving only the first would
+    leave the ingest writing a table nobody reads, which is how a pipeline rots.
+
+    `since` is exclusive and in the VENUE's clock (`ts_ms`), matching `/v1/tape` for the same reason: mixing the
+    two clocks produces either a duplicate or a hole, and a hole in a fill log reads as a suppressed trade.
+
+    No wallet address is returned. `anonWallet` is a stable pseudonym so a client can group fills by trader,
+    and the labels that hang off that wallet come along because a labelled fill without its label is the half of
+    the feature that took a whole phase to earn.
+    """
+    rid = request.state.request_id
+    mrow = _db.execute("SELECT condition_id FROM markets WHERE id=?", (market_id,)).fetchone()
+    if mrow is None:
+        return err("NOT_FOUND", rid)
+    cid = str(mrow[0])
+    sql = ("SELECT price_micro, size_micro, usd_notional_micro, side, outcome, wallet, ts_ms, ingest_ms, "
+           "source FROM tape_fills WHERE condition_id=?")
+    args: list = [cid]
+    if since is not None:
+        sql += " AND ts_ms < ?"
+        args.append(since)
+    sql += " ORDER BY ts_ms DESC, rowid DESC LIMIT ?"
+    rows = _db.execute(sql, (*args, limit + 1)).fetchall()
+    has_more = len(rows) > limit
+    rows = rows[:limit]
+    labelled = dict(_db.execute("SELECT wallet, label FROM wallet_labels WHERE publishable=1").fetchall()
+                   ) if rows else {}
+    out = []
+    for price, size, notional, side, outcome, wallet, ts, ingest_ms, source in rows:
+        out.append({"price": fmt_usdc(price), "shares": _shares(size), "notional": fmt_usdc(notional),
+                    "side": side, "outcome": outcome, "venueTs": ts, "ingestMs": ingest_ms, "source": source,
+                    "anonWallet": _anon(wallet), "labels": [labelled[wallet]] if wallet in labelled else []})
+    return _stamped({"cacheKey": f"fills:{market_id}:{since}", "market": market_id, "conditionId": cid,
+                     "rows": out, "nextCursor": (rows[-1][6] if has_more and rows else None)},
+                    ttl_ms=1000, stale_ms=flags().stale_ms_tape,
+                    as_of_ms=(max((r[6] for r in rows), default=None)))
 
 
 # sort_by -> (SQL expression, direction). The expression is ALSO selected as a trailing column, because a
@@ -529,8 +614,8 @@ def get_book(market_id: str, request: Request, depth: int = Query(default=24, ge
         return err("NOT_FOUND", request.state.request_id)
     out = {"BUY": [], "SELL": []}
     for side, p, s, levels, upd in rows:
-        out["SELL" if side == "ask" else "BUY"].append({"price": f"{p / 1e6:.6f}".rstrip("0"),
-                                                          "shares": f"{s / 1e6:.6f}".rstrip("0"),
+        out["SELL" if side == "ask" else "BUY"].append({"price": fmt_usdc(p),
+                                                          "shares": _shares(s),
                                                           "levels": levels})
     age = _now_ms() - max(r[4] for r in rows)
     bid = max((r[1] for r in rows if r[0] == "bid"), default=None)
@@ -541,9 +626,10 @@ def get_book(market_id: str, request: Request, depth: int = Query(default=24, ge
         spread_ticks = round((ask - bid) / (float(meta[0]) * 1e6), 3)     # metadata maths, not money
     return _stamped({"cacheKey": f"book:{market_id}:{depth}", "market": market_id,
                      "bids": out["BUY"], "asks": out["SELL"],   # best-first on both sides, per the design system
-                     "spreadTicks": spread_ticks, "bestBid": f"{bid / 1e6:.6f}".rstrip("0") if bid else None,
-                     "bestAsk": f"{ask / 1e6:.6f}".rstrip("0") if ask else None, "ageMs": age},
-                    ttl_ms=flags().cache_ttl_books_ms, stale_ms=flags().stale_ms_book)
+                     "spreadTicks": spread_ticks, "bestBid": fmt_usdc(bid) if bid else None,
+                     "bestAsk": fmt_usdc(ask) if ask else None, "ageMs": age},
+                    ttl_ms=flags().cache_ttl_books_ms, stale_ms=flags().stale_ms_book,
+                    as_of_ms=max(r[4] for r in rows))   # the ladder's own `updated_ms`, i.e. `ageMs`'s source
 
 
 # --------------------------------------------------------------------------- #

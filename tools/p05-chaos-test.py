@@ -50,18 +50,41 @@ WS = "https://ws-subscriptions-clob.polymarket.com/ws/market".replace("https", "
 BIG_FILL_USD = 1_000
 
 
-def pick_subject(f: NET.Fetcher) -> dict:
-    """The busiest accepting market we can find right now, because a dead market cannot fail informatively."""
+def pick_subjects(f: NET.Fetcher, n: int) -> list[dict]:
+    """The busiest accepting markets right now, because a dead market cannot fail informatively.
+
+    Several rather than one, for two reasons found the hard way: a single market can go 90 s without a public
+    fill (which makes B2 refuse to pass on nothing, correctly), and one market's book tells you nothing about
+    what the socket does when some subscriptions are quiet and others are not.
+    """
     rows = f.get(f"{GAMMA}/markets", source="gamma.markets",
                  params={"limit": 100, "active": "true", "closed": "false", "order": "volume24hr",
                          "ascending": "false"}).json or []
-    live = [N.market_from_gamma(r) for r in rows if r.get("clobTokenIds")]
-    live = [m for m in live if m["accepting_orders"] and m["enable_order_book"] and m["tokens"]]
+    live = []
+    for r in rows:
+        try:
+            m = N.market_from_gamma(r)
+        except N.ShapeError:
+            continue
+        if m["accepting_orders"] and m["enable_order_book"] and m["tokens"]:
+            live.append(m)
     if not live:
         raise SystemExit("no live order-book market to test against — the venue or Gamma changed; this test "
                          "refuses to pass on a substitute")
     live.sort(key=lambda m: -m["volume_24h_micro"])
-    return live[0]
+    seen, out = set(), []
+    for m in live:
+        if m["condition_id"] in seen:
+            continue
+        seen.add(m["condition_id"])
+        out.append(m)
+        if len(out) >= max(1, n):
+            break
+    return out
+
+
+def pick_subject(f: NET.Fetcher) -> dict:
+    return pick_subjects(f, 1)[0]
 
 
 def rest_snapshot(f: NET.Fetcher, bookset: B.BookSet, token_ids: list[str], now_ms: int) -> None:
@@ -74,25 +97,45 @@ def rest_snapshot(f: NET.Fetcher, bookset: B.BookSet, token_ids: list[str], now_
         bookset.note_resync(tok)
 
 
-def venue_fills_in_window(f: NET.Fetcher, since_s: int, until_s: int) -> list[dict]:
-    """An independent read of the truth for the outage window, from the endpoint we are NOT connected to."""
-    out, offset = [], 0
-    while offset < 3000:
+def venue_fills_in_window(f: NET.Fetcher, since_s: int, until_s: int, *, settle_s: int = 20
+                          ) -> tuple[list[dict], bool]:
+    """(fills >= our alert threshold in [since_s, until_s], did the reference reach the end of that window).
+
+    This function is the ONLY thing "no large fill was missed" can mean, so a broken version of it is worse than
+    no check at all: the first version asked for the unbounded page (`?limit=100&offset=N`) and it took me a
+    while to notice that endpoint returns a **view that is minutes stale and never refreshes**. Measured on
+    2026-09-17 at three points 20 s apart: the newest fill it would name was 236 s, 257 s, 277 s old — the lag
+    grew exactly with real time, and bypassing the CDN cache (cf-cache-status MISS, identical bytes) changed
+    nothing, so it is the origin's materialised view, not our cache. Adding `&start=&end=` returns a different
+    path that is 0-1 s current, reproduced 3/3.
+
+    Two consequences, both baked in here: the reference query must be bounded, and it must *prove* it observed
+    the end of the window before it is allowed to report "nothing was missed". Without that proof an empty
+    result is indistinguishable from a venue whose tape had not caught up — which is exactly the trap that made
+    check C inconclusive the first time round.
+    """
+    out, offset, reached_end = [], 0, False
+    while offset <= 2_000:
         rows = f.get(f"{DATA}/trades", source="data.trades",
-                     params={"limit": 100, "offset": offset, "takerOnly": "true"}).json or []
+                     params={"limit": 100, "offset": offset, "takerOnly": "true",
+                             "start": since_s, "end": until_s + settle_s}).json or []
         if not rows:
             break
+        stamps = [int(r.get("timestamp") or 0) for r in rows]
+        if stamps and max(stamps) >= until_s:
+            reached_end = True                      # the reference saw as far as the end of the outage
         for row in rows:
             try:
                 fill = N.fill_from_rest(row)
             except N.ShapeError:
                 continue
-            if since_s <= fill["ts_ms"] // 1000 <= until_s and fill["usd_notional_micro"] >= BIG_FILL_USD * 10 ** 6:
+            if since_s <= fill["ts_ms"] // 1000 <= until_s and \
+                    fill["usd_notional_micro"] >= BIG_FILL_USD * 10 ** 6:
                 out.append(fill)
-        if min(int(r.get("timestamp") or 0) for r in rows) < since_s:
-            break
+        if stamps and min(stamps) < since_s:
+            break                                   # paged past the start of the window; the rest is older
         offset += 100
-    return out
+    return out, reached_end
 
 
 def main() -> int:
@@ -104,27 +147,43 @@ def main() -> int:
     ap.add_argument("--capacity", type=int, default=40_000,
                     help="durable tape rows to hold; a 300s outage at ~20 fills/s is ~6,000, so the default "
                          "must not evict the very window under test")
+    ap.add_argument("--subjects", type=int, default=6,
+                    help="markets to watch; one market in a 25s warm-up can easily deliver no fills at all, "
+                         "and B2 then correctly refuses to pass on nothing")
     a = ap.parse_args()
     if a.kill_seconds < 60:
         print("note: --kill-seconds %d is a smoke run. The phase gate is 300.\n" % a.kill_seconds)
 
     f = NET.Fetcher()
     subject = pick_subject(f)
-    tokens = subject["tokens"][:2]
-    print("subject: %s\n         %s (%d tokens, $%.0f 24h)"
+    subjects = pick_subjects(f, a.subjects)
+    subject = subjects[0]
+    tokens = []
+    for sub in subjects:
+        tokens.extend(sub["tokens"][:2])
+    tokens = tokens[:B.BookSet.SUBS_PER_CONNECTION]
+    print("subject: %s\n         %s (%d tokens, $%.0f 24h) — %d markets, %d tokens subscribed"
           % (subject["question"][:70], subject["id"][:18], len(subject["tokens"]),
-             subject["volume_24h_micro"] / 10 ** 6))
+             subject["volume_24h_micro"] / 10 ** 6, len(subjects), len(tokens)))
 
     tape = T.Tape(capacity=a.capacity)
     bookset = B.BookSet(stale_ms=3000)
     fresh = FR.Freshness()
     fresh.add(FR.Source("ws.tape", "tape", 3000, transport_alive=False))
     fresh.add(FR.Source("clob.book", "book", 3000, transport_alive=False))
+    # The REST poller is a SEPARATE source with its own staleness budget. It used to note its fills onto
+    # `ws.tape`, which made the composite flip back to `ok` in the middle of the outage — a harness bug that
+    # reads exactly like the product bug the check exists to catch, and worth the 5 extra lines because the fix
+    # is the assertion: the indicator tracks the LIVE feed, not whatever else happens to be polling.
+    fresh.add(FR.Source("data.trades", "tape", 10_000, transport_alive=False))
     engine, rule = Engine(), [build_rule("chaos-large", "large_fill",
                                         {"abs_usd_micro": BIG_FILL_USD * 10 ** 6, "min_sample": 5})]
     alerts: list = []
     stats = {"ws_msgs": 0, "rest_polls": 0, "stale_samples": 0, "ok_samples_during_outage": 0,
-             "frames_during_outage": 0}
+             "frames_during_outage": 0,
+             # How current the reference tape was, worst observed. A "nothing was missed" line otherwise rests on
+             # an unseen assumption about how fresh the venue's own query happened to be mid-measurement.
+             "rest_poll_lag_ms": 10 ** 15}
     stop = threading.Event()
     killed = {"since": None, "until": None}
     client = {"ws": None}
@@ -158,7 +217,10 @@ def main() -> int:
                             market=subject["id"], wallet="", tx_hash="", type="fill",
                             market_median_fill_micro=0, market_fill_sample=max(20, len(tape.rows)))
                 tape.add_live(dict(live, ts_ms=lt["ts_ms"]))
-                alerts.extend(engine.evaluate(rule, live, now))
+                # `type` is the engine's dispatch key — it reads events, not venue payloads. Feeding it a raw
+                # fill made every check below "pass" with zero alerts ever fired, which is a vacuous pass of
+                # exactly the kind this harness exists to catch, so the field is spelled out here.
+                alerts.extend(engine.evaluate(rule, dict(live, type="fill"), now))
             elif kind == "price_change":
                 for ch in N.price_changes(m):
                     bk = bookset.books.get(ch["token_id"])
@@ -202,9 +264,17 @@ def main() -> int:
         lost fill, and it is the only reason assertion C can pass at all."""
         while not stop.is_set():
             now_ms = int(time.time() * 1000)
+            # Bounded on purpose: the unbounded "latest" page is a view that is minutes stale and never
+            # refreshes — measured 2026-09-17, newest fill 236 s / 257 s / 277 s old at samples 20 s apart,
+            # identical bytes even with the CDN cache bypassed. A poller built on it looks healthy while reading
+            # yesterday. `takerOnly` plus the range selects the path that measured 0-1 s current, 3/3.
             rows = f.get(f"{DATA}/trades", source="data.trades",
-                         params={"limit": 100, "takerOnly": "true", "_": now_ms}).json or []
+                         params={"limit": 100, "takerOnly": "true", "start": now_ms // 1000 - 600,
+                                 "end": now_ms // 1000 + 60}).json or []
             stats["rest_polls"] += 1
+            stamps = [int(r.get("timestamp") or 0) for r in (rows or [])]
+            if stamps and max(stamps):
+                stats["rest_poll_lag_ms"] = min(stats["rest_poll_lag_ms"], now_ms - max(stamps) * 1000)
             if killed["since"] is None or killed["until"] is not None:
                 fresh.sources["clob.book"].transport_alive = True
                 for tok in tokens:
@@ -222,10 +292,11 @@ def main() -> int:
                     fill = N.fill_from_rest(row)
                 except N.ShapeError:
                     continue
+                fresh.sources["data.trades"].transport_alive = True
                 if tape.add(dict(fill, source="rest")):
-                    fresh.note_event("ws.tape", fill["ts_ms"])
-                alerts.extend(engine.evaluate(rule, dict(fill, market_median_fill_micro=0, market_fill_sample=
-                                                          max(20, len(tape.rows))), now_ms))
+                    fresh.note_event("data.trades", fill["ts_ms"])
+                alerts.extend(engine.evaluate(rule, dict(fill, type="fill", market_median_fill_micro=0,
+                                                          market_fill_sample=max(20, len(tape.rows))), now_ms))
             time.sleep(2.0)
 
     t1, t2 = threading.Thread(target=ws_thread, daemon=True), threading.Thread(target=rest_thread, daemon=True)
@@ -238,17 +309,44 @@ def main() -> int:
         return 1
     pre = len(tape.rows)
     killed["since"] = int(time.time())
+    # Kill it for real, then let the product notice. Setting `transport_alive = False` by hand here would test
+    # the assertion instead of the code that is supposed to produce it — and the first 300 s run proved the
+    # difference: a socket that was merely "not read any more" stayed alive-looking for two samples, which is
+    # precisely the state a real close kills. Closing makes `poll()` raise, and the `except` path below is the
+    # product's own dead-transport path.
+    sock = client["ws"]
+    if sock is not None:
+        try:
+            sock.close()
+        except Exception:
+            pass
     print("KILLING THE WEBSOCKET at %d (for %ds). tape=%d rows, ws_msgs=%d"
           % (killed["since"], a.kill_seconds, pre, stats["ws_msgs"]))
     t_end = time.time() + a.kill_seconds
+    # (seconds since kill, status) for every sample. Recording the series rather than a count is the point: the
+    # claim worth testing is not "never 'ok' again" — the indicator is deliberately time-based, so flipping
+    # within `stale_ms` is correct behaviour and an assertion that ignored it failed a working system — but
+    # "flips promptly, then does not flap back".
+    series: list[tuple[float, str]] = []
     while time.time() < t_end:
         st = fresh.composite(int(time.time() * 1000))
         stats["stale_samples"] += 1
+        # the per-source breakdown travels with every sample, because "it flapped" is not diagnosable and the
+        # first version of this message cost a 300 s re-run to learn WHICH source said ok
+        series.append((round(time.time() - killed["since"], 1), st["status"], dict(st["sources"])))
         if st["status"] == "ok":
             stats["ok_samples_during_outage"] += 1
         if st["sources"].get("ws.tape") == "ok":
             stats["frames_during_outage"] += 1
         time.sleep(1.0)
+    flips = [t for t, st, _src in series if st != "ok"]
+    stats["freshness_series"] = [(t, st) for t, st, _src in series]
+    stats["ok_detail"] = [(t, src) for t, st, src in series if st == "ok"]
+    stats["flip_after_s"] = min(flips) if flips else None
+    # any 'ok' AFTER the first flip is a flap: the page promising live data in the middle of an outage
+    stats["ok_after_flip"] = sum(1 for t, st, _src in series if st == "ok"
+                                  and stats["flip_after_s"] is not None
+                                 and t > stats["flip_after_s"])
     killed["until"] = int(time.time())
     print("outage over (%ds). reconnecting..." % (killed["until"] - killed["since"]))
     ws = client["ws"]
@@ -259,8 +357,13 @@ def main() -> int:
     stop.set()
     now_ms = int(time.time() * 1000)
 
+    # What "promptly" means is derived from the product's own threshold, not from a number I like: the source
+    # is allowed to read 'ok' until its stale window elapses, plus one sample interval of slack.
+    grace_s = (max(s2.stale_ms for s2 in fresh.sources.values()) / 1000.0) + 2.0
+
     # ---- verdicts ---------------------------------------------------------------------------------------
-    win_fills = venue_fills_in_window(f, max(0, killed["until"] - a.kill_seconds), killed["until"])
+    win_fills, ref_reached_end = venue_fills_in_window(f, max(0, killed["until"] - a.kill_seconds),
+                                                        killed["until"])
     mine = {T.fill_key(r) for r in tape.rows}
     missed = [x for x in win_fills if T.fill_key(x) not in mine]
     covered = [x for x in win_fills if T.fill_key(x) in mine]
@@ -284,20 +387,35 @@ def main() -> int:
     resync_count = sum(b.resyncs for b in bookset.books.values())
     gap_count = sum(b.gap_detections for b in bookset.books.values())
 
+    # A's failure text, built outside the list so the paren nesting stays readable and the message can name the
+    # source that said ok instead of just counting the times it happened.
+    ok_reason = "; ".join("t=%.1fs[%s]" % (t, ",".join("%s=%s" % kv for kv in sorted(src.items())))
+                          for t, src in stats["ok_detail"][:5]) or "no ok samples"
+    a_detail = ("the page never stopped claiming live data (statuses: %s)"
+                % ", ".join("%gs:%s" % (t, st) for t, st in stats["freshness_series"][:12])
+                if stats["flip_after_s"] is None else
+                "flapped back to 'ok' %d time(s) after going stale at %.1fs; ok because: %s"
+                % (stats["ok_after_flip"], stats["flip_after_s"], ok_reason))
+
     checks = [
-        ("A. stale indicator held for the whole outage (%d samples)" % stats["stale_samples"],
-         stats["ok_samples_during_outage"] == 0 and stats["stale_samples"] >= max(10, a.kill_seconds // 2),
-         "%d/%d samples read 'ok' during the outage" % (stats["ok_samples_during_outage"],
-                                                          stats["stale_samples"])),
-        ("B. no duplicate alerts (%d alerts, %d rules fired)" % (len(alerts), engine.fired),
+        ("A. the stale indicator flipped within %.0fs of the kill and held for %d/%d samples"
+         % (grace_s, stats["stale_samples"] - stats["ok_samples_during_outage"], stats["stale_samples"]),
+         stats["flip_after_s"] is not None and stats["flip_after_s"] <= grace_s
+         and stats["ok_after_flip"] == 0 and stats["stale_samples"] >= max(10, a.kill_seconds // 2),
+         a_detail),
+                ("B. no duplicate alerts (%d alerts, %d rules fired)" % (len(alerts), engine.fired),
          dup_alerts == 0, "%d duplicate deliveries" % dup_alerts),
-        ("B2. the two clocks actually collided (live fills seen=%d, already-booked=%d, durable merges=%d)"
-         % (tape.live_seen, tape.live_suppressed, tape.dups),
-         tape.live_seen > 0,
-         "the WS delivered no trade frames at all, so alert-level dedupe was not exercised by this run"),
+        ("B2. the two clocks actually collided (live fills seen=%d, already-booked=%d, durable merges=%d, "
+         "alerts fired=%d)" % (tape.live_seen, tape.live_suppressed, tape.dups, engine.fired),
+         tape.live_seen > 0 and engine.fired > 0,
+         "the WS delivered %d trade frame(s) and the engine fired %d alert(s), so alert-level dedupe was not "
+         "exercised by this run — re-run it, or raise --subjects until a large fill lands in the window"
+         % (tape.live_seen, engine.fired)),
         ("C. no missed large fills (>= $%d: %d of %d venue rows in the window)"
-         % (BIG_FILL_USD, len(covered), len(win_fills)),
-         len(covered) == len(win_fills) and len(win_fills) > 0,
+         % (BIG_FILL_USD, len(covered), len(win_fills)) if ref_reached_end else
+         "INCONCLUSIVE 0 of %d large fills — the venue's own tape had not reached the end of the window when "
+         "we asked, so it cannot vouch for anything; wait longer or re-run" % len(win_fills),
+         ref_reached_end and len(covered) == len(win_fills) and len(win_fills) > 0,
          ("missed %s" % [x["tx_hash"][:12] for x in missed][:4]) if missed
          else "the venue reported no >= $%d fills in the window: raise --kill-seconds rather than trusting "
               "this line" % BIG_FILL_USD),
@@ -309,6 +427,13 @@ def main() -> int:
          % (len(tape.rows) - pre), len(tape.rows) > pre, "no rows arrived during or after the outage"),
     ]
     print("\nchaos test — %s" % time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
+    print("  reference tape lag: worst %s behind wall clock%s"
+          # Signed on purpose. Negative = the venue's indexer stamped a fill ahead of our wall clock (its HTTP
+          # `Date` agrees with us to <1 s, so it is their ingest path, not NTP). The product clamps this to 0;
+          # the harness shows the real number, because a reader needs to know the reference was current.
+          % ("%.1f s" % (stats["rest_poll_lag_ms"] / 1000) if stats["rest_poll_lag_ms"] < 10 ** 14
+             else "NEVER MEASURED (the poller saw no fill at all)",
+             "" if stats["rest_poll_lag_ms"] < 60_000 else " — above a minute and check C is weaker than it looks"))
     bad = 0
     for label, ok, detail in checks:
         print("  [%s] %s%s" % ("PASS" if ok else "FAIL", label, "" if ok else "   -> " + detail))

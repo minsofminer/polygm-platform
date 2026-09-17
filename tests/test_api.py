@@ -380,6 +380,107 @@ class TestListAndTape(ApiBase):
         self.assertIn("staleAfter", r)
 
 
+
+class TestDurableFills(ApiBase):
+    """`/v1/markets/{id}/fills` — the read that makes P05's `tape_fills` more than a table nobody serves."""
+
+    app_name = "api-fills"
+
+    def seed(self, condition_id, wallet="0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"):
+        # One DB per class, and `dedupe_key` is UNIQUE by design (that constraint IS the ingest's replay
+        # protection), so a class that seeds twice must clear its own rows first. Clearing here rather than in
+        # setUp keeps the reason next to the constraint it exists for.
+        self.con.execute("DELETE FROM tape_fills WHERE condition_id=?", (condition_id,))
+        self.con.execute("DELETE FROM wallet_labels")
+        now = self.app._now_ms()
+        for i, (px, size, side) in enumerate(((300_000, 5_000_000, "BUY"), (300_000, 50_000_000, "SELL"),
+                                             (299_000, 1_000_000, "BUY"))):
+            self.con.execute(
+                "INSERT INTO tape_fills (dedupe_key,condition_id,token_id,outcome,outcome_index,wallet,side,"
+                "price_micro,size_micro,usd_notional_micro,ts_ms,ingest_ms,source,fee_rate_bps)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,0)",
+                ("fillkey-%s-%d" % (condition_id, i), condition_id, "tok%d" % i, "Yes", 0, wallet, side, px, size,
+                 px * size // 10 ** 6, now - (i + 1) * 60_000, now - i * 1000, "rest"))
+        self.con.commit()
+        return now
+
+    def market_and_cid(self):
+        mid = self.client.get("/v1/markets", params={"limit": 1, "live": "false"}).json()["items"][0]["id"]
+        cid = self.con.execute("SELECT condition_id FROM markets WHERE id=?", (mid,)).fetchone()[0]
+        return mid, str(cid)
+
+    def test_the_route_answers_from_the_ingest_table_newest_first(self):
+        mid, cid = self.market_and_cid()
+        self.seed(cid)
+        body = self.client.get("/v1/markets/%s/fills" % mid).json()
+        self.assertEqual(len(body["rows"]), 3, "three fills were stored; a page that drops one is a lie")
+        ts = [r["venueTs"] for r in body["rows"]]
+        self.assertEqual(ts, sorted(ts, reverse=True), "newest first, like the tape widget expects")
+        self.assertEqual(body["conditionId"], cid, "the ingest keys on condition id; the route must translate")
+
+    def test_money_numbers_are_strings_off_integers(self):
+        mid, cid = self.market_and_cid()
+        self.seed(cid)
+        row = self.client.get("/v1/markets/%s/fills" % mid).json()["rows"][0]
+        for key in ("price", "shares", "notional"):
+            self.assertIsInstance(row[key], str, "%s must not be a JSON number" % key)
+            self.assertRegex(row[key], r"^[0-9]+(\.[0-9]{1,6})?$")
+        self.assertEqual(row["notional"], "1.5", "0.30 x 5 shares, from the stored integers, not re-derived")
+
+    def test_no_counterparty_address_survives_the_response(self):
+        mid, cid = self.market_and_cid()
+        wallet = "0x" + "ab" * 20
+        self.seed(cid, wallet=wallet)
+        text = self.client.get("/v1/markets/%s/fills" % mid).text
+        self.assertNotIn(wallet, text, "the tape must not become an address book of our users' counterparties")
+        anon = self.client.get("/v1/markets/%s/fills" % mid).json()["rows"][0]["anonWallet"]
+        self.assertRegex(anon, r"^w_[0-9a-f]{10}$")
+        again = self.client.get("/v1/markets/%s/fills" % mid).json()["rows"][0]["anonWallet"]
+        self.assertEqual(anon, again, "a pseudonym that changes per request cannot group a trader's fills")
+
+    def test_since_is_exclusive_on_the_venue_clock(self):
+        mid, cid = self.market_and_cid()
+        self.seed(cid)
+        rows = self.client.get("/v1/markets/%s/fills" % mid).json()["rows"]
+        cut = rows[1]["venueTs"]
+        got = self.client.get("/v1/markets/%s/fills" % mid, params={"since": cut}).json()["rows"]
+        self.assertEqual([r["venueTs"] for r in got], [rows[2]["venueTs"]])
+        self.assertNotIn(cut, [r["venueTs"] for r in got], "an inclusive `since` re-serves the last row seen")
+
+    def test_stale_after_is_the_age_of_the_fills_not_of_the_response(self):
+        """The one field the UI's "live" badge reads, and the reason it used to be wrong.
+
+        These fixtures are minutes old on purpose: with `staleAfter = now + budget`, a client would have painted a
+        live dot over a fill log from ten minutes ago — the exact failure P05's gate names.
+        """
+        mid, cid = self.market_and_cid()
+        self.seed(cid)
+        body = self.client.get("/v1/markets/%s/fills" % mid).json()
+        newest = max(r["venueTs"] for r in body["rows"])
+        self.assertEqual(body["asOf"], newest, "asOf is the data's clock")
+        self.assertLessEqual(body["staleAfter"], self.app._now_ms(),
+                            "data minutes old must already read stale, not 'fresh for a second'")
+
+    def test_published_labels_come_along_and_unpublished_ones_never_do(self):
+        mid, cid = self.market_and_cid()
+        wallet = "0x" + "cd" * 20
+        self.seed(cid, wallet=wallet)
+        for label, publishable in (("whale", 1), ("insider_suspect", 0)):
+            self.con.execute("INSERT OR REPLACE INTO wallet_labels (wallet,label,confidence,publishable,"
+                             "evidence_json,first_seen_ms,last_seen_ms) VALUES (?,?,?,?,?,1,1)",
+                             (wallet, label, 900, publishable, "{}"))
+        self.con.commit()
+        rows = self.client.get("/v1/markets/%s/fills" % mid).json()["rows"]
+        labels = {l for r in rows for l in r["labels"]}
+        self.assertEqual(labels, {"whale"}, "insider_suspect is never publishable, so it can never be in a"
+                                           " response — and the check belongs on the read, not on the writer")
+
+    def test_an_unknown_market_is_404_not_an_empty_array(self):
+        r = self.client.get("/v1/markets/does-not-exist/fills")
+        self.assertEqual(r.status_code, 404)
+        self.assertEqual(r.json()["error"]["code"], "NOT_FOUND")
+
+
 class TestOrderPath(ApiBase):
     app_name = "api-orders"
 

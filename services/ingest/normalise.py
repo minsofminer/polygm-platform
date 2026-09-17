@@ -6,10 +6,13 @@ The three things this module is for:
 1. Gamma hands back JSON **encoded as strings** (`outcomes`, `outcomePrices`, `clobTokenIds`) and floats where
    we need integers, so the parse-and-reject step has to be in one place or every consumer re-implements it
    and one of them forgets.
-2. Timestamp units differ per source *on purpose*: `/trades` is seconds, the WebSocket is milliseconds
+2. The tape is `GET data-api.polymarket.com/trades`. `clob.polymarket.com/trades` is the *authenticated*
+   per-user endpoint and returns 401 anonymously; mixing them up produces a failure that looks like the venue
+   being down, so the host is named here rather than left to a constant in another file.
+3. Timestamp units differ per source *on purpose*: `/trades` is seconds, the WebSocket is milliseconds
    (verified: 1789645254 vs "1789645560001"). Two functions that say which unit they accept, and a range
    check that fails loudly when someone feeds one to the other, is the only defence that survives a refactor.
-3. Money and prices cross into micro-units here and never come back as floats.
+4. Money and prices cross into micro-units here and never come back as floats.
 """
 from __future__ import annotations
 
@@ -131,15 +134,31 @@ def market_from_gamma(row: dict) -> dict:
     slug = str(row.get("slug") or "")
     evs = row.get("events") or []
     events = [e.get("slug") for e in evs if isinstance(e, dict)] if isinstance(evs, list) else []
+    # `markets.event_id` is a foreign key into `events`, so the ingest needs the event's id and title, not just
+    # its slug; Gamma gives all three on the nested row and this is the only place that reads them.
+    event_refs = [{"id": str(e.get("id") or e.get("slug") or ""), "slug": str(e.get("slug") or ""),
+                   "title": str(e.get("title") or e.get("slug") or ""), "neg_risk": bool(e.get("negRisk"))}
+                  for e in evs if isinstance(e, dict)]
     try:
         price_micro = [stat_micro(p, field="outcomePrices[%d]" % i) for i, p in enumerate(prices)]
     except ShapeError:
         price_micro = []                     # a market mid-resolution can carry "null"; the book is the truth
     return {
-        "id": str(cond),
+        # `id` is Gamma's market id and `condition_id` is the venue's, in the same split as `markets`
+        # (0001): the API routes on the Gamma id, every CLOB/data-api call takes the condition id. The
+        # normaliser used to put the condition id in `id`, which would have created a second row per market
+        # and made every tape join wrong.
+        "id": str(row.get("id") or ""),
+        "condition_id": str(cond),
         "question": str(row.get("question") or "")[:300],
         "slug": slug,
         "event_slugs": events,
+        "event_refs": event_refs,
+        # There is no `negRiskGroupID` on a Gamma market row (checked against the recorded fixture: the only
+        # neg-risk fields are `negRisk`, `negRiskOther`, `groupItemTitle`). The EVENT is the group, so that is
+        # what the column holds; inventing a separate id here would put a value in the schema that no source
+        # can ever fill, and a permanently-NULL column gets "fixed" by someone who finds it later.
+        "neg_risk_group_id": (event_refs[0]["id"] if (row.get("negRisk") and event_refs) else None),
         "tokens": [str(t) for t in tokens],
         "outcomes": [str(o) for o in outcomes],
         "outcome_price_micro": price_micro,
@@ -200,12 +219,12 @@ def price_changes(msg: dict) -> list[dict]:
     for ch in msg.get("price_changes") or []:
         out.append({
             "token_id": str(ch["asset_id"]),
-            "price_micro": to_micro(ch["price"], field="price"),
-            "size_micro": to_micro(ch["size"], field="size"),
+            "price_micro": fill_micro(ch["price"], field="price"),
+            "size_micro": fill_micro(ch["size"], field="size"),
             "side": str(ch.get("side") or "").upper(),
             "hash": str(ch.get("hash") or ""),
-            "best_bid_micro": to_micro(ch["best_bid"], field="best_bid") if ch.get("best_bid") else None,
-            "best_ask_micro": to_micro(ch["best_ask"], field="best_ask") if ch.get("best_ask") else None,
+            "best_bid_micro": fill_micro(ch["best_bid"], field="best_bid") if ch.get("best_bid") else None,
+            "best_ask_micro": fill_micro(ch["best_ask"], field="best_ask") if ch.get("best_ask") else None,
             "ts_ms": ts_ms_from_ws(msg.get("timestamp")),
         })
     return out
@@ -218,8 +237,8 @@ def last_trade(msg: dict) -> dict:
     return {
         "token_id": str(msg["asset_id"]),
         "market": str(msg.get("market") or ""),
-        "price_micro": to_micro(msg["price"], field="price"),
-        "size_micro": to_micro(msg["size"], field="size"),
+        "price_micro": fill_micro(msg["price"], field="price"),
+        "size_micro": fill_micro(msg["size"], field="size"),
         "side": str(msg.get("side") or "").upper(),
         "ts_ms": ts_ms_from_ws(msg.get("timestamp")),
         "fee_rate_bps": int(Decimal(str(msg.get("fee_rate_bps") or 0))),
@@ -240,26 +259,77 @@ def fill_from_rest(row: dict) -> dict:
     # A fill's notional is a statistic that feeds labels and rollups, so it is rounded at the boundary and
     # stored in micro-units; the ORDER path in P04 keeps the strict rule because there a wrong product is a
     # rejected or double-spent order, not a chart.
-    notional = stat_micro(Decimal(str(price)) * Decimal(str(size)), field="usd_notional")
+    price_micro = fill_micro(price, field="price")
+    size_micro = fill_micro(size, field="size")
+    # Derived from the two stored integers rather than from the raw decimals, so `usd_notional_micro` can never
+    # contradict `price_micro * size_micro` in the same row: a rollup built on a number that disagrees with the
+    # row it came from is a bug nobody can localise. The floor is at most 1 micro ($0.000001).
     oi = row.get("outcomeIndex")
     return {
         "source": "rest",
         "tx_hash": str(row.get("transactionHash") or ""),
         "wallet": str(row.get("proxyWallet") or ""),
         "token_id": str(row.get("asset") or ""),
-        "market": str(row.get("conditionId") or ""),
+        "market": str(row.get("conditionId") or ""),        # condition id, as the venue calls it
         "side": str(row.get("side") or "").upper(),
         "outcome": str(row.get("outcome") or ""),
         "outcome_index": None if oi in (999, "999", None) else int(oi),
-        "price_micro": to_micro(price, field="price"),
-        "size_micro": to_micro(size, field="size"),
-        "usd_notional_micro": notional,
+        "price_micro": price_micro,
+        "size_micro": size_micro,
+        "usd_notional_micro": price_micro * size_micro // 10 ** 6,
         "ts_ms": ts * 1000,
         "slug": str(row.get("slug") or ""),
         "is_updown": any(m in str(row.get("slug") or "") for m in UPDOWN_SLUG_MARKERS),
         "title": str(row.get("title") or "")[:300],
         "trader": {k: str(row.get(k) or "") for k in ("name", "pseudonym")},  # embedded: no profile join
     }
+
+
+def fill_micro(value, *, field: str) -> int:
+    """Micro-units for a price or size on a fill that has already happened.
+
+    Measured, not theorised: `data-api/trades` returns some matched prices as IEEE floats its own pipeline
+    produced — `0.1699999983` for 0.17, in 49 of the 200 rows of the recorded fixture. `to_micro` rejects a
+    10-decimal value, which is the correct rule for an ORDER and a very expensive one here: the rejected rows
+    are real fills, and the tape is what volume rollups, whale percentiles and every large-fill alert are
+    computed from. Silently losing a quarter of the tape is worse than rounding a price to the grid the venue
+    itself trades on.
+
+    So: round to micro (which moves any value by at most 5e-7, i.e. half a micro-cent on a $1 share), and
+    refuse what is not a finite, non-negative, in-range number. Strictly more permissive
+    than `to_micro` on values that are already exact, so the two paths cannot disagree about the same fill —
+    which matters because live-frame suppression and the DB's UNIQUE(dedupe_key) both key on these integers.
+
+    `/book` levels deliberately keep the strict parser: a resting order at an off-grid price is a venue bug
+    worth seeing, not noise worth smoothing away.
+    """
+    if value is None or value == "":
+        raise ShapeError("%s: missing" % field)
+    try:
+        d = Decimal(str(value).strip())
+    except InvalidOperation:
+        raise ShapeError("%s: %r is not a number" % (field, value)) from None
+    if not d.is_finite():
+        raise ShapeError("%s: %r is not finite" % (field, value))
+    try:
+        n = int(d.scaleb(SCALE).quantize(Decimal(1), rounding=ROUND_HALF_EVEN))
+    except (ArithmeticError, ValueError) as e:   # InvalidOperation, Overflow and DivisionByZero are all ArithmeticError
+        # `"1e9999999"` parses as a Decimal and then explodes in the arithmetic, not the conversion. If this
+        # leaks, the caller's `except ShapeError` does not catch it and one field in one row stops the tape for
+        # every market: the parser is the boundary, so the boundary is total by construction rather than by
+        # whatever the callers happen to remember to catch.
+        raise ShapeError("%s: %r cannot be represented in micro-units (%s)" % (field, value, type(e).__name__)) \
+            from None
+    # No "how far did rounding move it" guard lives here, because the question has a fixed answer: snapping to a
+    # 1e-6 grid moves any value by at most 5e-7. An early draft of this function checked a tolerance and was
+    # therefore dead code. What is checked instead is what can actually be wrong: not-a-number, negative, absurd
+    # magnitude. The first draft of the phase's tape parser refused 49/200 real fills for precision, which is the
+    # failure this helper exists to stop, so the tolerance question gets a comment rather than a knob.
+    if n < 0:
+        raise ShapeError("%s: negative %r" % (field, value))
+    if n > USDC_MAX:
+        raise ShapeError("%s: %r out of range" % (field, value))
+    return n
 
 
 def history_points(payload: dict) -> list[tuple[int, int]]:

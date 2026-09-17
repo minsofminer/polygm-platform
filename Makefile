@@ -11,7 +11,7 @@ ENVFILE := $(ROOT)/.env
 .DEFAULT_GOAL := help
 .PHONY: help dev dev-core down logs test test-verbose lint typecheck migrate seed seed-sql gate \
         gate-mutate check sql-sqlite sql-sqlite-check openapi openapi-selftest clean doctor probe \
-        p01 p02 p03 envelope
+        p01 p02 p03 p04 p05 gate-p05 gate-p05-offline gate-p05-mutate chaos-p05 seed-rules envelope
 
 help:
 	@printf '%s\n' \
@@ -22,7 +22,11 @@ help:
 	 'make gate         P04 quality gate (tools/p04-gate-check.py)' \
 	 'make gate-mutate  proves the gate can fail, by breaking each rule on a copy' \
 	 'make check        test + lint + gate + gate-mutate: what CI runs, and the definition of done' \
-	 'make doctor       report which tools this machine actually has, and what that means for the above'
+	 'make doctor       report which tools this machine actually has, and what that means for the above' \
+	 'make p05          P05 gate, offline half (suite + recorded live evidence + invariants)' \
+	 'make gate-p05     the live 300s WebSocket outage, then the gate that reads its artifact' \
+	 'make chaos-p05    the outage alone, streamed to your terminal' \
+	 'make seed-rules   OWNER=demo python3 tools/p05-seed-rules.py — default alert rules'
 
 # ------------------------------------------------------------------ running
 # `.env` is a real prerequisite, not a nicety: compose reads it, and a fresh clone without one used to die
@@ -117,6 +121,36 @@ probe-fresh:
 	@$(PY) tools/datasource-probe.py --check-cache; rc=$$?; \
 	 if [ $$rc -eq 3 ]; then echo "[warn] venue unreachable — no claim made either way"; exit 0; fi; exit $$rc
 
+p04:
+	$(PY) tools/p04-gate-check.py
+
+# P05 · the offline half (suite + the recorded live evidence + the schema/tooling invariants).
+p05:
+	$(PY) tools/p05-gate-check.py --fast
+
+# The gate's headline claim is a live 5-minute WebSocket outage, so the target that satisfies the phase runs it
+# and records it. `tee` writes the artifact the offline check reads afterwards; the pipeline's exit status is
+# the harness's, not tee's, via PIPESTATUS — a `| tail` here would eat a failure, which is a lesson this repo
+# has already paid for once.
+gate-p05:
+	@mkdir -p docs/verification
+	@set -o pipefail; $(PY) tools/p05-chaos-test.py --subjects 8 --capacity 40000 2>&1 \
+	   | tee docs/verification/P05-chaos-output.txt; rc=$${PIPESTATUS[0]}; \
+	 if [ $$rc -ne 0 ]; then exit $$rc; fi; \
+	 $(PY) tools/p05-gate-check.py --live
+
+gate-p05-offline:   ## the gate without spending 6 minutes on the venue
+	$(PY) tools/p05-gate-check.py --fast
+
+gate-p05-mutate:    ## prove the P05 gate can fail
+	$(PY) tools/p05-mutation-test.py
+
+chaos-p05:          ## just the live outage, on a terminal where you can watch it
+	$(PY) tools/p05-chaos-test.py --subjects 8
+
+seed-rules:         ## write the default alert rules for one owner (P09 owns the UI for this table)
+	$(PY) tools/p05-seed-rules.py --owner $${OWNER:-demo}
+
 p01:
 	$(PY) tools/p01-gate-check.py
 p02:
@@ -125,7 +159,7 @@ p03:
 	$(PY) tools/p03-gate-check.py
 	$(PY) tools/p03-mutation-test.py
 
-check: test lint lint-canary openapi-selftest sql-sqlite-check gate gate-mutate p01 p02 p03 probe-fresh
+check: test lint lint-canary openapi-selftest sql-sqlite-check gate gate-mutate p01 p02 p03 p05 probe-fresh
 	@echo "ALL GREEN"
 
 # ------------------------------------------------------------------ diagnostics

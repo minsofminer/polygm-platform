@@ -30,6 +30,56 @@ def require(name):
     return json.loads(p.read_text())
 
 
+
+class TestTransportLifecycle(unittest.TestCase):
+    """A socket that disappears mid-read is the normal shutdown, not a crash."""
+
+    def test_a_close_during_poll_is_a_werror_not_an_attributeerror(self):
+        import wsclient as WC
+
+        class VanishingSock:
+            """The first `settimeout` call stands in for the other thread closing us underneath the loop."""
+
+            def __init__(self, owner):
+                self.owner = owner
+
+            def settimeout(self, _t):
+                self.owner.sock = None       # the close lands between settimeout and the read, as it does live
+
+            def recv(self, _n):
+                raise OSError(9, "Bad file descriptor")
+
+        c = WC.WsClient("wss://example.invalid", lambda m: None)
+        c.sock = VanishingSock(c)
+        c.last_msg_at = 0.0
+        c.ping_every = 0
+        with self.assertRaises(WC.WsError) as got:
+            c.poll(1.0)
+        self.assertIn("closed", str(got.exception).lower())
+        self.assertEqual(c.closed_reason, "closed locally",
+                         "the reason has to survive, or the outage page says nothing about why")
+
+    def test_ping_failure_is_a_werror(self):
+        import wsclient as WC
+
+        class Dead(Vanishing := object):
+            def __init__(self, *_a):
+                pass
+
+            def sendall(self, _b):
+                raise OSError("broken pipe")
+
+            def settimeout(self, _t):
+                pass
+
+        c = WC.WsClient("wss://example.invalid", lambda m: None)
+        c.sock = Dead()
+        c.last_msg_at = -1e9          # long enough ago that a ping is due
+        c.ping_every = 1
+        with self.assertRaises(WC.WsError):
+            c.poll(0.2)
+
+
 class TestNormaliseRealPayloads(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -43,7 +93,13 @@ class TestNormaliseRealPayloads(unittest.TestCase):
         row = [m for m in self.markets if m.get("clobTokenIds")][0]
         m = N.market_from_gamma(row)
         self.assertEqual(len(m["tokens"]), len(m["outcomes"]))
-        self.assertTrue(m["id"].startswith("0x"))
+        # Two ids, and which is which is a join, not a style choice: P04's `markets.id` is Gamma's numeric id
+        # (what `/v1/markets/{id}` routes on) while every venue call takes the 0x condition id. An earlier
+        # version of the normaliser put the condition id in `id`, which would have written a second market row
+        # per market and joined the tape to nothing.
+        self.assertTrue(m["condition_id"].startswith("0x"))
+        self.assertEqual(m["id"], str(row["id"]))
+        self.assertNotEqual(m["id"], m["condition_id"])
         self.assertIsInstance(m["accepting_orders"], bool)
         self.assertEqual(m["min_order_size"], str(row["orderMinSize"]))
         self.assertGreater(m["volume_24h_micro"], 0)
@@ -236,6 +292,16 @@ class TestTape(unittest.TestCase):
         tp = T.Tape()
         self.assertGreater(tp.lag_ms(10_000), 10 ** 12, "no data must never read as perfectly fresh")
 
+    def test_a_fill_stamped_ahead_of_our_clock_is_zero_lag_not_negative(self):
+        """Measured live on 2026-09-17: the venue's trade indexer stamps rows up to ~4.3 s ahead of our wall
+        clock (while its own HTTP `Date` agrees with us to within a second, so it is the indexer, not drift).
+        A negative `lag_ms` is what a UI would print as "-4 s behind", and a p99 of it is meaningless, so the
+        clamp is the product behaviour; the chaos tool keeps the signed value visible as a diagnostic."""
+        tp = T.Tape()
+        tp.add(self.row("0xfuture", ts=10_000_000))
+        self.assertEqual(tp.lag_ms(10_000_000 - 4_300), 0)
+        self.assertEqual(tp.lag_ms(10_000_000 + 5_000), 5_000, "the clamp is one-sided: real lag still shows")
+
     def test_fills_above_threshold_in_a_window(self):
         tp = T.Tape()
         tp.add(self.row("0xa", ts=1000, px=500_000, sz=40_000_000))     # $20,000
@@ -279,6 +345,16 @@ class TestFreshness(unittest.TestCase):
         self.assertEqual(f.sources["ws.book"].last_event_ms, before,
                          "a heartbeat proves the socket is alive; it does not prove the market is")
         self.assertEqual(f.sources["ws.book"].heartbeats, 1)
+
+    def test_event_lag_clamps_at_zero_for_a_venue_clock_ahead_of_ours(self):
+        """Same measurement as the tape test: a venue timestamp ahead of `now_ms` must read "fresh", never
+        "stale" and never a negative number. `frame_age_ms` deliberately does the opposite for a negative
+        value, because that one is OUR monotonic clock and can only go backwards through a bug or a reboot."""
+        s = FR.Source("ws.tape", "tape", 3000, transport_alive=True, last_event_ms=10_000_000)
+        self.assertEqual(s.event_lag_ms(9_995_700), 0)
+        s.last_frame_at = 1.0
+        self.assertEqual(s.state(9_995_700, now_mono=1.0), "ok",
+                         "a feed running a few seconds ahead of us is not an incident")
 
     def test_composite_is_the_worst_source_not_the_average(self):
         f = FR.Freshness()

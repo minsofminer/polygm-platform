@@ -32,6 +32,7 @@
     "kill_switch_state",
     "market_meta_versions",
     "market_rollups",
+    "market_stats",
     "markets",
     "order_intents",
     "orders",
@@ -39,6 +40,7 @@
     "position_snapshots",
     "referral_events",
     "referrals",
+    "signal_rules",
     "signal_state",
     "signals",
     "subscriptions",
@@ -115,6 +117,10 @@
       "check_clauses_reordered": []
     },
     "0006_ingest.sql": {
+      "dropped": [],
+      "check_clauses_reordered": []
+    },
+    "0007_ingest_market_stats.sql": {
       "dropped": [],
       "check_clauses_reordered": []
     }

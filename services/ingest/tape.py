@@ -12,6 +12,7 @@ which pipe said it.
 """
 from __future__ import annotations
 
+import hashlib
 import time
 from dataclasses import dataclass, field
 
@@ -19,6 +20,21 @@ from dataclasses import dataclass, field
 def fill_key(f: dict) -> tuple:
     return (f.get("tx_hash") or "", f.get("token_id") or "", f.get("side") or "",
             int(f.get("price_micro") or 0), int(f.get("size_micro") or 0))
+
+
+# \x1f (unit separator) because a wallet address and a tx hash can both contain anything hex, and joining on a
+# character that can appear in the data is how two different fills end up with one key.
+_KEY_SEP = "\x1f"
+
+
+def dedupe_key(f: dict) -> str:
+    """The TEXT identity stored in `tape_fills.dedupe_key`, and the ONLY place it is computed.
+
+    The in-memory tape dedupes on the tuple; the database needs a fixed-width indexed value, and UNIQUE
+    (dedupe_key) is what makes a replay of the last hour harmless after a restart. Both must agree by
+    construction, not by two people writing the same hash twice.
+    """
+    return hashlib.sha256(_KEY_SEP.join(str(x) for x in fill_key(f)).encode()).hexdigest()
 
 
 @dataclass
@@ -40,6 +56,11 @@ class Tape:
     live_capacity: int = 200
     live_seen: int = 0
     live_suppressed: int = 0
+    # Rows the venue sent that we could not read. Kept on the tape rather than in the caller because the status
+    # endpoint reports it and because a rising count with a `last_refusal` sample is how a field type change
+    # ("price": "abc") is told apart from a market that genuinely had nothing in it.
+    refusals: int = 0
+    last_refusal: str = ""
     _high_water: int = 0
 
     def add(self, fill: dict) -> bool:

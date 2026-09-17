@@ -345,8 +345,6 @@ def probe(r: Report, deep: bool = True) -> None:
 
 
 # The claims P05's ingest code is written against. Everything else in `measurements` moves with the market and
-# is reported informationally, because "fills/sec changed" is a Tuesday, not a broken spec.
-# The claims P05's ingest code is written against. Everything else in `measurements` moves with the market and
 # is reported informationally, because "fills/sec changed" is a Tuesday, not a broken spec. `redeem_*` is
 # deliberately absent: it is a SAMPLE OF ONE ROW, so its values change every run while the RULE behind it
 # ("price==0, payout in usdcSize") is asserted by the named check `redeem-payout-in-usdcsiz`, and the
@@ -366,8 +364,10 @@ def check_cache(path: str, payload: dict) -> int:
     """Compare a fresh probe against the recorded one and report drift in the structural claims.
 
     Exit codes are the contract, and they are why `make probe-fresh` does not wrap this in `|| echo`:
-    0 = the venue still behaves as recorded; 1 = it does not, so P01's spec is stale and must be re-opened
-    before P05's code is trusted; 3 = the venue could not be reached, which is not a finding about anything.
+    0 = every comparable claim matches; 1 = at least one structural claim CONTRADICTS the record, so P01's
+    spec is stale and must be re-opened before P05's code is trusted; 2 = INCOMPLETE, something could not be
+    compared (a check added after the recording, or a newly failing one whose cause is unclear) which is neither
+    a pass nor a venue finding; 3 = the venue was unreachable, which is not a finding about anything.
     """
     fresh = payload
     try:
@@ -378,9 +378,16 @@ def check_cache(path: str, payload: dict) -> int:
     except json.JSONDecodeError as e:
         print("cached probe at %s is not valid JSON: %s" % (path, e))
         return 1
-    drift, same, absent = [], [], []
+    drift, same, absent, skipped = [], [], [], []
     a, b = cached.get("measurements") or {}, fresh.get("measurements") or {}
+    # A measurement that the run mode cannot produce is not a venue change. Both sides are consulted because the
+    # recorded P01 probe predates this flag and was taken in deep mode.
+    shallow = [c for c, side in (("fresh", fresh), ("recorded", cached))
+               if side.get("deep") is False]
     for k in STABLE_MEASUREMENTS:
+        if k in DEEP_ONLY_MEASUREMENTS and shallow and (k not in a or k not in b):
+            skipped.append((k, "+".join(shallow)))
+            continue
         if k not in a or k not in b:
             absent.append(k)
             continue
@@ -396,8 +403,16 @@ def check_cache(path: str, payload: dict) -> int:
     for k, old, new in drift:
         print("  DRIFT  %-34s recorded %s -> now %s" % (k, json.dumps(old, default=str)[:48],
                                                         json.dumps(new, default=str)[:48]))
+    for k, side in skipped:
+        print("  not measured: %-24s (a %s run is --fast, which skips the cache block)" % (k, side))
     for k in absent:
-        print("  MISSING on one side: %s (the probe changed shape; that is a P01-code change, not a venue one)" % k)
+        # Saying it out loud matters: an exit code without a line like this is indistinguishable from a real
+        # finding, and silence is what let a 502 masquerade as "the venue moved".
+        which = "recorded P01 probe" if k not in a else "fresh run"
+        print("  not comparable: %-24s missing from the %s (the check postdates that capture: %s)"
+              % (k, which, "reported, not diffed" if k in b else "no value either side"))
+        if k in b:
+            print("      fresh value: %s" % json.dumps(b[k], default=str)[:80])
     old_fails, new_fails = set(cached.get("failures") or []), set(fresh.get("failures") or [])
     if new_fails - old_fails:
         print("  newly FAILING checks:")
@@ -417,12 +432,25 @@ def check_cache(path: str, payload: dict) -> int:
     if old_fails - new_fails:
         print("  no longer failing: %s" % ", ".join(sorted(old_fails - new_fails)))
     if drift or absent or (new_fails - old_fails):
-        print("\n  The venue changed under us. Re-open P01 and correct the spec BEFORE writing more ingest "
-              "code on top of it — do not edit this tool to make the diff go away.")
-        return 1
+        # Do not attach "the venue moved" to every red exit. That phrase sends a reader to the spec when the
+        # right move is a re-run, and it is how one 502 became a confident false finding in this phase.
+        if drift:
+            print("\n  The venue changed under us: at least one structural claim differs. Re-open P01 and "
+                  "correct the spec BEFORE writing more ingest code on top of it — do not edit this tool to "
+                  "make the diff go away.")
+        else:
+            print("\n  Nothing is disproven, but not everything was evaluable. A line labelled SHAPE reopens "
+                  "P01; a line labelled TRANSIENT? is this script's or the network's problem — run it again "
+                  "before reading anything into it, and leave the check red until it is green on its own.")
+        # 1 means the venue contradicts the spec. 2 means the comparison was incomplete — a partial pass is
+        # not a pass, and conflating the two is how "we'll fix it later" starts.
+        return 1 if drift else 2
     print("\n  %d structural claims unchanged; %d measurements moved (expected)"
           % (len(same), len(set(a) - set(STABLE_MEASUREMENTS))))
     return 0
+
+
+DEEP_ONLY_MEASUREMENTS = ("data_trades_nocache", "cache_bust_newer_of_3")
 
 
 def main() -> int:
@@ -435,9 +463,20 @@ def main() -> int:
     a = ap.parse_args()
 
     r = Report(started_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
-    probe(r, deep=not a.fast)
+    deep_run = not a.fast
+    if a.check_cache and not deep_run:
+        # A drift verdict has to include the cache measurement, and only the deep block makes it. Fast mode and
+        # a verdict together used to produce a red "MISSING cache_bust_newer_of_3" that meant nothing but the
+        # flag combination.
+        print("--check-cache needs the deep block for the cache measurement, so --fast is being ignored")
+        deep_run = True
+    probe(r, deep=deep_run)
     payload = {
         "started_at": r.started_at,
+        # `--fast` skips the deep block, and the deep block is the ONLY thing that measures the cache. Without
+        # this in the record, a fast check compares a half-run against a full one and calls the missing half
+        # "drift" — which is exactly the false alarm I got from it.
+        "deep": bool(deep_run),
         "findings": FINDINGS,
         "measurements": r.measurements,
         "checks": [asdict(c) for c in r.checks],

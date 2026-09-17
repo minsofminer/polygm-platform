@@ -165,6 +165,56 @@ paths:
         "422": {$ref: "#/components/responses/Validation"}
         "500": {$ref: "#/components/responses/Internal"}
 
+  /v1/markets/{market_id}/fills:
+    get:
+      tags: [market]
+      summary: The durable fill log the ingest writes (deduplicated, labelled, no addresses)
+      description: |
+        Separate from `/v1/tape` on purpose. `/v1/tape` answers from `tape_trades` (the P04 table the tape widget
+        and the risk gate were built against); this answers from `tape_fills`, the log P05's ingest writes with
+        `UNIQUE (dedupe_key)` — the rows the volume rollups, the whale percentile and the leaderboard are computed
+        from. Without this read the durable tape is a table nobody serves.
+
+        `since` is exclusive and is the VENUE's millisecond clock, exactly as in `/v1/tape`: mixing the venue's
+        clock with our ingest cursor produces either a duplicate or a hole, and a hole in a fill log reads to a
+        user as a suppressed trade.
+      operationId: getMarketFills
+      x-auth: none
+      x-rate-class: public-read
+      x-cache: shared, ttl 1000ms
+      parameters:
+        - name: market_id
+          in: path
+          required: true
+          schema: {type: string, minLength: 1, maxLength: 128}
+        - name: since
+          in: query
+          description: exclusive cursor = venue ts_ms
+          schema: {type: integer, minimum: 0}
+        - name: limit
+          in: query
+          schema: {type: integer, minimum: 1, maximum: 1000, default: 100}
+      responses:
+        "200":
+          description: fills, newest first
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Stamped"
+                  - type: object
+                    required: [market, conditionId, rows, nextCursor]
+                    properties:
+                      market: {type: string}
+                      conditionId: {type: string, description: "what the ingest keys every table on"}
+                      rows:
+                        type: array
+                        items: {$ref: "#/components/schemas/DurableFill"}
+                      nextCursor: {type: ["integer", "null"]}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "422": {$ref: "#/components/responses/Validation"}
+        "500": {$ref: "#/components/responses/Internal"}
+
   /v1/tape:
     get:
       tags: [market]
@@ -520,6 +570,32 @@ components:
         maker: {type: boolean}
         exchangeTs: {type: integer, description: "venue clock, ms"}
         ingestMs: {type: integer, description: "our clock, ms; freshness uses THIS, never exchangeTs"}
+
+    DurableFill:
+      type: object
+      description: >-
+        one row of `tape_fills`. `price`/`shares`/`notional` are decimal strings off integers, so the response
+        cannot smuggle a float into a client that renders it as a money figure.
+      required: [price, shares, notional, side, venueTs, ingestMs, source, anonWallet]
+      properties:
+        price: {$ref: "#/components/schemas/Price"}
+        shares: {type: string, pattern: '^[0-9]+(\.[0-9]{1,6})?$'}
+        notional: {type: string, pattern: '^[0-9]+(\.[0-9]{1,6})?$'}
+        side: {type: string, enum: [BUY, SELL]}
+        outcome: {type: string, description: "the venue's own label; '' when the row has none, never a guess"}
+        venueTs: {type: integer, description: "ms, the venue's clock — the only clock a cursor may use"}
+        ingestMs: {type: integer, description: "ms, our clock — the only clock freshness may use"}
+        source: {type: string, enum: [rest, ws]}
+        anonWallet:
+          type: string
+          description: >-
+            sha256 of the counterparty address with a local prefix, 10 hex chars. The address itself is never
+            returned: a public tape that echoes every trader's wallet is an address book of our users'
+            counterparties, and `raw_json` is withheld for the same reason.
+        labels:
+          type: array
+          items: {type: string, enum: [whale, smart_money, new_wallet, insider_suspect, cluster, wash_like]}
+          description: published labels only; `insider_suspect` is never publishable, so it cannot appear here
 
     Market:
       type: object

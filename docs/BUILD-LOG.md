@@ -217,3 +217,49 @@ The mutation harness is the part of this phase I would defend hardest: it found 
 asserted in prose (`tick-raw-string`, `price-is-a-number`, `no-append-only-trigger`), and each one became a
 test or an audit check rather than a paragraph. Two of the three were genuine coverage gaps in code I had
 already called finished.
+
+## P05 — data ingestion, signals, alerts · 2026-09-18 (outage evidence recorded 2026-09-17T22:49Z)
+
+**Built.** `services/ingest/`: `net.py` (named token buckets, one per source; a request for an unregistered
+source is refused rather than unbounded), `wsclient.py` (stdlib socket: TLS, frames, fragmentation, ping/pong),
+`books.py` (snapshot + delta, one-sided books have no mid, gap detection from `price_change`'s declared
+best bid/ask, 200-subscription sharding, 2,000 books ≈ 16.5 MB), `tape.py`, `freshness.py`
+(`down > silent > stale > lagging > ok`, heartbeats never advance the event clock, only `down`/`silent` page),
+`universe.py` (keyset backfill with a resumable cursor, discovery with an overlap counter, metadata versioning,
+prune/wake with 10× hysteresis), `normalise.py` (per-source units: seconds on `/trades`, milliseconds on the
+socket, `outcomeIndex: 999` is "not applicable" and never an index), `main.py` (the loop — the first process this
+phase ever drove end to end). `packages/polygm_core/signals/`: `engine.py` (8 kinds, user-composable validated
+rules, cooldown + dedupe + suppression counts), `fanout.py` (delivery plan: age before priority, per-user
+fairness cap, visibility timeout that costs an attempt, dead-letter, deterministic jitter);
+`classify/labels.py` (6 labels, each with a named false-positive control). `db/migrations/0006_ingest.sql` +
+`0007_ingest_market_stats.sql`, the regenerated portable subset, and `db/clickhouse/tape.sql` — the alternative
+that was measured, priced and **not** adopted. `tools/`: `p05-chaos-test.py`, `p05-capture-fixtures.py` (with
+`--check` drift mode), `p05-seed-rules.py`, `p05-gate-check.py` (14 executed checks), `p05-mutation-test.py`.
+
+**Verified.** 293 tests OK offline (47 ingest-module, 45 `main.py` against recorded payloads and a fake
+transport, 22 signals, 16 fanout, plus P01–P04 suites still green). `p05-gate-check.py --fast` 14/14,
+`tools/lint-rules.py` clean, `check-openapi` 88/0 after the new read was documented,
+`build-sqlite-migrations.py --check` in sync. The gate's headline is live and was executed: 8 subjects, **300 s**
+socket outage, `ALL 7 CHECKS PASSED` (`docs/verification/P05-chaos-output.txt`) — stale indicator flipped in
+1.6 s and held 261/262 samples; **17 alerts, zero duplicates**, with the two clocks genuinely colliding (12 live
+WS fills against 8,129 durable merges); 2 of 2 venue fills ≥ $1,000 in the window; book matched the venue within
+one tick after reconnect; tape +4,348 rows from REST while the socket was dead. `make check` now includes `p05`;
+`make gate-p05` re-runs the outage and then the gate that reads its artifact.
+
+**Corrections this phase forced** (all recorded in the spec repo's §15, nothing deleted there): the P01
+cache-busting conclusion is void — `/trades` staleness is origin-side, and the bounded `start`/`end` range is the
+only fresh path (0–1 s measured against 236–277 s); `markets` has no `closed` column, resolution is
+`tokens.is_winner IS NOT NULL`; `data-api` returns some fill prices as IEEE float noise (`0.1699999983` for 0.17
+in **49 of 200** recorded rows) which the strict parser refused — a quarter of the tape was silently missing, and
+volume/whale/alert numbers are computed from what we keep; `POST /books` is 400 for every payload shape tried; a
+WS trade frame carries no transaction hash, so REST is the record and the socket is the latency layer;
+`feeType` is an open taxonomy, so unknown means *charged and flagged*; and `build-sqlite-migrations.py` dropped
+every `ALTER … ADD COLUMN`, which is how dev/CI would have run a schema missing columns production has — it
+refuses now, and the mutation harness proves the refusal is load-bearing.
+
+**[UNVERIFIED] / owed by later phases.** No provider transport: `alert_deliveries` rows are scheduled by
+`fanout.plan()` and nothing hands them to APNs/Telegram/Firebase (P10). `gap detections = 0` in the live run —
+the `price_change` top-of-book detector has fired in a synthetic test and not yet on real traffic, so "we detect
+lost deltas" is asserted by construction and not yet by observation. `market_stats` activity numbers are stored
+and used for policy but not reconciled against the venue's own displayed figures. Nothing was pushed to
+`polygm-platform` (it has no remote); the spec repo push carries §15.

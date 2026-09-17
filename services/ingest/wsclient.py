@@ -169,16 +169,39 @@ class WsClient:
             left = deadline - time.monotonic()
             if left <= 0:
                 break
+            # Re-read the socket every iteration, and treat a vanished one as a close. `close()` sets
+            # `self.sock = None` from another thread — the shutdown path, and the chaos harness's kill — and the
+            # entry guard above cannot see it: the loop was already inside. Reading the attribute once per
+            # iteration turns `AttributeError: 'NoneType' object has no attribute 'settimeout'` (which escapes as
+            # a thread crash, taking the ingest down over a routine disconnect) into the WsError that every
+            # caller already handles as "transport gone, resync and reconnect".
+            sock = self.sock
+            if sock is None:
+                self.closed_reason = self.closed_reason or "closed locally"
+                raise WsError(self.closed_reason)
             if self.ping_every and self.last_msg_at and time.monotonic() - self.last_msg_at > self.ping_every:
-                self.sock.sendall(_mask(OP_PING, b"hb"))
+                try:
+                    sock.sendall(_mask(OP_PING, b"hb"))
+                except OSError:
+                    raise WsError("ping failed: transport gone") from None
                 self.pings += 1
             try:
-                self.sock.settimeout(min(left, 0.5))
-                fin, op, payload = _read_frame(self.sock, deadline)
+                sock.settimeout(min(left, 0.5))
+                fin, op, payload = _read_frame(sock, deadline)
             except TimeoutError:
                 continue
             except (ssl.SSLWantReadError, socket.timeout):
                 continue
+            except OSError as e:
+                # A socket closed from the other thread reads as EBADF here, not as a clean FIN. If the handle
+                # is gone we call that a local close and report it as a WsError with a reason, because the
+                # alternative is an OSError with no context reaching the reconnect loop and an outage page that
+                # says "transport error" about a shutdown we asked for.
+                if self.sock is None:
+                    self.closed_reason = self.closed_reason or "closed locally"
+                    raise WsError(self.closed_reason) from None
+                self.closed_reason = str(e)[:160]
+                raise
             except WsError as e:
                 self.closed_reason = str(e)[:160]
                 raise

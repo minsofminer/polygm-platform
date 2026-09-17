@@ -47,6 +47,7 @@ TABLE_FOR_PATH = {
     "/v1/markets": "LIST_RESPONSES",
     "/v1/markets/{market_id}": "MARKET_RESPONSES",
     "/v1/markets/{market_id}/book": "BOOK_RESPONSES",
+    "/v1/markets/{market_id}/fills": "FILLS_RESPONSES",
     "/v1/tape": "TAPE_RESPONSES",
     "/v1/orders": "ORDER_RESPONSES",
     "/v1/orders/intents/{intent_id}": "INTENT_RESPONSES",

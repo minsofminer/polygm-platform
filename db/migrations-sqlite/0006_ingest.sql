@@ -22,7 +22,7 @@ CREATE INDEX IF NOT EXISTS market_meta_versions_market_time_idx ON market_meta_v
 CREATE TABLE IF NOT EXISTS tape_fills (
     trade_id           INTEGER,
     dedupe_key         TEXT NOT NULL,
-    market_id          TEXT NOT NULL,
+    condition_id       TEXT NOT NULL,
     token_id           TEXT NOT NULL,
     outcome            TEXT,
     outcome_index      INTEGER,
@@ -38,12 +38,12 @@ CREATE TABLE IF NOT EXISTS tape_fills (
     PRIMARY KEY (trade_id),
  UNIQUE (dedupe_key)
 );
-CREATE INDEX IF NOT EXISTS tape_fills_market_time_idx ON tape_fills (market_id, ts_ms);
+CREATE INDEX IF NOT EXISTS tape_fills_condition_time_idx ON tape_fills (condition_id, ts_ms);
 CREATE INDEX IF NOT EXISTS tape_fills_wallet_time_idx ON tape_fills (wallet, ts_ms);
 CREATE INDEX IF NOT EXISTS tape_fills_big_idx ON tape_fills (usd_notional_micro, ts_ms)
     WHERE usd_notional_micro >= 10000000000;
 CREATE TABLE IF NOT EXISTS market_rollups (
-    market_id        TEXT NOT NULL,
+    condition_id       TEXT NOT NULL,
     bucket_ms        INTEGER NOT NULL,
     interval         TEXT NOT NULL CHECK (interval IN ('1m','5m','1h','1d')),
     fills            INTEGER NOT NULL DEFAULT 0 CHECK (fills >= 0),
@@ -51,7 +51,7 @@ CREATE TABLE IF NOT EXISTS market_rollups (
     vwap_micro       INTEGER NOT NULL DEFAULT 0,
     max_fill_micro   INTEGER NOT NULL DEFAULT 0,
     median_fill_micro INTEGER NOT NULL DEFAULT 0,
-    PRIMARY KEY (market_id, interval, bucket_ms)
+    PRIMARY KEY (condition_id, interval, bucket_ms)
 );
 CREATE TABLE IF NOT EXISTS wallet_rollups (
     wallet           TEXT NOT NULL,
@@ -85,7 +85,7 @@ CREATE TABLE IF NOT EXISTS signals (
     id               INTEGER PRIMARY KEY,
     rule_id          TEXT NOT NULL,
     kind             TEXT NOT NULL,
-    market_id        TEXT NOT NULL,
+    condition_id     TEXT NOT NULL,
     token_id         TEXT NOT NULL DEFAULT '',
     severity         TEXT NOT NULL CHECK (severity IN ('info','notice','urgent')),
     title            TEXT NOT NULL,
@@ -117,7 +117,8 @@ CREATE INDEX IF NOT EXISTS alert_deliveries_pending_idx ON alert_deliveries (pri
     WHERE status = 'queued';
 CREATE INDEX IF NOT EXISTS alert_deliveries_latency_idx ON alert_deliveries (sent_ms - queued_ms, queued_ms)
     WHERE status = 'sent';
-CREATE TABLE IF NOT EXISTS alert_rules (
+CREATE UNIQUE INDEX IF NOT EXISTS markets_condition_uq ON markets (condition_id);
+CREATE TABLE IF NOT EXISTS signal_rules (
     id               TEXT PRIMARY KEY,
     owner            TEXT NOT NULL,
     kind             TEXT NOT NULL,

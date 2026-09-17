@@ -184,7 +184,8 @@ class Classifier:
                 continue
             out.append(Label("cluster", min(0.8, 0.4 + 0.05 * len(wallets)),
                              (("token_id", token), ("side", side), ("window_start_s", win * self.cluster_window_s),
-                              ("members", len(wallets))), False, "every window, on the tape stream"))
+                              ("members", len(wallets)), ("wallets", sorted(str(w) for w in wallets)[:50])),
+                             False, "every window, on the tape stream"))
         return out
 
     # ------------------------------------------------------------------ wash / copy-farm

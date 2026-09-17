@@ -192,6 +192,14 @@ def transpile(text: str, dropped: list[str]) -> str:
         up = st.upper()
 
         if up.startswith(PG_ONLY_STATEMENTS):
+            # A column added by ALTER is not in the same class as a trigger or a deferrable constraint: dropping
+            # it leaves dev/CI running a schema that is MISSING a column production has, and the code that reads
+            # it fails in whichever test gets there first. "Portable subset" must never mean "silently smaller".
+            if "ADD COLUMN" in up:
+                raise SystemExit("0007 lesson: `ALTER TABLE ... ADD COLUMN` cannot go to the sqlite subset —\n"
+                                 "  sqlite drops it and the two engines then disagree about the schema. Put the\n"
+                                 "  columns in a table of this phase's own (see 0007_ingest_market_stats.sql) or\n"
+                                 "  add them to the base migration if no database has ever been deployed with it.")
             dropped.append("PG-only statement: " + st[:78])
             in_dollar = "$$" in st
             skip_until_semi = (";" not in st) and not in_dollar

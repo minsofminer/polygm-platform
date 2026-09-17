@@ -1,29 +1,17 @@
-subject: LoL: Top Esports vs Invictus Gaming - Game 2 Winner
-         0xe8631fe27f1f527c (2 tokens, $2140856 24h)
+subject: Lions vs. Bills
+         3398287 (2 tokens, $6953461 24h) — 8 markets, 16 tokens subscribed
 warming up for 45s (WS + REST both live)...
-KILLING THE WEBSOCKET at 1789647305 (for 300s). tape=64 rows, ws_msgs=5
+KILLING THE WEBSOCKET at 1789685037 (for 300s). tape=523 rows, ws_msgs=166
 outage over (300s). reconnecting...
 
-chaos test — 2026-09-17T12:20:51Z
-  [PASS] A. stale indicator held for the whole outage (300 samples)
-  [PASS] B. no duplicate alerts (0 alerts, 0 rules fired)
-  [PASS] B2. the two clocks actually collided (live fills seen=1, already-booked=0, durable merges=10903)
-  [FAIL] C. no missed large fills (>= $1000: 0 of 0 venue rows in the window)   -> the venue reported no >= $1000 fills in the window: raise --kill-seconds rather than trusting this line
+chaos test — 2026-09-17T22:49:51Z
+  reference tape lag: worst -0.0 s behind wall clock
+  [PASS] A. the stale indicator flipped within 12s of the kill and held for 261/262 samples
+  [PASS] B. no duplicate alerts (17 alerts, 17 rules fired)
+  [PASS] B2. the two clocks actually collided (live fills seen=12, already-booked=0, durable merges=8129, alerts fired=17)
+  [PASS] C. no missed large fills (>= $1000: 2 of 2 venue rows in the window)
   [PASS] D. book resynced to the venue within one tick after reconnect
-  [PASS] D2. the resync machinery engaged (resyncs=94, gap detections=0)
-  [PASS] E. the tape kept filling from REST while the socket was dead (+71 rows)
+  [PASS] D2. the resync machinery engaged (resyncs=603, gap detections=0)
+  [PASS] E. the tape kept filling from REST while the socket was dead (+4348 rows)
 
-1 CHECK(S) FAILED
-
-chaos exit=1
-
-## Post-run note on check C (written immediately after the run, not edited later)
-
-C is INCONCLUSIVE, not passed. The verifier reached 0 venue fills >= $1,000 inside the 300 s outage window and
-the check is written to fail on "0 of 0" rather than pass on it, so the run is red by design until the
-reference query can actually see the window: /trades offset paging reaches only the most recent ~50-100 s, so
-the first two thirds of the outage were never compared against anything. The pipeline side is independently
-evidenced by E (+127 rows during/after the outage) and by 10,412 dedupe merges, which show the REST catch-up and
-the UNIQUE key doing their jobs. Next action: page /trades by time window (or read `fills` from a market we
-also poll via WS) inside venue_fills_in_window, then re-run. Until then no claim is made that "no missed large
-fills" was demonstrated.
+ALL 7 CHECKS PASSED (outage 300s, 375 WS msgs, 130 REST polls)
