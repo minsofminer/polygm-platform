@@ -1,5 +1,5 @@
 {
-  "started_at": "2026-09-16T16:39:38Z",
+  "started_at": "2026-09-17T01:20:34Z",
   "findings": {
     "E1": "Gamma caps page size at 100 rows regardless of limit=",
     "E2": "data-api /trades is served from Cloudflare cache (cf-cache-status: HIT) => not a feed",
@@ -9,36 +9,36 @@
   },
   "measurements": {
     "gamma_row_cap": 100,
-    "top100_events_24h_usd": 53067011.56,
-    "top10_share_pct": 69.3,
+    "top100_events_24h_usd": 27084950.06,
+    "top10_share_pct": 38.3,
     "events_over_1m_24h": 4,
     "updown_in_top100_events": 0,
     "data_trades_cf_cache_status": "HIT",
-    "data_trades_newest_ts": 1789576452,
-    "fills_per_sec_measured": 18.52,
-    "median_fill_usd": 5.0,
-    "p90_fill_usd": 58.0,
-    "max_fill_usd": 30260.0,
-    "pct_fills_ge_1000": 0.8,
+    "data_trades_newest_ts": 1789607670,
+    "fills_per_sec_measured": 16.67,
+    "median_fill_usd": 4.9,
+    "p90_fill_usd": 42.09,
+    "max_fill_usd": 1164.58,
+    "pct_fills_ge_1000": 0.2,
     "cache_buster_works": true,
     "redeem_row_payout_fields": {
       "price": 0,
-      "usdcSize": 419.963213,
-      "size": 419.963213
+      "usdcSize": 10,
+      "size": 10
     },
     "updown_in_top100_markets": 0,
-    "top100_markets_24h_usd": 45063591.76,
+    "top100_markets_24h_usd": 18723009.22,
     "updown_share_of_top100_markets_pct": 0.0,
     "paged_event_rows": 300,
-    "paged_events_24h_usd": 59019167.29,
+    "paged_events_24h_usd": 32785449.57,
     "updown_in_paged_events": 0,
     "fee_type_observable_per_market": [
       "crypto_fees_v2",
       "culture_fees",
       "economics_fees",
-      "finance_prices_fees",
       "politics_fees",
-      "sports_fees_v2"
+      "sports_fees_v2",
+      "sports_fees_v3"
     ],
     "ws_dns": "104.18.34.205"
   },
@@ -58,7 +58,7 @@
     {
       "id": "gamma-tokenids-parseable",
       "finding": "E5",
-      "url": "https://gamma-api.polymarket.com/events?slug=fed-decision-in-september-762",
+      "url": "https://gamma-api.polymarket.com/events?slug=fed-decision-in-october-20260617190323537",
       "expect": "clobTokenIds is a JSON string that parses to a list",
       "ok": true,
       "observed": {
@@ -111,7 +111,7 @@
     {
       "id": "clob-market-order-gate-fields",
       "finding": "E2",
-      "url": "https://clob.polymarket.com/markets/0x5e464d85eb49f22d876f3ed6168a7db5e2288e9ae1eb91effd2758e994676f86",
+      "url": "https://clob.polymarket.com/markets/0xa69ef420d8b4075ad8ba8611d02c63cb2ece46f5c8c643af223c272689b0c96f",
       "expect": "all five pre-order fields present",
       "ok": true,
       "observed": {
@@ -141,7 +141,7 @@
       "expect": "200 + price",
       "ok": true,
       "observed": {
-        "price": "0.001",
+        "price": "0.004",
         "side": "BUY"
       },
       "note": ""
@@ -163,8 +163,8 @@
       "ok": true,
       "observed": {
         "cache_status": "HIT",
-        "newest_t0": 1789576452,
-        "newest_t8": 1789576452,
+        "newest_t0": 1789607670,
+        "newest_t8": 1789607670,
         "identical": true
       },
       "note": "If this flips to MISS/STATIC, re-measure before changing the tape design."
@@ -207,33 +207,33 @@
       "observed": {
         "status": 200,
         "sample": {
-          "proxyWallet": "0xffcf591e09d9fffcab04f1082ceb83fab6920fed",
-          "asset": "67858907214312671358677929716662443050645208262857719437608542365091707783980",
-          "conditionId": "0x7bd40478f4f85acee24b011a7f9b17cd8e9cf87619972dfafef9d619f04f3add",
-          "size": 1321.7828,
-          "avgPrice": 0.6212,
-          "initialValue": 821.1373,
-          "grossInitialValue": 823.557941,
-          "entryFeesUsdc": 2.4206,
+          "proxyWallet": "0x11a5aaec1210d033bf203c1725b13e979bcc5868",
+          "asset": "49627733383278297308681428514297606410642858221896318026269372709891853106114",
+          "conditionId": "0x020826d0ceb865d8e5789887792322607ab52418ebbdbd05ca29cb28a53525e7",
+          "size": 424.9467,
+          "avgPrice": 0.2427,
+          "initialValue": 103.1384,
+          "grossInitialValue": 107.144808,
+          "entryFeesUsdc": 4.00638,
           "currentValue": 0,
-          "cashPnl": -821.1373,
+          "cashPnl": -103.1384,
           "percentPnl": -99.9999,
-          "totalBought": 1321.7828,
-          "realizedPnl": -2.4206,
+          "totalBought": 424.9467,
+          "realizedPnl": -4.0064,
           "percentRealizedPnl": -100,
           "curPrice": 0,
           "redeemable": true,
           "mergeable": false,
-          "title": "Bitcoin Up or Down - July 21, 11:15AM-11:20AM ET",
-          "slug": "btc-updown-5m-1784646900",
-          "icon": "https://polymarket-upload.s3.us-east-2.amazonaws.com/BTC+fullsize.png",
-          "eventId": "725694",
-          "eventSlug": "btc-updown-5m-1784646900",
-          "outcome": "Down",
-          "outcomeIndex": 1,
-          "oppositeOutcome": "Up",
-          "oppositeAsset": "97496542129845755474915452152380205394922566198790691192084719599931924094410",
-          "endDate": "2026-07-21",
+          "title": "Dogecoin Up or Down - August 13, 1:00AM-1:05AM ET",
+          "slug": "doge-updown-5m-1786597200",
+          "icon": "https://polymarket-upload.s3.us-east-2.amazonaws.com/dogecoin-9ae840dfa3.png",
+          "eventId": "837189",
+          "eventSlug": "doge-updown-5m-1786597200",
+          "outcome": "Up",
+          "outcomeIndex": 0,
+          "oppositeOutcome": "Down",
+          "oppositeAsset": "12314882242328777990746984427941629985864704466188555492774833881038268527996",
+          "endDate": "2026-08-13",
           "negativeRisk": false
         }
       },
@@ -248,24 +248,24 @@
       "observed": {
         "status": 200,
         "sample": {
-          "proxyWallet": "0xffcf591e09d9fffcab04f1082ceb83fab6920fed",
-          "timestamp": 1789576761,
-          "conditionId": "0xaa86994c14f77a9394cd61faa1a268fb2f4b4e18ed93371a9343d84799a71dcf",
+          "proxyWallet": "0x11a5aaec1210d033bf203c1725b13e979bcc5868",
+          "timestamp": 1789607905,
+          "conditionId": "0x0a00be579f21546865f947854875e8826ac27560a90679696703d351d28119c0",
           "type": "TRADE",
-          "size": 7,
-          "usdcSize": 6.16,
-          "transactionHash": "0xf658b6aea3363064520a43c61454db3a9d42db885904ddd55ce2915210283da7",
-          "price": 0.88,
-          "asset": "90207473279132070650913463466369973292738027334921043704516504139919549258433",
+          "size": 5,
+          "usdcSize": 3.13326,
+          "transactionHash": "0x5576555cd12f68d03b50dec547d64e0189a61b5aed41eaab7a27abc07b6ecf15",
+          "price": 0.61,
+          "asset": "26265500502445172014814254354040974051898501247990458890661801530747062943044",
           "side": "BUY",
-          "outcomeIndex": 1,
-          "title": "Ethereum Up or Down - September 16, 12:35PM-12:40PM ET",
-          "slug": "eth-updown-5m-1789576500",
-          "icon": "https://polymarket-upload.s3.us-east-2.amazonaws.com/ETH+fullsize.jpg",
-          "eventSlug": "eth-updown-5m-1789576500",
-          "outcome": "Down",
-          "name": "gsdgsf3",
-          "pseudonym": "Thankful-Wingtip",
+          "outcomeIndex": 0,
+          "title": "Solana Up or Down - September 16, 9:15PM-9:20PM ET",
+          "slug": "sol-updown-5m-1789607700",
+          "icon": "https://polymarket-upload.s3.us-east-2.amazonaws.com/SOL+fullsize.png",
+          "eventSlug": "sol-updown-5m-1789607700",
+          "outcome": "Up",
+          "name": "0x11a5aAEc1210D033bf203c1725B13E979bcc5868-1781593740941",
+          "pseudonym": "Webbed-Assassination-Cornet",
           "bio": "",
           "profileImage": "",
           "profileImageOptimized": ""
@@ -282,8 +282,8 @@
       "observed": {
         "status": 200,
         "sample": {
-          "user": "0xffcf591e09d9fffcab04f1082ceb83fab6920fed",
-          "value": 3227.6479
+          "user": "0x11a5aaec1210d033bf203c1725b13e979bcc5868",
+          "value": 47.0913
         }
       },
       "note": ""
@@ -297,8 +297,8 @@
       "observed": {
         "status": 200,
         "sample": {
-          "user": "0xffcf591e09d9fffcab04f1082ceb83fab6920fed",
-          "traded": 48365
+          "user": "0x11a5aaec1210d033bf203c1725b13e979bcc5868",
+          "traded": 80583
         }
       },
       "note": ""
@@ -331,8 +331,10 @@
       "expect": "200 + a type enum including REDEEM",
       "ok": true,
       "observed": {
-        "TRADE": 260,
-        "REDEEM": 40
+        "TRADE": 255,
+        "REDEEM": 43,
+        "MAKER_REBATE": 1,
+        "TAKER_REBATE": 1
       },
       "note": ""
     },
@@ -340,12 +342,13 @@
       "id": "redeem-payout-in-usdcsiz",
       "finding": "E5",
       "url": "https://data-api.polymarket.com/activity?user=",
-      "expect": "REDEEM rows: price==0 on all, payout in usdcSize (never compute REDEEM from price*size)",
+      "expect": "REDEEM rows (261 across 10 wallets): price==0 on all, payout in usdcSize",
       "ok": true,
       "observed": {
-        "redeem_rows": 32,
+        "wallets_sampled": 10,
+        "redeem_rows": 261,
         "price_nonzero": 0,
-        "usdcsiz_positive": 18
+        "usdcsiz_positive": 219
       },
       "note": ""
     },
@@ -359,7 +362,7 @@
         "status": 200,
         "top": {
           "name": "swisstony",
-          "amount": 1854632178.9554565
+          "amount": 1854632178.9554574
         }
       },
       "note": ""
@@ -374,7 +377,7 @@
         "status": 200,
         "top": {
           "name": "swisstony",
-          "amount": 23630828.288838807
+          "amount": 23630662.851954445
         }
       },
       "note": ""
@@ -409,7 +412,7 @@
       "observed": {
         "updown_count": 0,
         "updown_usd": 0,
-        "top100_usd": 45063591.76,
+        "top100_usd": 18723009.22,
         "share_pct": 0.0
       },
       "note": ""
@@ -423,7 +426,7 @@
       "observed": {
         "rows": 300,
         "updown_events": 0,
-        "total_usd": 59019167.29
+        "total_usd": 32785449.57
       },
       "note": "Cross-check: kit says $59.1M/24h for top-500 events; a 300-row page should approach it."
     },
@@ -437,9 +440,9 @@
         "crypto_fees_v2",
         "culture_fees",
         "economics_fees",
-        "finance_prices_fees",
         "politics_fees",
-        "sports_fees_v2"
+        "sports_fees_v2",
+        "sports_fees_v3"
       ],
       "note": ""
     }

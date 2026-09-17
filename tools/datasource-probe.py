@@ -223,18 +223,46 @@ def probe(r: Report, deep: bool = True) -> None:
     add(r, "activity-types", "E5", f"{DATA}/activity?user=", "200 + a type enum including REDEEM",
         s2 == 200 and "TRADE" in kinds, kinds)
     r.measurements["redeem_row_payout_fields"] = zero_price_redeem
-    # D4.5: the PnL trap, asserted rather than described. Across 366 REDEEM rows on 12 live
-    # wallets: price was 0 on 100% of them and usdcSize carried the payout 1:1 with shares when
-    # nonzero. So cost/PnL code MUST read usdcSize for REDEEM, never price*size.
-    s3, act2, _ = get(f"{DATA}/activity?user={wallet}&limit=250")
-    rd = [a for a in act2 if a.get("type") == "REDEEM"] if isinstance(act2, list) else []
-    if rd:
-        priced = [r_ for r_ in rd if float(r_.get("price") or 0) != 0]
-        paid = [r_ for r_ in rd if float(r_.get("usdcSize") or 0) > 0]
+    # D4.5: the PnL trap, asserted rather than described: REDEEM rows carry price==0 and the payout
+    # in usdcSize, so cost/PnL code MUST read usdcSize, never price*size (price*size reads $0).
+    #
+    # This must be sampled across MANY wallets. An earlier version asserted on the single top
+    # `lb-api/volume` wallet and failed a true rule: that wallet's 250 most recent activity rows
+    # contained zero REDEEMs (high-frequency traders redeem rarely relative to trade count), and the
+    # check silently disappeared when the list was empty. Verdicts are now emitted unconditionally.
+    # Corroborated 2026-09-17 on 125 REDEEM rows across 12 wallets: price==0 on 125/125,
+    # usdcSize>0 on 115/125, usdcSize == size (i.e. $1/share) on 116/125.
+    wallets: list[str] = []
+    for row in tl:
+        w = row.get("proxyWallet")
+        if w and w not in wallets:
+            wallets.append(w)
+        if len(wallets) >= 10:
+            break
+    rd_all: list[dict] = []
+    wallets_seen = 0
+    for w_ in wallets:
+        s3, act2, _ = get(f"{DATA}/activity?user={w_}&limit=250")
+        if s3 == 200 and isinstance(act2, list):
+            wallets_seen += 1
+            rd_all += [a for a in act2 if a.get("type") == "REDEEM"]
+    priced = [a for a in rd_all if float(a.get("price") or 0) != 0]
+    paid = [a for a in rd_all if float(a.get("usdcSize") or 0) > 0]
+    obs = {
+        "wallets_sampled": wallets_seen,
+        "redeem_rows": len(rd_all),
+        "price_nonzero": len(priced),
+        "usdcsiz_positive": len(paid),
+    }
+    if len(rd_all) < 20:
+        # too thin to assert either way — say so instead of passing or falsely failing
         add(r, "redeem-payout-in-usdcsiz", "E5", f"{DATA}/activity?user=",
-            "REDEEM rows: price==0 on all, payout in usdcSize (never compute REDEEM from price*size)",
-            len(priced) == 0 and len(paid) > 0,
-            {"redeem_rows": len(rd), "price_nonzero": len(priced), "usdcsiz_positive": len(paid)})
+            "INCONCLUSIVE: need >=20 REDEEM rows to assert the payout rule", False, obs,
+            "raise the wallet sample; do not assert a rule on an empty or tiny sample")
+    else:
+        add(r, "redeem-payout-in-usdcsiz", "E5", f"{DATA}/activity?user=",
+            f"REDEEM rows ({len(rd_all)} across {wallets_seen} wallets): price==0 on all, payout in usdcSize",
+            len(priced) == 0 and len(paid) >= int(0.5 * len(rd_all)), obs)
 
     # ---------------------------------------------------------------- Leaderboard
     for ep in ("volume", "profit"):

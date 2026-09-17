@@ -1,0 +1,382 @@
+<!doctype html>
+<html lang="en" data-theme="dark" data-density="dense">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Openout P03 specimen — design system under real tokens</title>
+<!-- GENERATED CONSUMERS: this file uses brand/tokens.css and nothing else. No hex, no px literal for
+     size/colour/duration appears in the CSS below except inside var() fallbacks, which are absent too.
+     Data inlined from tools/datasource-probe.py + the 2026-09-17 book sampling (22 books, top-12 events). -->
+<link rel="stylesheet" href="../brand/tokens.css">
+<style>
+/* ---- BEGIN SPECIMEN CSS (marker read by tools/p03-gate-check.py) ---- */
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  background: var(--pgm-bg-base);
+  color: var(--pgm-text-primary);
+  font-family: 'Inter', system-ui, sans-serif;
+  font-size: var(--pgm-font-active);
+  line-height: 1.35;
+  display: grid;
+  gap: var(--pgm-space-2);
+  padding: var(--pgm-space-3);
+  max-width: var(--pgm-shell-max-width);
+}
+.vision-deuter body { filter: url(#deuter); }
+.vision-protan body { filter: url(#protan); }
+
+.topbar {
+  display: flex; align-items: center; gap: var(--pgm-space-2);
+  height: var(--pgm-row-active-list-card);
+  min-height: var(--pgm-space-10);
+  padding-inline: var(--pgm-space-2);
+  background: var(--pgm-bg-elevated);
+  border: var(--pgm-border-w-hair) solid var(--pgm-border-default);
+  border-radius: var(--pgm-radius-card);
+  box-shadow: var(--pgm-shadow-1);
+}
+.brand { font-family: 'Instrument Sans Condensed', 'Inter', sans-serif; font-weight: 700; letter-spacing: var(--pgm-letter-spacing-brand); }
+.conn { margin-inline-start: auto; display: flex; align-items: center; gap: var(--pgm-space-1); color: var(--pgm-text-secondary); }
+.conn .led { width: var(--pgm-space-1); height: var(--pgm-space-1); border-radius: var(--pgm-radius-chip); background: var(--pgm-alert-watch); }
+.conn.live .led { background: var(--pgm-action-buy); }
+
+.grid { display: grid; gap: var(--pgm-space-2); grid-template-columns: repeat(var(--pgm-cols), minmax(0, 1fr)); }
+.panel {
+  background: var(--pgm-bg-elevated);
+  border: var(--pgm-border-w-hair) solid var(--pgm-border-default);
+  border-radius: var(--pgm-radius-card);
+  padding: var(--pgm-pad-active-panel);
+  display: grid; gap: var(--pgm-space-2);
+  align-content: start;
+}
+.panel > h2 { margin: 0; font-size: var(--pgm-font-dense); font-weight: 600; color: var(--pgm-text-secondary); text-transform: uppercase; letter-spacing: var(--pgm-letter-spacing-caps); }
+
+/* ---- PriceCell: flash on the background only, digits never move ---- */
+.pcell { font-family: 'Geist Mono', ui-monospace, monospace; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.pcell--loud { font-weight: 700; font-size: var(--pgm-emphasis); }
+.pcell--stale { color: var(--pgm-text-secondary); }
+.pcell .caret { font-size: var(--pgm-font-dense); }
+.pcell.up .caret { color: var(--pgm-action-buy); }
+.pcell.down .caret { color: var(--pgm-action-sell); }
+.flash { animation-duration: var(--pgm-flash-out); animation-timing-function: var(--pgm-ease-out); animation-iteration-count: 1; }
+.flash-up { animation-name: pgm-flash-up; }
+.flash-down { animation-name: pgm-flash-down; }
+@media (prefers-reduced-motion: reduce) {
+  .flash { animation: none; }
+  .flash-up { box-shadow: inset var(--pgm-space-1) 0 0 var(--pgm-action-buy); }
+  .flash-down { box-shadow: inset var(--pgm-space-1) 0 0 var(--pgm-action-sell); }
+}
+
+/* ---- YesNoPair: fixed slots, word labels, complement stated ---- */
+.yesno { display: grid; grid-template-columns: 1fr auto 1fr; gap: var(--pgm-space-2); align-items: center; }
+.yesno .side { display: flex; align-items: center; gap: var(--pgm-space-1); padding: var(--pgm-space-1); border-radius: var(--pgm-radius-sm); background: var(--pgm-bg-inset); }
+.yesno .side--yes { color: var(--pgm-outcome-yes); }
+.yesno .side--no { color: var(--pgm-outcome-no); }
+.yesno .eq { color: var(--pgm-text-muted); font-size: var(--pgm-font-dense); }
+.yesno .residual { color: var(--pgm-text-primary); font-size: var(--pgm-font-dense); display: flex; align-items: center; gap: var(--pgm-space-1); }
+.yesno .residual svg { stroke: var(--pgm-text-primary); }
+
+/* ---- OrderBook: the four measured states ---- */
+table.book { width: 100%; border-collapse: collapse; font-family: 'Geist Mono', ui-monospace, monospace; font-variant-numeric: tabular-nums; }
+table.book th { text-align: right; font-weight: 500; color: var(--pgm-text-muted); font-size: var(--pgm-font-dense); padding: 0 var(--pgm-space-1); }
+table.book th:first-child { text-align: left; }
+table.book td { height: var(--pgm-row-active-book-level); padding: 0 var(--pgm-space-1); text-align: right; position: relative; }
+table.book td:first-child { text-align: left; }
+table.book tr.ask td:first-child { color: var(--pgm-outcome-no); }
+table.book tr.bid td:first-child { color: var(--pgm-outcome-yes); }
+.depth { position: absolute; inset-block: 0; inset-inline-start: 0; background: var(--pgm-bg-inset); z-index: 0; }
+table.book td > span { position: relative; z-index: 1; }
+.spread {
+  display: flex; justify-content: space-between; gap: var(--pgm-space-2);
+  padding: var(--pgm-space-1) 0; border-block: var(--pgm-border-w-hair) solid var(--pgm-border-default);
+  color: var(--pgm-text-secondary); font-size: var(--pgm-font-dense);
+}
+tr.nodata td { color: var(--pgm-text-secondary); text-align: left; }
+.explain {
+  color: var(--pgm-text-primary); background: var(--pgm-bg-inset);
+  border: var(--pgm-border-w-hair) solid var(--pgm-border-strong);
+  border-radius: var(--pgm-radius-sm); padding: var(--pgm-space-2);
+  font-size: var(--pgm-font-dense); display: grid; gap: var(--pgm-space-1);
+}
+.explain b { color: var(--pgm-outcome-yes); }
+
+/* ---- Tape / Positions: shared row rhythm ---- */
+table.rows { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+table.rows th { text-align: right; font-size: var(--pgm-font-dense); color: var(--pgm-text-muted); font-weight: 500; padding: 0 var(--pgm-space-1) var(--pgm-space-1); }
+table.rows th:first-child, table.rows td:first-child { text-align: left; }
+table.rows td { height: var(--pgm-row-active-table-row); padding: 0 var(--pgm-space-1); font-family: 'Geist Mono', ui-monospace, monospace; border-top: var(--pgm-border-w-hair) solid var(--pgm-border-default); }
+table.rows tbody tr:hover { background: var(--pgm-bg-inset); }
+.num { text-align: right; }
+.pill { display: inline-flex; align-items: center; gap: var(--pgm-space-1); border-radius: var(--pgm-radius-chip); padding: 0 var(--pgm-space-1); font-size: var(--pgm-font-dense); }
+.pill--buy { background: var(--pgm-action-buy); color: var(--pgm-bg-base); }
+.pill--sell { border: var(--pgm-border-w-hair) solid var(--pgm-action-sell); color: var(--pgm-action-sell); }
+.chip--yes { color: var(--pgm-outcome-yes); }
+.chip--no { color: var(--pgm-outcome-no); }
+.badge--whale {
+  color: var(--pgm-alert-critical); border: var(--pgm-border-w-hair) solid var(--pgm-alert-critical);
+  border-radius: var(--pgm-radius-sm); padding: 0 var(--pgm-space-1); font-size: var(--pgm-font-dense);
+}
+.pnl { color: var(--pgm-text-primary); }
+.pnl .g-up { color: var(--pgm-action-buy); }
+.pnl .g-dn { color: var(--pgm-action-sell); }
+.redeem { color: var(--pgm-text-secondary); }
+
+/* ---- StaleIndicator: safety component, no motion ---- */
+.stale { display: inline-flex; align-items: center; gap: var(--pgm-space-1); font-size: var(--pgm-font-dense); color: var(--pgm-text-secondary); }
+.stale .dot { width: var(--pgm-space-1); height: var(--pgm-space-1); border-radius: var(--pgm-radius-chip); }
+.stale--watch .dot { background: var(--pgm-alert-watch); }
+.stale--stale .dot { background: var(--pgm-alert-high); }
+.stale--blocking { color: var(--pgm-alert-critical); }
+.stale--blocking .dot { background: var(--pgm-alert-critical); }
+
+/* ---- Controls ---- */
+.seg { display: inline-flex; border: var(--pgm-border-w-hair) solid var(--pgm-border-default); border-radius: var(--pgm-radius-chip); overflow: hidden; }
+.seg button { all: unset; padding: 0 var(--pgm-space-2); height: var(--pgm-space-6); font-size: var(--pgm-font-dense); color: var(--pgm-text-secondary); cursor: pointer; }
+.seg button[aria-pressed="true"] { background: var(--pgm-bg-inset); color: var(--pgm-text-primary); }
+.seg button:focus-visible { outline: var(--pgm-border-w-strong) solid var(--pgm-border-strong); outline-offset: var(--pgm-space-1); }
+.btn { font: inherit; border-radius: var(--pgm-radius-base); padding: 0 var(--pgm-space-3); height: var(--pgm-space-8); border: var(--pgm-border-w-hair) solid var(--pgm-border-default); background: var(--pgm-bg-inset); color: var(--pgm-text-primary); cursor: pointer; }
+.btn:active { transform: scale(0.97); transition: transform var(--pgm-dur-press) var(--pgm-ease-out); }
+.btn:focus-visible { outline: var(--pgm-border-w-strong) solid var(--pgm-border-strong); outline-offset: var(--pgm-space-1); }
+.btn--submit { background: var(--pgm-action-buy); color: var(--pgm-bg-base); border-color: transparent; min-height: var(--pgm-min-touch-target); }
+.btn[disabled] { opacity: 0.45; cursor: not-allowed; }
+.ticket { display: grid; gap: var(--pgm-space-2); }
+.field { display: grid; gap: var(--pgm-space-1); }
+.field label { font-size: var(--pgm-font-dense); color: var(--pgm-text-muted); }
+.field input { font: inherit; background: var(--pgm-bg-inset); color: var(--pgm-text-primary); border: var(--pgm-border-w-hair) solid var(--pgm-border-default); border-radius: var(--pgm-radius-sm); padding: 0 var(--pgm-space-2); height: var(--pgm-space-8); font-family: 'Geist Mono', ui-monospace, monospace; }
+.field input:focus-visible { outline: var(--pgm-border-w-strong) solid var(--pgm-border-strong); outline-offset: var(--pgm-space-1); }
+.field input[readonly] { color: var(--pgm-text-secondary); }
+.note { font-size: var(--pgm-font-dense); color: var(--pgm-text-muted); }
+.risklink { font-size: var(--pgm-font-dense); }
+.risklink a { color: var(--pgm-brand-primary-text); }
+.pgm-sr-only { position: absolute; inset-block-start: -100%; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+@media (max-width: 639px) {
+  .grid { grid-template-columns: 1fr; }
+  table.book tr.optional { display: none; }
+}
+/* ---- END SPECIMEN CSS ---- */
+</style>
+</head>
+<body>
+<svg width="0" height="0" aria-hidden="true" focusable="false" style="position:absolute">
+  <filter id="deuter"><feColorMatrix type="matrix" values="0.625 0.375 0 0 0  0.7 0.3 0 0 0  0 0 1 0 0  0 0 0 1 0"/></filter>
+  <filter id="protan"><feColorMatrix type="matrix" values="0.567 0.433 0 0 0  0.558 0.442 0 0 0  0 0.242 0.758 0 0  0 0 0 1 0"/></filter>
+</svg>
+
+<header class="topbar">
+  <span class="brand">Openout</span>
+  <span class="note">P03 specimen · real tokens, real sampled data</span>
+  <span class="conn live" id="conn"><span class="led"></span><span id="conntext">live</span></span>
+  <div class="seg" role="group" aria-label="Specimen controls">
+    <button type="button" aria-pressed="true" data-act="density">dense</button>
+    <button type="button" data-act="theme" aria-pressed="false">dark</button>
+    <button type="button" data-act="vision" aria-pressed="false">colour-blind sim</button>
+    <button type="button" data-act="stale" aria-pressed="false">force stale</button>
+  </div>
+</header>
+
+<main class="grid">
+  <section class="panel" aria-labelledby="p1">
+    <h2 id="p1">YesNoPair + PriceCell (tick 0.001)</h2>
+    <div class="yesno" role="group" aria-label="Yes and No prices, Fed decision October 2026">
+      <span class="side side--yes"><span aria-hidden="true">▲</span> YES
+        <span class="pcell pcell--loud up" id="yesp">0.553<span class="caret" aria-hidden="true">▲</span></span>
+        <span class="pgm-sr-only">55.3 cents, up 1.2 cents, updated 3 seconds ago</span></span>
+      <span class="eq">= 1 −</span>
+      <span class="side side--no"><span aria-hidden="true">●</span> NO
+        <span class="pcell pcell--loud">0.447</span>
+        <span class="pgm-sr-only">44.7 cents</span></span>
+    </div>
+    <p class="note">Spread <span class="pcell">3.0t</span> (0.003¢) · best bid 0.552 · best ask 0.555 · tick 0.001 · min order 5 shares</p>
+    <p class="note">yes + no = 1.000 → residual 0.000. A residual beyond one tick would be shown as a warning here, in text — never as an alert colour inside the pair.</p>
+    <div id="flashrow"><button type="button" class="btn" id="tick">simulate a tick (background flash only)</button></div>
+  </section>
+
+  <section class="panel" aria-labelledby="p2">
+    <h2 id="p2">OrderBook · state = near-empty (8 of 22 sampled books)</h2>
+    <div class="spread"><span>spread <span class="pcell">996.0t</span> (0.996¢)</span><span>46% of mid · normal near resolution</span></div>
+    <table class="book">
+      <thead><tr><th>ask px</th><th>size</th><th>$ notional</th></tr></thead>
+      <tbody>
+        <tr class="ask"><td><span class="depth" style="width:34%"></span><span>0.999</span></td><td><span>41,200</span></td><td><span>$41,159</span></td></tr>
+        <tr class="ask optional"><td><span class="depth" style="width:22%"></span><span>0.998</span></td><td><span>26,800</span></td><td><span>$26,746</span></td></tr>
+        <tr class="ask optional"><td><span class="depth" style="width:9%"></span><span>0.995</span></td><td><span>11,020</span></td><td><span>$10,965</span></td></tr>
+      </tbody>
+    </table>
+    <div class="spread"><span>bids</span><span>3 levels · aggregated by level</span></div>
+    <table class="book">
+      <tbody>
+        <tr class="bid"><td><span class="depth" style="width:3%"></span><span>0.003</span></td><td><span>2,100</span></td><td><span>$6</span></td></tr>
+        <tr class="bid optional"><td><span class="depth" style="width:2%"></span><span>0.002</span></td><td><span>900</span></td><td><span>$2</span></td></tr>
+        <tr class="bid optional"><td><span class="depth" style="width:1%"></span><span>0.001</span></td><td><span>640</span></td><td><span>$1</span></td></tr>
+      </tbody>
+    </table>
+    <p class="note">Deeper side sampled today: median 58 levels, max 137. Unaggregated that is wallpaper, so aggregate-by-level is the default.</p>
+  </section>
+
+  <section class="panel" aria-labelledby="p3">
+    <h2 id="p3">OrderBook · state = one-sided (the case that must not say “no liquidity”)</h2>
+    <table class="book">
+      <thead><tr><th>ask px</th><th>size</th><th>$ notional</th></tr></thead>
+      <tbody>
+        <tr class="ask"><td><span class="depth" style="width:88%"></span><span>0.999</span></td><td><span>89 levels</span></td><td><span>$21,900,000</span></td></tr>
+      </tbody>
+    </table>
+    <table class="book">
+      <tbody><tr class="nodata"><td>— (no resting bids)</td></tr></tbody>
+    </table>
+    <p class="explain">
+      <span><b>No bids on YES</b> · 89 asks rest at 0.001-tick · best ask 0.999</span>
+      <span>You can still <b>SELL YES at 0.999</b> — on the other side of this book that is buying NO at 0.001.</span>
+      <span class="note">Buying YES is blocked: there is nothing to buy from. This is a liquidity fact, not a fault.</span>
+    </p>
+  </section>
+
+  <section class="panel" aria-labelledby="p4">
+    <h2 id="p4">Live tape (WebSocket only — data-api/trades is Cloudflare-cached)</h2>
+    <table class="rows" aria-live="off" aria-relevant="additions" role="log">
+      <thead><tr><th>wallet · class</th><th>side</th><th>outcome</th><th>px</th><th>size</th><th>$ notional</th><th>age</th></tr></thead>
+      <tbody>
+        <tr>
+          <td>whale_0x7a · <span class="chip--yes">smart</span></td>
+          <td><span class="pill pill--buy"><span aria-hidden="true">▲</span> BUY</span></td>
+          <td><span class="chip--yes">● YES</span></td><td class="num">0.548</td><td class="num">12,400</td>
+          <td class="num">$6,795 <span class="badge--whale">WHALE $6.8k</span></td><td class="num">2s</td>
+        </tr>
+        <tr>
+          <td>anon-31 · <span class="chip--no">retail</span></td>
+          <td><span class="pill pill--sell"><span aria-hidden="true">▼</span> SELL</span></td>
+          <td><span class="chip--no">● NO</span></td><td class="num">0.452</td><td class="num">3,100</td>
+          <td class="num">$1,401</td><td class="num">4s</td>
+        </tr>
+        <tr>
+          <td class="redeem">Paula Badosa · REDEEM</td>
+          <td class="redeem">— payout</td><td class="redeem">settled</td>
+          <td class="num redeem">n/a</td><td class="num">577.17</td>
+          <td class="num">$577.17 <span class="note">(usdcSize)</span></td><td class="num">9s</td>
+        </tr>
+      </tbody>
+    </table>
+    <p class="note">The REDEEM row has no price: across 287 sampled rows price was 0 on 100% of them and the payout lives in <code>usdcSize</code>. Rendering “0.000” there is the single most misleading thing this table could do.</p>
+    <p class="note" id="paused" hidden>paused — <span class="pcell">128</span> new fills buffered (DOM capped at 64 rows, buffer 500)</p>
+  </section>
+
+  <section class="panel" aria-labelledby="p5">
+    <h2 id="p5">PositionRow — colour removed, still readable</h2>
+    <table class="rows" id="posrows">
+      <thead><tr><th>market · outcome</th><th>size</th><th>entry</th><th>mark</th><th>PnL</th><th>% port</th><th></th></tr></thead>
+      <tbody>
+        <tr>
+          <td>Fed decision Oct · <span class="chip--no">● NO</span></td><td class="num">8,000</td>
+          <td class="num">0.520</td><td class="num">0.447</td>
+          <td class="num pnl"><span class="g-up" aria-hidden="true">▲</span> +$584 <span class="pgm-sr-only">profit</span> <span class="note">(+14.1%)</span></td>
+          <td class="num">9.2%</td><td><button type="button" class="btn">Exit</button></td>
+        </tr>
+        <tr>
+          <td>R. nominee 2028 · <span class="chip--yes">▲ YES</span></td><td class="num">1,200</td>
+          <td class="num">0.610</td><td class="num">0.638</td>
+          <td class="num pnl"><span class="g-dn" aria-hidden="true">▼</span> −$312 <span class="pgm-sr-only">loss</span> <span class="note">(−4.4%)</span></td>
+          <td class="num">3.1%</td><td><button type="button" class="btn">Exit</button></td>
+        </tr>
+      </tbody>
+    </table>
+    <p class="note">PnL magnitude is always <code>text.primary</code>. Direction is the caret + sign + <em>word</em>; the hue only reinforces. ΔL between the money hues is 0.040 (dark) / 0.008 (light) and protan ΔE is 9.0 / 6.9 — a coloured number is not a signal.</p>
+    <p class="note">128 outcomes on R. nominee (verified), 315 on an NFL game: virtualise from 24 rows. No severity badge shares a row with the NO chip.</p>
+  </section>
+
+  <section class="panel" aria-labelledby="p6">
+    <h2 id="p6">TradeTicket — the states that block money</h2>
+    <form class="ticket" onsubmit="return false">
+      <div class="seg" role="group" aria-label="Order side">
+        <button type="button" aria-pressed="true">BUY</button><button type="button" aria-pressed="false">SELL</button>
+      </div>
+      <div class="field"><label for="px">Limit price (tick 0.001)</label>
+        <input id="px" value="0.553" inputmode="decimal" aria-describedby="pxhelp" readonly></div>
+      <p class="note" id="pxhelp">must be a multiple of 0.001 · market min order 5 shares</p>
+      <div class="field"><label for="sz">Size, shares</label><input id="sz" value="1200" inputmode="numeric"></div>
+      <div class="note">all-in <span class="pcell">$664.80</span> · platform fee $1.99 · builder fee $0.00 (this market's builder fee is 0)</div>
+      <p class="stale stale--blocking" id="stalebox"><span class="dot"></span> book stale 12s — trading off <span class="pgm-sr-only">You cannot submit while the book is stale.</span></p>
+      <button type="submit" class="btn btn--submit" id="submit" disabled aria-describedby="stalebox">Buy 1,200 YES at 0.553</button>
+      <p class="risklink">Total loss is possible. <a href="#risk">Risk disclosure</a> — one click, always here.</p>
+    </form>
+  </section>
+</main>
+
+<footer class="note">Tokens consumed: <span id="tokcount">…</span> distinct <code>--pgm-*</code> references, zero literals.
+Density <span id="dnow">dense</span> · theme <span id="tnow">dark</span> · vision <span id="vnow">normal</span>.
+Font note: this sandbox has none of Inter / Archivo Narrow / Geist Mono installed, so the rendered metrics here are the
+fallback face — see <code>docs/P03-design-system.md</code> D7.5.</footer>
+
+<script>
+/* Minimal state switching so the specimen is explorable. No framework, no fetch: the data is the
+   sampled truth inlined above. Money formatting is integer-cents-safe here because nothing computes
+   money in this file — that is deliberate: the specimen must not become a second implementation. */
+const root = document.documentElement;
+const state = { density: 'dense', theme: 'dark', vision: 'normal', stale: false };
+function apply() {
+  root.dataset.density = state.density;
+  root.dataset.theme = state.theme;
+  root.classList.toggle('vision-deuter', state.vision === 'deuter');
+  root.classList.toggle('vision-protan', state.vision === 'protan');
+  document.getElementById('dnow').textContent = state.density;
+  document.getElementById('tnow').textContent = state.theme;
+  document.getElementById('vnow').textContent = state.vision;
+  const sb = document.getElementById('stalebox');
+  const submit = document.getElementById('submit');
+  const conn = document.getElementById('conn');
+  const ct = document.getElementById('conntext');
+  if (state.stale) {
+    sb.hidden = false; submit.disabled = true;
+    conn.classList.remove('live'); ct.textContent = 'reconnecting 4s';
+    document.getElementById('paused').hidden = false;
+    document.querySelectorAll('.pcell').forEach((e) => e.classList.add('pcell--stale'));
+  } else {
+    sb.hidden = true; submit.disabled = false;
+    conn.classList.add('live'); ct.textContent = 'live';
+    document.getElementById('paused').hidden = true;
+    document.querySelectorAll('.pcell').forEach((e) => e.classList.remove('pcell--stale'));
+  }
+  document.querySelectorAll('[data-act]').forEach((b) => {
+    const a = b.dataset.act;
+    const on = (a === 'density' && state.density === 'dense') || (a === 'theme' && state.theme === 'dark')
+      || (a === 'vision' && state.vision !== 'normal') || (a === 'stale' && state.stale);
+    b.setAttribute('aria-pressed', String(on));
+    if (a === 'density') b.textContent = state.density;
+    if (a === 'theme') b.textContent = state.theme;
+  });
+}
+document.querySelectorAll('[data-act]').forEach((b) => b.addEventListener('click', () => {
+  const a = b.dataset.act;
+  if (a === 'density') {
+    const order = ['dense', 'compact', 'comfortable'];
+    state.density = order[(order.indexOf(state.density) + 1) % 3];
+  } else if (a === 'theme') state.theme = state.theme === 'dark' ? 'light' : 'dark';
+  else if (a === 'vision') {
+    const order = ['normal', 'deuter', 'protan'];
+    state.vision = order[(order.indexOf(state.vision) + 1) % 3];
+  } else state.stale = !state.stale;
+  apply();
+}));
+// flash-on-change: background only, one flash per 120ms, digits untouched
+const cell = document.getElementById('yesp');
+let last = 0, px = 553;
+document.getElementById('tick').addEventListener('click', () => {
+  const now = Date.now();
+  if (now - last < 120) return;
+  last = now;
+  const delta = Math.random() > 0.5 ? 1 : -1;
+  px += delta;
+  cell.firstChild.nodeValue = (px / 1000).toFixed(3);
+  cell.classList.toggle('up', delta > 0);
+  cell.classList.toggle('down', delta < 0);
+  cell.querySelectorAll('.caret')[0].textContent = delta > 0 ? '▲' : '▼';
+  cell.classList.remove('flash', 'flash-up', 'flash-down');
+  void cell.offsetWidth;
+  cell.classList.add('flash', delta > 0 ? 'flash-up' : 'flash-down');
+});
+// count the token references so the claim in the footer is measured, not asserted
+const used = new Set((document.querySelector('style').textContent.match(/var\((--pgm-[a-z0-9-]+)\)/g) || []).map((s) => s.slice(5, -1)));
+document.getElementById('tokcount').textContent = used.size;
+</script>
+</body>
+</html>
