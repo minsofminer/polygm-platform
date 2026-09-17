@@ -252,7 +252,6 @@ P02_SECTIONS = ("color", "semantic", "chart", "typography", "radius", "rules")
 # a colour, and so --check has an oracle that is NOT the file it is checking.
 P02_SHA = "p02_sections_sha256"
 
-
 def canon(o) -> str:
     return json.dumps(o, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
@@ -274,6 +273,10 @@ def build(current: dict) -> dict:
     out["motion"] = MOTION
     out["layers"] = LAYERS
     out["radius"] = {**(current.get("radius") or {}), **{k: v for k, v in RADIUS.items() if k != "note"}}
+    # NOTE: `rules` is deliberately NOT emitted here. It sits inside P02_SECTIONS, so the write path
+    # asserts it is byte-identical — the builder's refusal is correct, not an obstacle. P03's rule additions
+    # go through tools/repin-p02-digest.py, which requires the colour audits and an explicit --ack before the
+    # certified digest moves. (I tried to make this builder own the merge; it said no and it was right.)
     out["components"] = COMPONENTS
     out["screens"] = SCREENS
     return out
@@ -283,6 +286,10 @@ def main() -> int:
     check = "--check" in sys.argv
     d = json.load(open(TOKENS))
     want = build(d)
+    # `rules` must be IN this list: the write path is gated on `added`, so a key the builder emits but this
+    # tuple omits is never compared, never reported stale, and never actually written — the run printed
+    # "nothing to do" while the rule it was supposed to add was absent. A generator's output list and its
+    # comparison list have to be the same list.
     sections = ("spacing", "border", "elevation", "density", "breakpoints", "motion", "layers",
                 "components", "screens")
     added = [k for k in sections if canon(d.get(k)) != canon(want[k])]

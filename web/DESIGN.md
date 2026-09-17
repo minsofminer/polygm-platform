@@ -28,6 +28,13 @@ generate at all if `tokens.json`, the Brand Lock name and the lockup wordmark di
   fill-vs-outline.
 * No alert hue inside `YesNoPair` or the book ladder — a warning next to two compared values reads as a
   third price.
+* **A hue may set text only at 4.5:1 on the background it actually sits on** (`tokens.rules["hue-never-small-text"]`).
+  Elevated panels are the common case and the current reds do not reach it there (`#dc2626` 4.43:1,
+  `#ef4444` 4.38:1), and `#D55E00` is 3.55–4.26:1. So: chip/pill/badge **words** and book-ladder **prices**
+  are `text.primary`; the hue is the outline, tint, depth bar or caret. Do not reach for "AA-large": the
+  largest text token is 13px, and the exemption needs 18.66px bold / 24px, so nothing in this app qualifies.
+* **Check** `python3 tools/component-colour-audit.py --gate` grades by a per-cell class (text 4.5, nontext
+  and declared-large 3.0) — a `fg` cell in a money or outcome hue below 4.5:1 is a failure, not a warning.
 * **Check** `python3 tools/component-colour-audit.py --gate` (its CONTROL rows are canaries: if a control
   *passes*, an exemption has grown — that is a bug in the rule, not a colour problem).
 

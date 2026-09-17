@@ -263,7 +263,12 @@ complement `1 − yes − no = residual` (fees/tick rounding) · optional `mid` 
 (terminal header, 16px, `emphasis: loud` on the side the user is about to buy) · `event` (a
 negRisk outcome row, 11px, no mid marker).
 *Rules that make it correct* — fixed L/R slots so colour is redundant; each side carries the words
-“YES”/“NO”; `outcome.yes #7ba5ff` / `outcome.no #D55E00`, **never** green/red; the pair is
+“YES”/“NO”; `outcome.yes #7ba5ff` / `outcome.no #D55E00`, **never** green/red. **The hue is the chip, not
+the word:** the YES/NO label and both prices are `text.primary`, and the outcome hue appears on the chip's
+1px outline and its tint behind the label. Reason, measured: `#D55E00` on `bg.base` light is 3.87:1 and on
+`bg.elevated` dark 4.26:1, i.e. it fails the 4.5:1 body-text bar everywhere this UI renders text (the largest
+text token is 13px, so WCAG's large-text exemption is never available), while as a border/tint it clears the
+3:1 non-text bar. `component-colour-audit.py` enforces this by class. The pair is
 `1 − yes ± residual` and if `residual > 1 tick` that is rendered as a *warning* (“book is 2 ticks wide —
 yes+no ≠ $1”) because it means the sides are separately mispriced and a naive arbitrage display would
 be a lie. When one side has no book at all, its cell renders `—` plus its `stale`-style reason, never
@@ -274,7 +279,9 @@ opens the market).
 
 #### `OrderBook`
 *Anatomy* header (spread row) · asks ladder (up) · best-price band (mid + spread in **ticks**) ·
-bids ladder (down) · per-level depth bar behind price · `aggregate` control · footer (total levels,
+bids ladder (down) · per-level depth bar behind price (**the only place an outcome hue appears in the
+ladder** — level prices and sizes are `text.primary`, because `#D55E00` as text measures 3.87:1 light /
+4.26:1 dark) · `aggregate` control · footer (total levels,
 tick size, “click a level to fill the ticket”).
 *Levels* `--pgm-row-book-level`: dense 16px, 10 levels/side desktop, 6 on mobile, 12 at 2xl; scroll
 within the panel rather than growing the page.

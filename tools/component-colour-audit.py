@@ -45,26 +45,43 @@ def rows() -> dict:
     Keyed by TOKEN name, not by value or by a display string: the first version matched exemptions
     against the display label and an exemption silently never fired (`pnl.number` does not contain
     the substring `text.primary`). Names make that class of bug impossible."""
+    # Each cell declares its CONTRAST CLASS. Cells were previously all graded as text but only failed
+    # below 3.0, which let 11px pill/chip foregrounds at 3.55:1 print "AA-large" and pass the gate. The
+    # compositions below are what D2/D4b ACTUALLY specify after the P03 correction: the word is
+    # text.primary and the hue is the outline/tint (non-text, 3:1). A `fg` row that still puts a hue on
+    # small text is a finding, which is the point.
     spec = {
-        "PositionRow": ("bg.base", [("outcome chip", "outcome.yes"), ("outcome chip", "outcome.no"),
-                                    ("pnl number", "text.primary"), ("pnl glyph +", "action.buy"),
-                                    ("pnl glyph −", "action.sell")]),
-        "TapeRow": ("bg.elevated", [("side pill", "action.buy"), ("side pill", "action.sell"),
-                                    ("outcome chip", "outcome.yes"), ("outcome chip", "outcome.no"),
-                                    ("whale badge", "alert.critical")]),
+        "PositionRow": ("bg.base", [("outcome chip word", "text.primary"), ("outcome chip edge", "outcome.yes", "nontext"),
+                                    ("outcome chip edge", "outcome.no", "nontext"),
+                                    ("pnl number", "text.primary"), ("pnl glyph +", "text.primary"),
+                                    ("pnl glyph −", "text.primary")]),
+        "TapeRow": ("bg.elevated", [("side pill word", "text.primary"), ("side pill edge", "action.buy", "nontext"),
+                                    ("side pill edge", "action.sell", "nontext"),
+                                    ("outcome chip word", "text.primary"),
+                                    ("outcome chip edge", "outcome.yes", "nontext"),
+                                    ("outcome chip edge", "outcome.no", "nontext"),
+                                    ("whale badge word", "text.primary")]),
         # what the two rules above exist to prevent, kept as a control: a bare alert dot inside the
         # compared pair, and a bare critical dot next to the side pill. If these ever PASS the rules
         # have been weakened, so they are asserted at the hard tier with no exemption.
-        "YesNoPair": ("bg.elevated", [("yes", "outcome.yes"), ("no", "outcome.no"),
+        "YesNoPair": ("bg.elevated", [("yes chip edge", "outcome.yes", "nontext"),
+                                      ("no chip edge", "outcome.no", "nontext"),
+                                      ("yes word", "text.primary"), ("no word", "text.primary"),
                                       ("residual warning text+icon", "text.primary")]),
-        "OrderBook ladder": ("bg.base", [("bid", "outcome.yes"), ("ask", "outcome.no")]),
+        "OrderBook ladder": ("bg.base", [("level price", "text.primary"),
+                                         ("bid depth bar", "outcome.yes", "nontext"),
+                                         ("ask depth bar", "outcome.no", "nontext")]),
         # CONTROLS: compositions the rules exist to forbid, audited with every exemption disabled.
         # They MUST fail; if one passes, a rule has been weakened (asserted in main()).
         "CONTROL@bare alert dot inside a compared pair": ("bg.elevated", [("no", "outcome.no"), ("flag", "alert.high")]),
         "CONTROL@critical dot next to a side pill": ("bg.elevated", [("sell", "action.sell"), ("flag", "alert.critical")]),
-        "YesNoPair": ("bg.elevated", [("yes", "outcome.yes"), ("no", "outcome.no"),
-                                      ("residual warning text+icon", "text.primary")]),
+        # Canary for the grader itself, not for a composition: a money hue as TEXT on an elevated panel.
+        # It must fail. It was silently "AA-large" and passing until the per-cell class existed, so if this
+        # control ever passes, the 4.5:1 body-text floor has gone missing from the grader again.
+        "CONTROL@hue as small text on an elevated panel": ("bg.elevated", [("sell word", "action.sell")]),
     }
+    # NOTE: this dict used to declare "YesNoPair" twice. Identical content, so nothing changed — but a
+    # repeated key in a literal silently shadows the first, and that is invisible unless you look.
     return {theme: spec for theme in ("dark", "light")}
 
 
@@ -122,23 +139,39 @@ def audit():
         sem = t["semantic"][theme]
         for row, (bgkey, cells) in spec.items():
             bg = sem[bgkey]
-            resolved = [(lbl, tok, sem[tok]) for lbl, tok in cells]
+            if row.startswith("CONTROL@"):
+                for cell in cells:
+                    controls.setdefault((row, theme), False)
+            resolved = []
+            for cell in cells:
+                lbl, tok = cell[0], cell[1]
+                kind = cell[2] if len(cell) > 2 else "text"   # opt OUT of the text bar, never opt in
+                resolved.append((lbl, tok, sem[tok], kind))
             lines = [f"\n{row}/{theme}  bg {bg}"]
-            for lbl, tok, h in resolved:
+            for lbl, tok, h, kind in resolved:
                 c = contrast(h, bg)
-                ok = "AA" if c >= 4.5 else ("AA-large" if c >= 3.0 else "FAIL")
+                # The old grader printed "AA-large" for anything in 3.0–4.5 and only FAILED below 3.0, so
+                # 11px chip and pill text could pass the gate at 3.55:1 while its own size makes it body
+                # text. WCAG's large exemption is >=18.66px bold / >=24px, and the largest text token in
+                # tokens.json is 13px — nothing in this UI qualifies unless a row declares `kind="large"`
+                # and the size is stated in the spec. Default class is therefore "text" at 4.5:1.
+                floor = {"text": 4.5, "large": 3.0, "nontext": 3.0}[kind]
+                ok = "AA" if c >= floor else ("AA-large" if (c >= 3.0 and kind != "text") else "FAIL")
                 flag = "" if ok != "FAIL" else "  ✗"
-                lines.append(f"  fg {lbl:14s} {tok:14s} {h} {c:5.2f}:1 {ok}{flag}")
+                lines.append(f"  fg {lbl:14s} {tok:14s} {h} {c:5.2f}:1 {ok} ({kind} floor {floor}){flag}")
+                if ok == "FAIL" and row.startswith("CONTROL@"):
+                    controls[(row, theme)] = True      # the grader caught its own regression
                 if ok == "FAIL":
                     findings.append((f"{row}/{theme}", f"{lbl} ({tok})", "contrast", round(c, 2),
-                                     f"{h} on {bgkey} {bg} is {c:.2f}:1 — below the 4.5:1 body-text floor"))
+                                     f"{h} on {bgkey} {bg} is {c:.2f}:1 — below the {floor}:1 floor for "
+                                     f"{kind} ({'body text at density 11–13px; no large exemption applies' if kind == 'text' else 'non-text/large'})"))
             seen = set()
             # STRUCTURAL rules first: they do not care about ΔE, because the composition itself is the
             # defect (a dot with no word, an alert hue inside a pair being compared). Asserting these as
             # colour tests was wrong — gold vs orange is genuinely separable in dark (ΔE 27) and is
             # still forbidden there, which is exactly why the first version's canary looked "broken".
             compared = row.startswith("YesNoPair") or row.startswith("OrderBook")
-            for lbl, tok, h in resolved:
+            for lbl, tok, h, kind in resolved:
                 bare = not any(w in lbl for w in ("badge", "chip", "pill", "number", "dot-"))
                 if tok in ALERTS:
                     if bare and row != "MarketCard":
@@ -155,7 +188,15 @@ def audit():
                     controls[(row, theme)] = True   # a control that is labelled is a different test; keep it failing
             for i in range(len(resolved)):
                 for j in range(i + 1, len(resolved)):
-                    (la, ta, ha), (lb, tb, hb) = resolved[i], resolved[j]
+                    (la, ta, ha, ka), (lb, tb, hb, kb) = resolved[i], resolved[j]
+                    if ta == tb and ta in NEUTRAL:
+                        # a NEUTRAL token in two cells encodes nothing, so "identical hue" is not a defect:
+                        # the row's worded YES/NO chips are text.primary side by side BY DESIGN after the
+                        # small-text correction. The identical-hue rule exists for pairs whose colour is the
+                        # carrier (sell/critical). Checking neutral tokens here was a false positive my own
+                        # composition change surfaced.
+                        lines.append(f"  ok       {ta}×2 neutral: no colour claim to separate")
+                        continue
                     if ta == tb:
                         # identical hue: ΔE 0.0 by definition (P02's action-buy-aliases-result-profit).
                         # Colour cannot separate these, so words must. A cell whose label carries no

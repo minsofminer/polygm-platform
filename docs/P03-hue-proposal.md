@@ -36,8 +36,9 @@ never set text — text in a money hue must use `*-text` tokens.* Zero brand cha
 design system already does. The `pnl-never-coloured-text` rule plus G6.6 of the gate already enforce the
 number case; this closes the small-label case.
 
-I recommend **B now, A at the next scheduled brand revision.** B is free and honest; A touches a `fixed`
-field for a case the product does not currently render. If you prefer A, the sequence the tooling enforces is
+I recommend **A at the next scheduled brand revision**, and treat B as done. A is a two-value palette change
+(`light.action.sell` → `#b91c1c`, clearing 6.47:1 / 5.93:1) and would restore the option of a coloured small
+label; it touches a `fixed` field, so it waits for you. If you prefer A, the sequence the tooling enforces is
 in the script's footer, and `tools/repin-p02-digest.py --apply --ack=color` refuses to re-pin the certified
 palette until `colour-audit` and both phase gates pass — so an approved recolour cannot quietly go unaudited.
 

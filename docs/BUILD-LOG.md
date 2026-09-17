@@ -46,6 +46,40 @@ fallback in D4b is adopted for the terminal, but the palette itself is locked, s
 consequence rather than a fix. (5) No deployment surface is claimed: `vercel`/`supabase` CLIs are absent from
 this workspace.
 
+### P03 addendum — the "non-text boundary" I recommended was already being violated (same day)
+
+Acting on the hue proposal, I checked the claim it rested on ("colour is only used non-text today") against
+the audit rows instead of trusting the spec prose. It was false, and so was my **B-now-A-later**
+recommendation as written: the tape's side pill and whale badge were specified with a money hue as their
+**11px foreground** (4.38–4.43:1), and the YES/NO chip word plus the book ladder's ask price used
+`#D55E00` as text (3.55–4.26:1). None of it rendered wrong yet, because none of it is built — but the
+*specification* was inaccessible, which is exactly the thing P03 exists to prevent.
+
+Why nothing caught it: `component-colour-audit.py` printed "AA-large" for the 3.0–4.5 band and only failed
+below 3.0, while its own error string cited the 4.5:1 body-text floor it was not applying — and nothing in
+this UI can claim AA-large (largest text token 13px; WCAG's exemption needs 18.66px bold / 24px).
+
+Fixed at the spec and tool level, with no palette change (so no `fixed` Brand Lock field was touched):
+`tokens.rules["hue-never-small-text"]`; D2.2 rows (Yes/No pair, OrderBook ladder) and the chip/badge
+compositions now put the word in `text.primary` and the hue on the outline/tint/depth bar; the audit grades
+by a per-cell contrast class (text 4.5, nontext and *declared* large 3.0) with the class defaulting to text,
+so a cell must opt **out** of the bar rather than opt in; `web/DESIGN.md` §2 carries the rule so P08's
+engineer cannot reintroduce it. A sixth canary (`CONTROL@hue as small text on an elevated panel`) was added
+and **verified non-vacuous**: restoring the old permissive grader turns it to `PASSED ✗ / canary BROKEN` and
+fails the gate, while the current audit reports 0 findings with 6/6 canaries caught.
+
+Two of my own mechanisms were wrong on the way to that fix, both recorded rather than edited out: I tried to
+make `build-foundations.py` own the `rules` merge and it **refused** (correctly — `rules` is inside the
+P02-certified section set, so the generator must not write there; additions go through
+`repin-p02-digest.py`, which classified this as additive and re-pinned to `5f231683ce481b0b`); and before
+that, adding `rules` to the builder's emit path without adding it to its *compared* sections list made the
+run print "nothing to do" while the rule it supposedly added was absent. A generator's emit list and
+comparison list must be one list.
+
+Still open and still the brand owner's call: deepening the money reds (light `#b91c1c` = 6.47/5.93,
+`#991b1b` = 8.31/7.62) so a small coloured label becomes legal at all; the dark theme has **no** same-family
+red that clears 4.5:1 on its panels.
+
 ## P02 — Brand & identity · 2026-09-16
 
 **Built.** `docs/P02-brand.md` (D1–D8): 12 name candidates each carrying a *measured* collision result,
