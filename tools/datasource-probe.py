@@ -394,7 +394,20 @@ def check_cache(path: str, payload: dict) -> int:
         print("  MISSING on one side: %s (the probe changed shape; that is a P01-code change, not a venue one)" % k)
     old_fails, new_fails = set(cached.get("failures") or []), set(fresh.get("failures") or [])
     if new_fails - old_fails:
-        print("  newly FAILING checks: %s" % ", ".join(sorted(new_fails - old_fails)))
+        print("  newly FAILING checks:")
+        for c in fresh.get("checks") or []:
+            if c["id"] in (new_fails - old_fails):
+                obs = json.dumps(c.get("observed"), default=str)
+                transport = c.get("status") in (0, "ERR") or obs.startswith('"ERR') or "error" in obs.lower()[:40]
+                # The distinction that matters: a transport failure says nothing about the spec and will
+                # probably vanish on the next run; a payload that came back 200 with different KEYS is a
+                # venue change and must reopen P01. Both used to print as a bare id, and the first time that
+                # happened I read the id list as "the venue moved" when it was a timeout.
+                print("     %-30s %s  expect: %s\n     %-30s observed: %s"
+                      % (c["id"], "TRANSIENT?" if transport else "SHAPE", str(c.get("expect"))[:70], "",
+                         obs[:180]))
+        if all((c.get("status") in (0, "ERR")) for c in (fresh.get("checks") or []) if c["id"] in (new_fails - old_fails)):
+            print("     all newly-failing checks look like transport errors — run again before believing it")
     if old_fails - new_fails:
         print("  no longer failing: %s" % ", ".join(sorted(old_fails - new_fails)))
     if drift or absent or (new_fails - old_fails):
