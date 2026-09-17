@@ -76,9 +76,20 @@ that, adding `rules` to the builder's emit path without adding it to its *compar
 run print "nothing to do" while the rule it supposedly added was absent. A generator's emit list and
 comparison list must be one list.
 
-Still open and still the brand owner's call: deepening the money reds (light `#b91c1c` = 6.47/5.93,
-`#991b1b` = 8.31/7.62) so a small coloured label becomes legal at all; the dark theme has **no** same-family
-red that clears 4.5:1 on its panels.
+The recolour I had left "to the brand owner" is now **searched and declined on measurement**, not deferred:
+`tools/p04-hue-search.py` swept the red family in both lightness directions against contrast (4.5:1 on
+`bg.base` AND `bg.elevated`), buy separation, both outcome hues, and `alert.high`. Dark: **zero candidates**.
+Light: the first fully clean hex is `#7e1616` — 10.43:1 but a maroon, not the brand red — while the
+attractive `#b91c1c` fails separation (8.4 ΔE from `alert.high`, 9.9 from `outcome.no`). A recolour could
+only buy small coloured text by replacing the red with a different colour, so B is final.
+
+Adding that missing audit coverage first reported **7 findings, and all 7 were my audit model's fault**: I had
+written the forbidden compositions into the rows (a bare warning edge; a gold rule inside a compared pair),
+which `rules.no-alert-hue-inside-a-compared-pair` and `whale-flag-is-a-badge-not-a-dot` already ban. Corrected
+the model to the legal composition (warning = word + badge; ladder = words only) → 0 findings, 6/6 canaries,
+and the ladder's `outcome.no ↔ alert.high` ΔE 2.7 collision is now prevented by rule scope rather than row
+scope. Lesson kept: a gap in *coverage* looks identical to a clean result, which is why the canaries are
+asserted in both directions.
 
 ## P02 — Brand & identity · 2026-09-16
 
