@@ -26,6 +26,10 @@ finished that is not.
   is assertion B of the chaos test.
 - **Up/down crypto markets are not only 5-minute**: `-updown-5m-`, `-updown-15m-` (and 1h/4h/daily) exist, and
   the bucket's start timestamp is **in the slug**, so the lifecycle needs no lookup.
+- The Postgres migration chain is **0001, 0002, 0004, 0005, 0006**: there is no `0003`. Cosmetic (the migrator
+  applies in filename order and ledgers per name), and recorded because the P04 test that "checked" it asserted
+  `len == 4` — a snapshot of one day's work that went red for the wrong reason when P05 added a file. The
+  replacement assertion is "strictly increasing and unique" plus the P04 layers by name.
 - `feeType` now includes **`sports_fees_v3`** (P01 recorded `sports_fees_v2`): the fee enum is not closed, so
   fee handling must default to "unknown fee type → treat as charged, flag it", never "not in the list → free".
 - `version: "v1"` on a Gamma market row is Gamma's row-version marker, **not** the CLOB version. Nothing in
@@ -55,6 +59,9 @@ venue within one tick after reconnect and the resync machinery engaged 79 times;
 while the socket was dead (+127 rows). **Check C is inconclusive and the run is red because of it**: the
 reference query pages /trades by offset and reaches only ~50-100 s, so the first two thirds of the outage were
 never compared. That is recorded rather than smoothed over, and it is the first item below.
+
+Re-verified after P05 landed: 221 tests OK, P04 gate **55/55**, `tools/lint-rules.py` had to learn that
+`statistics` is stdlib (the core rule is about third-party dependencies, not the standard library).
 
 ## Still open for this phase
 1. Make check C conclusive: time-window the reference query in `venue_fills_in_window`, re-run the 300 s outage, and keep the run red until it passes.

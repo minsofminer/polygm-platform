@@ -42,10 +42,23 @@ def fresh_lite_db() -> sqlite3.Connection:
 
 
 class TestPostgresText(unittest.TestCase):
-    def test_all_four_layers_exist(self):
+    def test_the_migration_chain_is_complete_and_numbered_without_gaps(self):
+        """The P04 layers by name, plus the property that keeps the list from rotting as phases add files.
+
+        An earlier version asserted `len(names) == 4`, which is a snapshot of one day's work: it passed right
+        up to the moment P05 added a sixth file and then failed for the wrong reason. Sequence-without-gaps and
+        the named required layers are the actual invariants — a migration that exists is fine, a migration that
+        was skipped (0004 -> 0006) or duplicated is an outage waiting on someone's fresh database.
+        """
         names = sorted(p.name for p in PG.glob("*.sql"))
-        self.assertEqual(len(names), 4, names)
         self.assertTrue(all(re.match(r"^\d{4}_\w+\.sql$", n) for n in names), names)
+        nums = [int(n.split("_", 1)[0]) for n in names]
+        # Strictly increasing and unique is the invariant the migrator actually depends on (it applies in
+        # filename order and records a ledger per name). Contiguity is NOT asserted: 0003 was never created,
+        # and inventing a rule the tooling does not have would only make the next honest file addition red.
+        self.assertEqual(nums, sorted(set(nums)), "duplicate or out-of-order migration numbers: %s" % names)
+        for need in ("0001_core.sql", "0002_money.sql", "0004_product.sql", "0005_triggers.sql"):
+            self.assertIn(need, names, "%s is part of the P04 surface and cannot disappear" % need)
 
     def test_the_rationale_still_exists_in_the_comments(self):
         # paired with the check above: stripping comments must not mean the reasoning disappears from the
@@ -65,7 +78,9 @@ class TestPostgresText(unittest.TestCase):
                     "fee_micro_observed", "price_micro", "size_shares_micro", "amount_micro",
                     "shares_open_micro", "accrual_micro", "observed_price_micro"):
             self.assertIn(col, text, col)
-        SQL_WORDS = {"IS", "IN", "NOT", "CHECK", "NULL", "OR", "AND", "BETWEEN"}
+        # DESC/ASC belong here: a partial index over `(usd_notional_micro DESC, ts_ms DESC)` is an ordering,
+        # not a column definition, and reading it as one is how a checker invents a bug in correct SQL.
+        SQL_WORDS = {"IS", "IN", "NOT", "CHECK", "NULL", "OR", "AND", "BETWEEN", "DESC", "ASC"}
         for m in re.finditer(r"(\w+_micro)\s+([A-Za-z_][A-Za-z_0-9()]*)", text):
             if m.group(2).upper() in SQL_WORDS:
                 continue          # `CHECK (max_order_micro IS NOT NULL...)` is not a column definition

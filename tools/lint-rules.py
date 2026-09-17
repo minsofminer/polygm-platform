@@ -196,7 +196,10 @@ def r_v1_client(files: list[Path]) -> list[Finding]:
     return out
 
 
-CORE_STDLIB = {"polygm_core", "__future__", "dataclasses", "typing", "decimal", "math", "time", "json",
+# `statistics` joined for P05's z-score rule: the alternative is hand-rolled mean/pstdev inside the pure core,
+# which is more code to audit for no gain, and the rule's actual subject is third-party dependencies.
+CORE_STDLIB = {"polygm_core", "__future__", "dataclasses", "typing", "decimal", "math", "statistics", "time",
+               "json",
                "hashlib", "hmac", "os", "sys", "re", "enum", "collections", "itertools", "functools",
                "argparse", "sqlite3", "pathlib", "random", "heapq", "bisect", "copy", "abc", "contextlib",
                "dataclasses", "datetime", "string", "unicodedata"}
