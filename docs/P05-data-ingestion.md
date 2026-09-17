@@ -30,6 +30,11 @@ finished that is not.
   applies in filename order and ledgers per name), and recorded because the P04 test that "checked" it asserted
   `len == 4` — a snapshot of one day's work that went red for the wrong reason when P05 added a file. The
   replacement assertion is "strictly increasing and unique" plus the P04 layers by name.
+- The Postgres migration chain is **0001, 0002, 0004, 0005, 0006**: there is no `0003`. That is cosmetic (the
+  migrator applies in filename order and ledgers by name), and it is recorded here because the P04 test that
+  "checked" it asserted `len == 4` — a snapshot of one day's work that went red for the wrong reason when P05
+  added a file. The replacement assertion is "strictly increasing and unique", which is what the tooling relies
+  on, plus the P04 layers by name.
 - `feeType` now includes **`sports_fees_v3`** (P01 recorded `sports_fees_v2`): the fee enum is not closed, so
   fee handling must default to "unknown fee type → treat as charged, flag it", never "not in the list → free".
 - `version: "v1"` on a Gamma market row is Gamma's row-version marker, **not** the CLOB version. Nothing in
@@ -69,6 +74,9 @@ Re-verified after P05 landed: 221 tests OK, P04 gate **55/55**, `tools/lint-rule
   to re-verify in P06, before any order builder is written against them.
 - The edge cache on `/trades` is inconsistent under busting (once newer, once identical, minutes apart). The
   design already treats the WebSocket as the tape and REST as catch-up; nothing may depend on cache busting.
+
+Also re-verified after P05 landed: P04 gate **55/55**, and `tools/lint-rules.py` had to learn that
+`statistics` is stdlib (the core's "no third-party imports" rule is about dependencies, not the stdlib).
 
 ## Still open for this phase
 1. Make check C conclusive: time-window the reference query in `venue_fills_in_window`, re-run the 300 s outage, and keep the run red until it passes.
