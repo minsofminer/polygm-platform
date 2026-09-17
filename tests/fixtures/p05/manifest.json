@@ -1,0 +1,62 @@
+{
+ "captured_at": "2026-09-17T11:47:07Z",
+ "subject_market": {
+  "condition_id": "0xe8631fe27f1f527c954cb40359e7f972a46965fe912223af5a7bdef6d88f1eeb",
+  "question": "LoL: Top Esports vs Invictus Gaming - Game 2 Winner",
+  "tokens": [
+   "33904660606042133844773993584023232040580263293726590074743140707568557331269",
+   "106065153857027002349311311967299429721527879085138494276618740702775308321343"
+  ]
+ },
+ "files": {
+  "clob_book.json": "937ba6de8434bb30",
+  "clob_book.shape.json": "4326161a1342b6e7",
+  "clob_history.json": "cce694e02e462d90",
+  "clob_history.shape.json": "a7b47be44b307119",
+  "clob_market.json": "a18abb12cbbbcc26",
+  "clob_market.shape.json": "fd0758a909f6e38f",
+  "clob_midpoint.json": "5717439b1719cfc4",
+  "clob_midpoint.shape.json": "c5ef43858db34adb",
+  "clob_price_buy.json": "5d3b92d0bbf47d88",
+  "clob_price_buy.shape.json": "e7637ba316520040",
+  "clob_spread.json": "37aa5b75200bf761",
+  "clob_spread.shape.json": "5105d8b901918e57",
+  "data_activity.json": "01c44fbc68b5912c",
+  "data_activity.shape.json": "bac8bf15465fc9d9",
+  "data_positions.json": "e8953d4398bdba78",
+  "data_positions.shape.json": "72f58936fc9775db",
+  "data_trades.json": "c5cf57533cd01cbb",
+  "data_trades.shape.json": "33432cfdc4b18416",
+  "data_trades_busted.json": "e234ad445a837080",
+  "data_trades_busted.shape.json": "44370b77036c1441",
+  "gamma_events.json": "bb55d2b325fd503d",
+  "gamma_events.shape.json": "6e6173898ed0e6ab",
+  "gamma_markets.json": "31f811b1d063d843",
+  "gamma_markets.shape.json": "930f2c05f1128b3d",
+  "gamma_tags.json": "d4a48b786f44ea85",
+  "gamma_tags.shape.json": "a07567c9b8b067d6",
+  "lb_volume.json": "59d96d6c281f7e2f",
+  "lb_volume.shape.json": "ff75dcf416de51c3",
+  "ws_frames.json": "5c05b36205035aa7",
+  "ws_shapes.json": "54b361a7a4726660"
+ },
+ "sends": 14,
+ "retries": 0,
+ "ws": {
+  "seconds": 40.5,
+  "frames": 7,
+  "bytes": 7237,
+  "pings": 2,
+  "pongs": 2,
+  "event_types": {
+   "book": 2,
+   "price_change": 4
+  },
+  "handler_errors": [],
+  "sample_assets": [
+   "33904660606042133844773993584023232040580263293726590074743140707568557331269",
+   "106065153857027002349311311967299429721527879085138494276618740702775308321343"
+  ],
+  "closed_reason": "local close"
+ }
+}

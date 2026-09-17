@@ -1,0 +1,16 @@
+subject: LoL: Top Esports vs Invictus Gaming - Game 2 Winner
+         0xe8631fe27f1f527c (2 tokens, $2107563 24h)
+warming up for 45s (WS + REST both live)...
+KILLING THE WEBSOCKET at 1789646931 (for 300s). tape=63 rows, ws_msgs=5
+outage over (300s). reconnecting...
+
+chaos test — 2026-09-17T12:14:37Z
+  [PASS] A. stale indicator held for the whole outage (300 samples)
+  [PASS] B. no duplicate alerts (0 alerts, 0 rules fired)
+  [PASS] B2. the two clocks actually collided (live fills seen=2, already-booked=0, durable merges=10412)
+  [FAIL] C. no missed large fills (>= $1000: 0 of 0 venue rows in the window)   -> the venue reported no >= $1000 fills in the window: raise --kill-seconds rather than trusting this line
+  [PASS] D. book resynced to the venue within one tick after reconnect
+  [PASS] D2. the resync machinery engaged (resyncs=79, gap detections=0)
+  [PASS] E. the tape kept filling from REST while the socket was dead (+127 rows)
+
+1 CHECK(S) FAILED

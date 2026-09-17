@@ -1,0 +1,11 @@
+[
+ "<20 rows>",
+ {
+  "createdAt": "str",
+  "id": "str",
+  "label": "str",
+  "requiresTranslation": "bool",
+  "slug": "str",
+  "updatedAt": "str"
+ }
+]

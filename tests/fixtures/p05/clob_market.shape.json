@@ -1,0 +1,46 @@
+{
+ "accepting_order_timestamp": "str",
+ "accepting_orders": "bool",
+ "active": "bool",
+ "archived": "bool",
+ "closed": "bool",
+ "condition_id": "str",
+ "description": "str",
+ "enable_order_book": "bool",
+ "end_date_iso": "str",
+ "fpmm": "str",
+ "game_start_time": "str",
+ "icon": "str",
+ "image": "str",
+ "is_50_50_outcome": "bool",
+ "maker_base_fee": "int",
+ "market_slug": "str",
+ "minimum_order_size": "int",
+ "minimum_tick_size": "float",
+ "neg_risk": "bool",
+ "neg_risk_market_id": "str",
+ "neg_risk_request_id": "str",
+ "notifications_enabled": "bool",
+ "question": "str",
+ "question_id": "str",
+ "rewards": {
+  "max_spread": "float",
+  "min_size": "int",
+  "rates": "NoneType"
+ },
+ "seconds_delay": "int",
+ "tags": [
+  "<4 rows>",
+  "str"
+ ],
+ "taker_base_fee": "int",
+ "tokens": [
+  "<2 rows>",
+  {
+   "outcome": "str",
+   "price": "float",
+   "token_id": "str",
+   "winner": "bool"
+  }
+ ]
+}

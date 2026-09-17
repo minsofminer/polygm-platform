@@ -1,0 +1,33 @@
+[
+ "<33 rows>",
+ {
+  "asset": "str",
+  "avgPrice": "float",
+  "cashPnl": "float",
+  "conditionId": "str",
+  "curPrice": "int",
+  "currentValue": "int",
+  "endDate": "str",
+  "entryFeesUsdc": "int",
+  "eventId": "str",
+  "eventSlug": "str",
+  "grossInitialValue": "float",
+  "icon": "str",
+  "initialValue": "float",
+  "mergeable": "bool",
+  "negativeRisk": "bool",
+  "oppositeAsset": "str",
+  "oppositeOutcome": "str",
+  "outcome": "str",
+  "outcomeIndex": "int",
+  "percentPnl": "int",
+  "percentRealizedPnl": "int",
+  "proxyWallet": "str",
+  "realizedPnl": "int",
+  "redeemable": "bool",
+  "size": "int",
+  "slug": "str",
+  "title": "str",
+  "totalBought": "int"
+ }
+]

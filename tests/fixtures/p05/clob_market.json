@@ -1,0 +1,53 @@
+{
+ "enable_order_book": true,
+ "active": true,
+ "closed": false,
+ "archived": false,
+ "accepting_orders": true,
+ "accepting_order_timestamp": "2026-09-13T07:41:02Z",
+ "minimum_order_size": 5,
+ "minimum_tick_size": 0.001,
+ "condition_id": "0xe8631fe27f1f527c954cb40359e7f972a46965fe912223af5a7bdef6d88f1eeb",
+ "question_id": "0x65d256bd218ef9a37532659f616a8e780e444a0cb9d9545c3fecb1aa3e7d5bf0",
+ "question": "LoL: Top Esports vs Invictus Gaming - Game 2 Winner",
+ "description": "This market refers to the LoL Upper bracket final match between Top Esports and Invictus Gaming in the LPL Regional Finals Playoffs, initially scheduled for September 17, 2026 at 5:00 AM ET.\n\nThis market will resolve to \"Top Esports\" if Top Esports win Game 2 against Invictus Gaming.\n\nThis market will resolve to \"Invictus Gaming\" if Invictus Gaming win Game 2 against Top Esports.\n\nIf the match begins but is not completed, and Game 2 is concluded with a winner determined, this market will resolve based on the completed Game 2. \n\nIf Game 2 is not completed for any reason, this market will resolve 50-50. \n\nIf the match is canceled (not played at all), this market will resolve 50-50.\n\nIf the match is postponed, it must be rescheduled to a start time on or before October 1, 2026 at 11:59 PM ET (14 calendar days after the originally scheduled start of September 17, 2026 at 5:00 AM ET). If, by that deadline, the most recently announced rescheduled start time is on or before the deadline, this market resolves based on the result of the match as played. Otherwise, this market resolves 50-50, regardless of whether the match is subsequently played.\n\nThe resolution source for this market will be official information from https://gol.gg/esports/home. However, if https://gol.gg/esports/home has not published final results within 2 hours after the event\u2019s conclusion, a consensus of credible reporting may be used instead including video evidence.",
+ "market_slug": "lol-tes-ig1-2026-09-17-game2",
+ "end_date_iso": "2026-09-17T00:00:00Z",
+ "game_start_time": "2026-09-17T09:00:00Z",
+ "seconds_delay": 1,
+ "fpmm": "",
+ "maker_base_fee": 1000,
+ "taker_base_fee": 1000,
+ "notifications_enabled": true,
+ "neg_risk": false,
+ "neg_risk_market_id": "",
+ "neg_risk_request_id": "",
+ "icon": "https://polymarket-upload.s3.us-east-2.amazonaws.com/league-of-legends-61a4f083a6.png",
+ "image": "https://polymarket-upload.s3.us-east-2.amazonaws.com/league-of-legends-61a4f083a6.png",
+ "rewards": {
+  "rates": null,
+  "min_size": 50,
+  "max_spread": 4.5
+ },
+ "is_50_50_outcome": false,
+ "tokens": [
+  {
+   "token_id": "33904660606042133844773993584023232040580263293726590074743140707568557331269",
+   "outcome": "Top Esports",
+   "price": 0.9995,
+   "winner": false
+  },
+  {
+   "token_id": "106065153857027002349311311967299429721527879085138494276618740702775308321343",
+   "outcome": "Invictus Gaming",
+   "price": 0.0005,
+   "winner": false
+  }
+ ],
+ "tags": [
+  "Sports",
+  "Esports",
+  "league of legends",
+  "Games"
+ ]
+}

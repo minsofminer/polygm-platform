@@ -1,0 +1,20 @@
+{
+ "asks": [
+  "<0 rows>"
+ ],
+ "asset_id": "str",
+ "bids": [
+  "<63 rows>",
+  {
+   "price": "str",
+   "size": "str"
+  }
+ ],
+ "hash": "str",
+ "last_trade_price": "str",
+ "market": "str",
+ "min_order_size": "str",
+ "neg_risk": "bool",
+ "tick_size": "str",
+ "timestamp": "str"
+}

@@ -1,0 +1,12 @@
+[
+ "<25 rows>",
+ {
+  "amount": "float",
+  "bio": "str",
+  "name": "str",
+  "profileImage": "str",
+  "profileImageOptimized": "str",
+  "proxyWallet": "str",
+  "pseudonym": "str"
+ }
+]

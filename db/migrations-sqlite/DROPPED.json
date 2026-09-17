@@ -12,6 +12,7 @@
     "referral_events"
   ],
   "tables": [
+    "alert_deliveries",
     "alert_fires",
     "alert_rules",
     "audit_log",
@@ -27,7 +28,10 @@
     "fills",
     "flag_audit",
     "idempotency_keys",
+    "ingest_cursors",
     "kill_switch_state",
+    "market_meta_versions",
+    "market_rollups",
     "markets",
     "order_intents",
     "orders",
@@ -35,10 +39,16 @@
     "position_snapshots",
     "referral_events",
     "referrals",
+    "signal_state",
+    "signals",
     "subscriptions",
+    "tape_fills",
     "tape_trades",
     "tokens",
     "users",
+    "wallet_label_history",
+    "wallet_labels",
+    "wallet_rollups",
     "watchlist_items",
     "watchlists"
   ],
@@ -102,6 +112,10 @@
         "PG-only statement: CREATE TRIGGER id_length_intents BEFORE INSERT ON order_intents FOR EACH ROW E",
         "PG-only statement: ALTER TABLE order_intents ADD CONSTRAINT notional_tick_aligned CHECK ("
       ],
+      "check_clauses_reordered": []
+    },
+    "0006_ingest.sql": {
+      "dropped": [],
       "check_clauses_reordered": []
     }
   }

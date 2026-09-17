@@ -1,0 +1,24 @@
+[
+ "<200 rows>",
+ {
+  "asset": "str",
+  "bio": "str",
+  "conditionId": "str",
+  "eventSlug": "str",
+  "icon": "str",
+  "name": "str",
+  "outcome": "str",
+  "outcomeIndex": "int",
+  "price": "float",
+  "profileImage": "str",
+  "profileImageOptimized": "str",
+  "proxyWallet": "str",
+  "pseudonym": "str",
+  "side": "str",
+  "size": "float",
+  "slug": "str",
+  "timestamp": "int",
+  "title": "str",
+  "transactionHash": "str"
+ }
+]

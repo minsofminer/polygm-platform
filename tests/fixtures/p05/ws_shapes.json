@@ -1,0 +1,38 @@
+{
+ "book": {
+  "asks": [
+   "<0 rows>"
+  ],
+  "asset_id": "str",
+  "bids": [
+   "<63 rows>",
+   {
+    "price": "str",
+    "size": "str"
+   }
+  ],
+  "event_type": "str",
+  "hash": "str",
+  "last_trade_price": "str",
+  "market": "str",
+  "tick_size": "str",
+  "timestamp": "str"
+ },
+ "price_change": {
+  "event_type": "str",
+  "market": "str",
+  "price_changes": [
+   "<2 rows>",
+   {
+    "asset_id": "str",
+    "best_ask": "str",
+    "best_bid": "str",
+    "hash": "str",
+    "price": "str",
+    "side": "str",
+    "size": "str"
+   }
+  ],
+  "timestamp": "str"
+ }
+}

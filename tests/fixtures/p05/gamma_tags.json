@@ -1,0 +1,173 @@
+[
+ {
+  "id": "101867",
+  "label": "product marekt fit",
+  "slug": "product-marekt-fit",
+  "createdAt": "2025-02-18T16:58:25.464578Z",
+  "updatedAt": "2026-04-17T17:23:11.67487Z",
+  "requiresTranslation": false
+ },
+ {
+  "id": "1512",
+  "label": "caitlin clark",
+  "slug": "caitlin-clark",
+  "publishedAt": "2024-02-28 22:13:06.246+00",
+  "createdAt": "2024-02-28T22:13:09.166Z",
+  "updatedAt": "2026-04-17T17:23:11.676843Z",
+  "requiresTranslation": false
+ },
+ {
+  "id": "100601",
+  "label": "virgins",
+  "slug": "virgins",
+  "createdAt": "2024-09-20T00:05:07.009054Z",
+  "updatedAt": "2026-04-17T17:23:11.678298Z",
+  "requiresTranslation": false
+ },
+ {
+  "id": "101025",
+  "label": "Viktoria Plzen",
+  "slug": "viktoria-plzen",
+  "createdAt": "2024-10-22T03:44:31.174556Z",
+  "updatedAt": "2026-04-17T17:23:11.679752Z",
+  "requiresTranslation": false
+ },
+ {
+  "id": "101457",
+  "label": "Jerry After Dark",
+  "slug": "jerry-after-dark",
+  "createdAt": "2024-12-10T22:54:59.949671Z",
+  "updatedAt": "2026-04-17T17:23:11.681137Z",
+  "requiresTranslation": false
+ },
+ {
+  "id": "101655",
+  "label": "Wildfire",
+  "slug": "wildfire",
+  "forceShow": false,
+  "createdAt": "2025-01-08T13:49:59.932998Z",
+  "updatedAt": "2026-04-17T17:23:11.682475Z",
+  "requiresTranslation": false
+ },
+ {
+  "id": "100344",
+  "label": "House Races",
+  "slug": "house-races",
+  "forceShow": false,
+  "createdAt": "2024-08-16T02:33:30.896925Z",
+  "updatedAt": "2026-04-17T17:23:11.683817Z",
+  "requiresTranslation": false
+ },
+ {
+  "id": "100392",
+  "label": "redbull",
+  "slug": "redbull",
+  "createdAt": "2024-08-28T16:46:31.181235Z",
+  "updatedAt": "2026-04-17T17:23:11.685086Z",
+  "requiresTranslation": false
+ },
+ {
+  "id": "100257",
+  "label": "keith gill",
+  "slug": "keith-gill",
+  "createdAt": "2024-06-06T17:53:40.653839Z",
+  "updatedAt": "2026-04-17T17:23:11.686459Z",
+  "requiresTranslation": false
+ },
+ {
+  "id": "733",
+  "label": "haniyeh",
+  "slug": "haniyeh",
+  "publishedAt": "2023-12-13 20:08:36.626+00",
+  "createdAt": "2023-12-13T20:08:36.632Z",
+  "updatedAt": "2026-04-17T17:23:11.689102Z",
+  "requiresTranslation": false
+ },
+ {
+  "id": "101896",
+  "label": "bat",
+  "slug": "bat",
+  "createdAt": "2025-02-21T20:05:34.222246Z",
+  "updatedAt": "2026-04-17T17:23:11.690469Z",
+  "requiresTranslation": false
+ },
+ {
+  "id": "100626",
+  "label": "Europa League",
+  "slug": "europa-league",
+  "createdAt": "2024-09-23T18:05:38.296993Z",
+  "updatedAt": "2026-04-17T17:23:11.691802Z",
+  "requiresTranslation": false
+ },
+ {
+  "id": "101026",
+  "label": "FDIC",
+  "slug": "fdic",
+  "createdAt": "2024-10-22T13:24:52.685946Z",
+  "updatedAt": "2026-04-17T17:23:11.693099Z",
+  "requiresTranslation": false
+ },
+ {
+  "id": "757",
+  "label": "legal cases",
+  "slug": "legal-cases",
+  "publishedAt": "2023-12-19 19:50:47.547+00",
+  "createdAt": "2023-12-19T19:50:48.112Z",
+  "updatedAt": "2026-04-17T17:23:11.695683Z",
+  "requiresTranslation": false
+ },
+ {
+  "id": "933",
+  "label": "federal government",
+  "slug": "federal-government",
+  "publishedAt": "2024-01-29 18:21:24.869+00",
+  "createdAt": "2024-01-29T18:21:24.892Z",
+  "updatedAt": "2026-04-17T17:23:11.697056Z",
+  "requiresTranslation": false
+ },
+ {
+  "id": "102136",
+  "label": "Timoth\u00e9e Chalamet",
+  "slug": "timothee-chalamet",
+  "createdAt": "2025-05-15T16:30:05.353905Z",
+  "updatedAt": "2026-04-17T17:16:07.509015Z",
+  "requiresTranslation": false
+ },
+ {
+  "id": "790",
+  "label": "controversies",
+  "slug": "controversies",
+  "publishedAt": "2023-12-27 18:38:17.497+00",
+  "createdAt": "2023-12-27T18:38:17.512Z",
+  "updatedAt": "2026-04-17T17:23:11.69836Z",
+  "requiresTranslation": false
+ },
+ {
+  "id": "103813",
+  "label": "Major League Cricket",
+  "slug": "major-league-cricket",
+  "forceShow": false,
+  "createdAt": "2026-02-18T21:35:05.149384Z",
+  "updatedAt": "2026-04-17T17:23:11.699737Z",
+  "isCarousel": false,
+  "requiresTranslation": false
+ },
+ {
+  "id": "1571",
+  "label": "popularity",
+  "slug": "popularity",
+  "publishedAt": "2024-03-05 23:28:09.298+00",
+  "createdAt": "2024-03-05T23:28:09.381Z",
+  "updatedAt": "2026-04-17T17:23:11.70108Z",
+  "requiresTranslation": false
+ },
+ {
+  "id": "945",
+  "label": "michelle obama",
+  "slug": "michelle-obama",
+  "publishedAt": "2024-02-01 19:15:00.647+00",
+  "createdAt": "2024-02-01T19:15:00.664Z",
+  "updatedAt": "2026-04-17T17:23:11.702362Z",
+  "requiresTranslation": false
+ }
+]
