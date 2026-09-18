@@ -55,6 +55,12 @@ PATTERNS: tuple[tuple[str, "re.Pattern[str]", str], ...] = (
      lambda m: m.group(1) + REDACTED),
     ("email", re.compile(r"([A-Za-z0-9._%+\-])[A-Za-z0-9._%+\-]*(@[A-Za-z0-9.\-]+\.[A-Za-z]{2,})"),
      r"\1" + REDACTED + r"\2"),
+    # A connection URI in a log line is the most common accidental credential in a product with a database, and
+    # `tools/ci-log-scan.py` already hunts the shape — the pair was inconsistent, so the scanner could refuse a
+    # build for a line the redactor had cheerfully passed through. Only the password part is removed: the host
+    # and the pool name are the two things an operator needs to see at 3am.
+    ("uri_password", re.compile(r"(?i)\b([a-z][a-z0-9+.-]*://[^/\s:@]*:)([^@\s/]{3,})(@)"),
+     lambda m: m.group(1) + REDACTED + m.group(3)),
     ("address", re.compile(r"\b0x[0-9a-fA-F]{40}\b"), lambda m: m.group(0)[:6] + "\u2026" + m.group(0)[-4:]),
     ("phone", re.compile(r"(?<!\d)\+\d[\d \-]{7,14}\d(?!\d)"), "[phone]"),
     ("seed_words", re.compile(r"(?im)^\s*((?:[a-z]{3,8}[ \t]){11,23}[a-z]{3,8})\s*$"), "[wordlist-redacted]"),
@@ -102,6 +108,8 @@ def scan(text: str) -> list[str]:
         hits.append("named_secret")
     if re.search(r"\b\d{4,12}:[A-Za-z0-9_-]{35,}\b", t):
         hits.append("bot_token")
+    if re.search(r"://[^/\s@:]+:[^@\s/}*]{3,}@", t):
+        hits.append("uri_password")
     return hits
 
 

@@ -286,9 +286,13 @@ def revocation_throughput(total: int = REVOCATION_TARGET_KEYS, *, batch: int = R
     wall = int(calls) * int(per_call_ms) // max(1, int(concurrency))
     return {"keys": int(total), "batches": int(batch), "calls": int(calls), "per_call_ms": int(per_call_ms),
             "concurrency": int(concurrency), "wall_ms": int(wall), "wall_s": round(wall / 1000, 1),
-            "bounded_by": "the provider's revoke rate limit ([UNVERIFIED] until P13); if it is 1 call/s and "
-                          "batch=1, this arithmetic is a fantasy and the answer is %.1f hours"
-                          % (calls * 1000 / 3600000.0)}
+            # The second number is the honest one, and it is deliberately *not* `calls`: the provider's limit is
+            # per key at many wallets, so at 1 call/s the wall clock is one call per wallet regardless of how
+            # tidily our own batching looks. Reporting `calls` here (as an earlier draft did) printed "0.0 hours"
+            # next to a 10,000-key revocation, which is the kind of number that gets a plan approved.
+            "bounded_by": "the provider's revoke rate limit ([UNVERIFIED] until P13); if it is 1 call/s and one "
+                          "call per key, this arithmetic is a fantasy and the answer is %.1f hours"
+                          % (int(total) * 1000 / 3_600_000.0)}
 
 
 def compromise_steps(revoked_sessions: int = 0) -> tuple[str, ...]:

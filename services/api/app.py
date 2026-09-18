@@ -621,7 +621,16 @@ def _principal(request: Request) -> tuple[str | None, dict | None, JSONResponse 
     """
     rid = request.state.request_id
     tok = _bearer(request)
-    op = "%s %s" % (request.method, request.scope.get("route_path") or request.url.path)
+    # The operation must be the route *template*, not the URL. The table keys rows by `/v1/orders/intents/{intent_id}`
+    # because that is the thing a reviewer can check; matching a concrete `/v1/orders/intents/0xabc…` against it
+    # would either miss (and a miss here is a 500 on every authenticated call to any parameterised route) or
+    # require the table to hold a regex per identifier shape, which is how authorisation tables rot.
+    # `scope["route"]` is what the router settled on, so it is right even for a mounted or redirected path; the
+    # two later fallbacks exist because a hand-built Request in a test has no route at all.
+    _route = request.scope.get("route")
+    _path = (getattr(_route, "path_format", None) or getattr(_route, "path", None)
+             or request.scope.get("route_path") or request.url.path)
+    op = "%s %s" % (request.method, _path)
     if tok:
         row = SEC.resolve_session(_hash_token(tok), at=_now_ms())
         if not row:
@@ -1457,6 +1466,11 @@ def admin_revoke_sessions(request: Request, body: dict = Body(...)):
     g = _keys.break_glass_ok(list(body.get("approvers") or []), reason=str(body.get("reason") or ""),
                              now_ms=_now_ms())
     if not g["ok"]:
+        # The *refusal* is the event worth keeping. A successful break-glass is visible in every downstream
+        # effect; an attempt that was denied by the two-approver rule is invisible unless we write it, and a
+        # denied attempt by someone holding a valid admin token is the most informative row in this table.
+        SEC.auth_event("", "break_glass_denied", at=_now_ms(),
+                       detail={**g["denied"], "approvers": body.get("approvers"), "rid": rid})
         return err("BREAK_GLASS_DENIED", rid, detail="; ".join(g["denied"].values())[:200])
     scope = str(body.get("scope") or "all")
     target = str(body.get("userId") or "") if scope == "user" else None

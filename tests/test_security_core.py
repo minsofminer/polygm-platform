@@ -654,8 +654,9 @@ class TestKeyPolicyAndEnvelope(unittest.TestCase):
         slow = keys.revocation_throughput(batch=1, concurrency=1)
         self.assertEqual(slow["calls"], 10_000)
         self.assertEqual(slow["wall_s"], 1200.0, "our own arithmetic is 20 minutes at one call per 120 ms")
-        self.assertIn("hours", slow["bounded_by"], "and the provider's rate limit is what turns 20 minutes into "
-                                                   "hours: the number that matters is theirs, not ours")
+        self.assertIn("2.8 hours", plan["bounded_by"], "the plan's own sentence must quote the provider-limited "
+                                                      "answer for the *default* batch, not for a hand-made one")
+        self.assertIn("hours", slow["bounded_by"])
 
     def test_the_export_gate_refuses_the_four_situations_that_make_a_user_poorer(self):
         ok, why = keys.export_gate(state="funded", open_orders=0, unfinished_intents=0, pending_withdrawal=False,
@@ -876,10 +877,19 @@ class TestAuthzRegistry(unittest.TestCase):
         self.assertTrue(authz.require(admin_op, user_id="u", is_admin=True, at_ms=NOW).allowed)
         denied = authz.require(admin_op, user_id="u", at_ms=NOW)
         self.assertEqual((denied.allowed, denied.status, denied.code), (False, 403, "ADMIN_REQUIRED"))
-        service_op = next((op for op, (lv, _c) in authz.LEVELS_TABLE.items() if lv == authz.SERVICE), None)
-        if service_op:
-            self.assertEqual(authz.require(service_op, user_id="u", at_ms=NOW).code, "SERVICE_REQUIRED")
-            self.assertTrue(authz.require(service_op, is_service=True, at_ms=NOW).allowed)
+        # No HTTP route is service-level yet: the executor is a queue consumer (P06), not a listener, so the
+        # level exists in the vocabulary and in `check_service_token` but has nothing to guard. Rather than let
+        # that become a vacuous pass, the branch is exercised through a row we own for exactly one call.
+        probe = "POST /v1/_test/service-only"
+        self.assertIsNone(authz.level_for(probe))
+        authz.LEVELS_TABLE[probe] = (authz.SERVICE, "")
+        try:
+            self.assertEqual(authz.require(probe, user_id="u", at_ms=NOW).code, "SERVICE_REQUIRED")
+            self.assertEqual(authz.require(probe, at_ms=NOW).status, 403)
+            self.assertTrue(authz.require(probe, is_service=True, at_ms=NOW).allowed)
+        finally:
+            del authz.LEVELS_TABLE[probe]
+        self.assertIsNone(authz.level_for(probe), "the probe row leaked into the registry every route is graded on")
 
     def test_object_level_authorisation_answers_404_because_403_is_an_oracle(self):
         for op, (level, _c) in authz.LEVELS_TABLE.items():

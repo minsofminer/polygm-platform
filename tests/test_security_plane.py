@@ -727,6 +727,39 @@ class TestHeadersAndRedaction(RouteBase):
         self.assertLess(len(short), len(addr))
 
 
+class TestOperationIsTheTemplate(RouteBase):
+    """The bug the P07 gate found: an authorised user, a parameterised route, a 500.
+
+    `_principal` derived the operation from the request URL, so `GET /v1/orders/intents/0xabc` was looked up in a
+    table keyed by `/v1/orders/intents/{intent_id}`, missed, and answered 500 AUTHZ_UNDECLARED. Every served route
+    whose path carries an identifier was broken for any caller holding a real session. The dev-header path most of
+    this suite exercises never reached that code, which is how ~600 green tests missed it: the honest lesson is
+    that a fixture which bypasses authentication cannot catch an authorisation bug, and the P06 tests were
+    written before P07 put a gate in that path.
+    """
+
+    def _intent(self, uid: str, intent_id: str) -> None:
+        self.con.execute(
+            "INSERT INTO order_intents (id, user_id, market_id, token_id, side, price_micro, size_micro, "
+            "notional_micro, state, idempotency_key, created_ms, updated_ms) "
+            "VALUES (?,?,'0xmarket','1234','BUY',500000,2000000,1000000,'submitted',?,?,?)",
+            (intent_id, uid, "k-" + intent_id, self.now, self.now))
+
+    def test_authenticated_call_to_a_parameterised_route_is_authorised_not_undeclared(self):
+        r = self.client.get("/v1/orders/intents/does-not-exist", headers=self.bearer())
+        self.assertNotEqual(r.status_code, 500, r.text)
+        self.assertEqual(r.status_code, 404, r.text)
+        self.assertEqual((r.json().get("error") or {}).get("code"), "NOT_FOUND")
+
+    def test_a_second_user_with_a_valid_session_cannot_read_the_first_users_intent(self):
+        other = self.new_user()
+        self._intent(self.uid, "0xintent1")
+        mine = self.client.get("/v1/orders/intents/0xintent1", headers=self.bearer())
+        self.assertEqual(mine.status_code, 200, mine.text)
+        theirs = self.client.get("/v1/orders/intents/0xintent1", headers=self.bearer_for(other))
+        self.assertEqual((theirs.json().get("error") or {}).get("code"), "NOT_FOUND")
+        self.assertNotIn("0xintent1", theirs.text)
+
 class TestAuthzTable(RouteBase):
     app_name = "sec-authz"
 
