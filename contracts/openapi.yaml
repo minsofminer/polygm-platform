@@ -1116,7 +1116,9 @@ paths:
       summary: Delete a saved destination (never while it is inside its hold)
       description: 'Removing a destination you cannot yet use is refused, and that refusal is the control: an attacker
         who adds their own address uses deletion to erase the evidence before the first payout clears. The hold has
-        to outlast the attacker''s patience, not the session. '
+        to outlast the attacker''s patience, not the session. A verified second factor is required for the removal
+        itself, for the same reason it is required to add one: the caller deleting a destination is changing where
+        the account''s money can go. '
       operationId: removeAddress
       x-auth: user-owns-resource
       x-rate-class: auth
@@ -1137,6 +1139,9 @@ paths:
                   type: string
                   minLength: 4
                   maxLength: 64
+                code:
+                  type: string
+                  pattern: ^[0-9]{6}$
       responses:
         '200':
           description: see the summary; every field is derived from a row, no token material

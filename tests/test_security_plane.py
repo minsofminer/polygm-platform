@@ -456,7 +456,20 @@ class TestTotpAndAddresses(RouteBase):
         self.h = self.bearer()
 
     # A factor's code is single-use per window, so a fixture that spends one code per *authorised action* is
-    # not a convenience - it is the rule under test. `arm` returns the mint-next-code callable for that account.
+    # not a convenience - it is the rule under test. `arm` returns the mint-next-code callable for that account,
+    # and `_advance_clock` moves the server into the next window when a test legitimately needs two money
+    # actions (add then remove): the alternative is a 30-second sleep per test, or testing one of them through
+    # the store and learning nothing about the route.
+    def _advance_clock(self, windows: int = 1) -> None:
+        if not hasattr(self, "_orig_now_ms"):
+            self._orig_now_ms = self.app._now_ms
+            self.addCleanup(setattr, self.app, "_now_ms", self._orig_now_ms)
+            self._shift_ms = 0
+        from polygm_core.security import totp
+        self._shift_ms += int(windows) * totp.PERIOD_S * 1000
+        base = self._orig_now_ms
+        self.app._now_ms = lambda: base() + self._shift_ms
+
     @staticmethod
     def _code(secret, steps):
         from polygm_core.security import totp
@@ -539,18 +552,40 @@ class TestTotpAndAddresses(RouteBase):
         added = self.client.post("/v1/wallet/withdrawal-addresses/add", json={"address": addr, "code": nxt()},
                                 headers=self.h)
         self.assertEqual(added.status_code, 200, added.text)
+        self._advance_clock()
         self.assert_error(self.client.post("/v1/wallet/withdrawal-addresses/remove",
-                                           json={"addressId": added.json()["id"]}, headers=self.h),
+                                           json={"addressId": added.json()["id"], "code": nxt()}, headers=self.h),
                           "REMOVE_DURING_COOLDOWN", 409)
         self.assertEqual(self.SEC.one("SELECT id FROM withdrawal_addresses WHERE id=?",
                                      (added.json()["id"],))["id"], added.json()["id"],
                          "a held destination was deleted, which is how a takeover cleans up behind itself")
         self.con.execute("UPDATE withdrawal_addresses SET added_ms=?, usable_ms=? WHERE id=?",
                          (self.now - 90_000, self.now - 1, added.json()["id"]))
-        after = self.client.post("/v1/wallet/withdrawal-addresses/remove", json={"addressId": added.json()["id"]},
-                                 headers=self.h)
+        self._advance_clock()
+        after = self.client.post("/v1/wallet/withdrawal-addresses/remove",
+                                 json={"addressId": added.json()["id"], "code": nxt()}, headers=self.h)
         self.assertEqual(after.status_code, 200, after.text)
         self.assertEqual(self.client.get("/v1/wallet/withdrawal-addresses", headers=self.h).json()["items"], [])
+
+    def test_removing_a_destination_also_needs_the_factor(self):
+        """The gap this phase's own gate found: `totp.REQUIRED_FOR` names `address_remove`, and the route did not.
+
+        A declaration in a module that no caller enforces is documentation, and the documentation was already in
+        the contract as a 403 on this path. So the route now asks, and the check is that a session alone buys
+        nothing: without a code the call is refused *before* the row is looked up.
+        """
+        self.arm(self.h, skip_proof=True)
+        self.assert_error(self.client.post("/v1/wallet/withdrawal-addresses/remove",
+                                          json={"addressId": "w_whatever"}, headers=self.h), "TOTP_REQUIRED", 403)
+        nxt = self.arm(self.h)
+        added = self.client.post("/v1/wallet/withdrawal-addresses/add",
+                                 json={"address": "0x" + "ef" * 20, "code": nxt()}, headers=self.h)
+        self.assertEqual(added.status_code, 200, added.text)
+        # A wrong code is refused, and the row survives: the factor is a gate on this call, not a suggestion.
+        self.assert_error(self.client.post("/v1/wallet/withdrawal-addresses/remove",
+                                          json={"addressId": added.json()["id"], "code": "000000"}, headers=self.h),
+                          "TOTP_INVALID", 403)
+        self.assertIsNotNone(self.SEC.one("SELECT id FROM withdrawal_addresses WHERE id=?", (added.json()["id"],)))
 
     def test_the_destination_cap_holds_and_no_row_can_skip_the_cooldown(self):
         nxt = self.arm(self.h)
@@ -590,16 +625,17 @@ class TestTotpAndAddresses(RouteBase):
         self.assertEqual(mine.json()["shared_with"], [other], "the overlap is invisible to support")
         self.assertIn("address_shared", [x["kind"] for x in self.SEC.rows(
             "SELECT kind FROM auth_events WHERE kind='address_shared'")])
+        self._advance_clock()
         self.assert_error(self.client.post("/v1/wallet/withdrawal-addresses/remove",
-                                           json={"addressId": mine.json()["id"]}, headers=oh),
+                                           json={"addressId": mine.json()["id"], "code": nxt_them()}, headers=oh),
                           "NO_SUCH_RESOURCE", 404)
         self.assertTrue(self.SEC.one("SELECT id FROM withdrawal_addresses WHERE id=? AND removed_ms IS NULL",
                                      (mine.json()["id"],)), "the other account deleted my destination")
 
     def test_an_unknown_destination_id_is_a_404_not_a_403(self):
-        self.arm(self.h)
+        nxt = self.arm(self.h)
         self.assert_error(self.client.post("/v1/wallet/withdrawal-addresses/remove",
-                                           json={"addressId": "waddr_nope"}, headers=self.h),
+                                           json={"addressId": "waddr_nope", "code": nxt()}, headers=self.h),
                           "NO_SUCH_RESOURCE", 404)
 
 
@@ -725,6 +761,33 @@ class TestHeadersAndRedaction(RouteBase):
         self.assertIn("0x", short)
         self.assertNotIn("ab" * 20, short)
         self.assertLess(len(short), len(addr))
+
+
+class TestDrillRecords(RouteBase):
+    app_name = "sec-drills"     # its own plane: two classes on one name share one module and fight over its DB
+    """`record_drill` refuses a failure with no step named, and the table refuses an edit afterwards.
+
+    Both halves are pinned because the mutation harness killed neither at first: the guard is two lines of `if`
+    in the store, and a drill record that can be softened after the fact is a drill record that will be.
+    """
+
+    def test_a_failed_drill_must_name_the_step_that_failed(self):
+        with self.assertRaises(ValueError):
+            self.SEC.record_drill(kind="key_compromise", started_ms=self.now, finished_ms=self.now + 1,
+                                 verdict="fail", measured_ms=5)
+        ok = self.SEC.record_drill(kind="key_compromise", started_ms=self.now, finished_ms=self.now + 1,
+                                  verdict="fail", measured_ms=5, failed_step="provider rate limit hit at 60%")
+        self.assertEqual(ok["verdict"], "fail")
+        self.assertEqual(self.SEC.latest_drill("key_compromise")["failed_step"],
+                         "provider rate limit hit at 60%")
+
+    def test_the_record_cannot_be_softened_after_the_fact(self):
+        self.SEC.record_drill(kind="key_compromise", started_ms=self.now, finished_ms=self.now + 1,
+                             verdict="pass", measured_ms=5)
+        with self.assertRaises(Exception):
+            self.con.execute("UPDATE drill_records SET notes='it went fine' WHERE id=1")
+        with self.assertRaises(Exception):
+            self.con.execute("DELETE FROM drill_records")
 
 
 class TestOperationIsTheTemplate(RouteBase):

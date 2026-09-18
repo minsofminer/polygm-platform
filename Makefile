@@ -12,7 +12,8 @@ ENVFILE := $(ROOT)/.env
 .PHONY: help dev dev-core down logs test test-verbose lint typecheck migrate seed seed-sql gate \
         gate-mutate check sql-sqlite sql-sqlite-check openapi openapi-selftest clean doctor probe \
         p01 p02 p03 p04 p05 gate-p05 gate-p05-offline gate-p05-mutate chaos-p05 seed-rules envelope \
-        p06 gate-p06 gate-p06-offline gate-p06-mutate chaos-p06 drill-p06
+        p06 gate-p06 gate-p06-offline gate-p06-mutate chaos-p06 drill-p06 \
+        p07 gate-p07 gate-p07-offline gate-p07-mutate drill-p07
 
 help:
 	@printf '%s\n' \
@@ -177,6 +178,28 @@ drill-p06:          ## engage the switch against running processes and measure w
 	@mkdir -p docs/verification
 	$(PY) tools/p06-drill.py --record docs/verification/P06-drill.txt
 
+# P07 · the security plane. `p07` is the 32 checks against a booted plane, reading the drill and mutation
+# artifacts that `make gate-p07` and `make gate-p07-mutate` write; `gate-p07` re-runs the 10,000-key drill first,
+# because a phase whose headline is "the drill happened" should not be satisfied by a file from last month.
+p07:
+	$(PY) tools/p07-gate-check.py
+
+gate-p07:
+	@mkdir -p docs/verification
+	$(PY) tools/p07-drill.py --record docs/verification/P07-key-drill.txt
+	$(PY) tools/p07-gate-check.py
+
+gate-p07-offline:   ## the 32 checks with the recorded drill and mutation runs
+	$(PY) tools/p07-gate-check.py --fast
+
+drill-p07:          ## revoke 10,000 keys, kill every session, throw the switch; records its own transcript
+	@mkdir -p docs/verification
+	$(PY) tools/p07-drill.py --record docs/verification/P07-key-drill.txt
+
+gate-p07-mutate:    ## prove the P07 checks can fail, one inverted security rule at a time
+	@mkdir -p docs/verification
+	$(PY) tools/p07-mutation-test.py --record docs/verification/P07-mutation.txt
+
 seed-rules:         ## write the default alert rules for one owner (P09 owns the UI for this table)
 	$(PY) tools/p05-seed-rules.py --owner $${OWNER:-demo}
 
@@ -188,7 +211,7 @@ p03:
 	$(PY) tools/p03-gate-check.py
 	$(PY) tools/p03-mutation-test.py
 
-check: test lint lint-canary openapi-selftest sql-sqlite-check gate gate-mutate p01 p02 p03 p04 p05 p06 probe-fresh
+check: test lint lint-canary openapi-selftest sql-sqlite-check gate gate-mutate p01 p02 p03 p04 p05 p06 p07 probe-fresh
 	@echo "ALL GREEN"
 
 # ------------------------------------------------------------------ diagnostics

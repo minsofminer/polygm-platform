@@ -212,7 +212,13 @@
       ]
     },
     "0009_security.sql": {
-      "dropped": [],
+      "dropped": [
+        "PG-only statement: CREATE TRIGGER append_only_auth_events          BEFORE UPDATE OR DELETE ON aut",
+        "PG-only statement: CREATE TRIGGER append_only_wash_findings        BEFORE UPDATE OR DELETE ON was",
+        "PG-only statement: CREATE TRIGGER append_only_broadcast_gates      BEFORE UPDATE OR DELETE ON bro",
+        "PG-only statement: CREATE TRIGGER append_only_backup_restore_tests BEFORE UPDATE OR DELETE ON bac",
+        "PG-only statement: CREATE TRIGGER append_only_drill_records        BEFORE UPDATE OR DELETE ON dri"
+      ],
       "check_clauses_reordered": [
         "user_identities",
         "password_credentials",

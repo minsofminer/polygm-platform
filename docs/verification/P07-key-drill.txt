@@ -1,0 +1,99 @@
+P07 key-compromise drill - recorded 2026-09-18
+command: python3 tools/p07-drill.py --keys 10000
+plane: one booted API over the shipped schema (migrations 0001-0009 + append-only triggers)
+
+Part 1 - the population: 10,000 keys wrapped under KEK v1
+---------------------------------------------------------
+  [ ok ] every wallet has exactly one live wrap         10,000 rows in key_wraps, 10,000 wrapped, 10,000 users
+  [ ok ] the wrap is the length the envelope scheme promises hex lengths [96] = 48 bytes (keys.WRAPPED_LEN=48)
+  [ ok ] one policy hash for the whole population       1 distinct policy hash(es); the policy is the two-target allowlist, not a per-wallet choice
+       minting 10,000 keys took 99 ms of wall clock (0.01 ms per key)
+
+Part 2 - revoke all of them: 10,000 keys in batches of 500
+----------------------------------------------------------
+       batch   1/20  revoked=    500  4 ms
+       batch   2/20  revoked=   1000  5 ms
+       batch   9/20  revoked=   4500  18 ms
+       batch  17/20  revoked=   8500  37 ms
+  [ ok ] no live wrap survives the revocation           10,000 keys revoked, 0 still live, 0 failed batch(es)
+  [ ok ] the job table recorded the run it claims       revoke_jobs: 10000/10000 revoked, 0 failed, finished=yes
+       our half: 42 ms for 10,000 revokes (0.004 ms per key, 20 batch statements)
+       provider half (the number a plan is approved on): 20 calls at 120 ms over 4-way concurrency = 0.6 s of wall clock, and the provider's revoke rate limit ([UNVERIFIED] until P13); if it is 1 call/s and one call per key, this arithmetic is a fantasy and the answer is 2.8 hours
+       our measured 42 ms is *not* the drill's answer to 'how long until they are dead': the provider's revoke call is the long pole, and P13 owns measuring it.
+
+Part 3 - rotation with zero downtime, on 400 of the wallets
+-----------------------------------------------------------
+  [ ok ] both versions are live during the window       400 wallets have a live wrap; the newest is what key_wrap() returns
+  [ ok ] the live view picks the newest DEK             key_wrap() -> dek_version=2, kek_version=2 (v1 is still readable for in-flight signatures: present)
+  [ ok ] KEK v1 cannot be retired while anything still uses it KEK v1 still in use: 25 live key wraps are still under KEK v1: retiring it now makes them unreadable
+  [ ok ] retirement opens the moment the last user moves off 25 live v1 wraps revoked, kek_versions.v1 retired_ms set; can_retire_kek() is the gate, and it is the reason a botched rotation cannot be completed by forgetting a wallet
+       the zero-downtime claim is the ordering above: mint new -> serve both -> revoke old -> retire; the refusal in the middle step is the control, not the retry loop
+
+Part 4 - every session dies, and 'dies' is checked by resolving the token
+-------------------------------------------------------------------------
+  [ ok ] every session resolved before the revocation   800/800 resolvable
+  [ ok ] zero sessions resolve afterwards               0 of 800 sessions still resolve a live row after the global revoke (2 ms, reason recorded: yes)
+  [ ok ] the refresh families went with them            refresh rows still unrevoked: 0 (a live refresh token resurrects a killed session, which is the whole reason this half is measured separately)
+  [ ok ] the revocation is in the audit trail           1 session_revoke_all event(s)
+       800 sessions across 200 users killed in 2 ms by one statement per table - so the 'log everyone out' step is not the thing that takes an hour
+
+Part 5 - the kill switch: what this plane can prove, and what it hands to P06
+-----------------------------------------------------------------------------
+  [ ok ] the switch engages through the admin route     HTTP 200; kill_switch_state row: engaged=1 changed_by=admin reason=82B
+  [ ok ] and the queue sweep is part of engaging, not a follow-up job 2 queued/pending intents before, states after: {'rejected/RISK_HALT'} (5 ms, one statement - so the sweep cannot be left running behind the switch)
+  [ ok ] un-halting without a configured admin token is 503, not 401 503 SIGNER_UNAVAILABLE - a box with no admin token is a misconfiguration, and the P04 rule keeps it out of the attack dashboards; a *wrong* token is the 403 ADMIN_REQUIRED that tests/test_security_plane.py pins
+  [ ok ] releasing it is a new row, not an edit of the engaged one engaged=0 now; the engaged row is still in the table and UPDATE on kill_switch_state is refused, so 'who stopped it and when' survives the incident
+       venue-side refusal latency is NOT measured here: that is `make chaos-p06` and P06's
+       c_kill_switch_latency, which runs the executor. This plane's claim is the state row, the
+       sweep, and the fact that un-halting is not a thing an admin can do silently.
+
+Part 6 - the first 60 minutes, with owners and a clock
+------------------------------------------------------
+  min   2  step 1  owner=whoever is on call Declare the severity out loud in the incident channel and page the
+  min   5  step 2  owner=founder-on-call  Engage the kill switch with a reason. New orders stop; the queue i
+  min  10  step 3  owner=security owner   Revoke every session and every refresh token. This is the attacker
+  min  12  step 4  owner=security owner   Freeze withdrawals, key export and address changes at the *policy*
+  min  25  step 5  owner=executor owner   Revoke the affected keys at the provider; if the blast radius is u
+  min  35  step 6  owner=security owner   Preserve: DB snapshot, the auth_events window, the executor's log 
+  min  45  step 7  owner=founder          Tell the users. The template, with the money status and the time o
+  min  60  step 8  owner=security owner   Freeze the incident record: what we know, what we do not, who chan
+  [ ok ] every step has an owner, a way to verify it, and a test reference 8 steps, 0 incomplete, breach alarms 11, ops alarms 9
+  [ ok ] the hour is a deadline, and the last step sits inside it outermost deadline = minute 60; `minutes` is a deadline for the step, not an estimate of the work, so the eight of them cannot quietly add up to three hours
+  [ ok ] the notification template exists and refuses to minimise exists=True minimising-phrases=none says-when=True says-money=True
+  [ ok ] the two lists of the same procedure agree on order runbook milestones in sequence [0, 1, 2, 3, 4, 5], keys.py [0, 1, 2, 3, 4, 5], all six located in both=[6, 6] (drift here means the module and the runbook disagree about whether you notify users before or after you preserve the evidence, which is a decision nobody should make at 4am)
+  [ ok ] the drill measured the two steps that are measurable in this plane step 2 (kill switch) 5 ms to the queue sweep, step 3 800 sessions killed; the other six steps are human actions with owners, which is why this is a drill and not a test
+
+Part 7 - the record: a drill nobody can query did not happen
+------------------------------------------------------------
+  [ ok ] the drill is queryable afterwards              drill_records: kind=key_compromise verdict=pass measured=42ms notes=283B
+  [ ok ] and current by the 90-day rule                 drilled 0 days ago
+  [ ok ] a failed drill cannot be recorded without naming the step a failed drill must name the step that failed
+  [ ok ] the record is append-only                      enforced: append-only table: drill_records is not updatable (UPDATE/DELETE on drill_records are refused by triggers in both dialects)
+
+summary: {"engage_to_refusal_ms": 5, "job_id": "rev_a379b9d72eef", "keys": 10000, "moved_off_v1": 25, "per_key_ms": 0.0042, "provider_half": "unverified", "revoke_batches": 20, "revoke_ms": 42, "rotated": 400, "runbook_steps": 8, "session_kill_ms": 2, "session_survivors": 0, "sessions": 800}
+failures: none
+What this drill does NOT prove
+-----------------------------
+1. It does not prove the provider can revoke 10,000 keys quickly. It proves *our* half - that the batch loop, the
+   job table and the schema hold up at that size. The provider's revoke rate is [UNVERIFIED] until the P13
+   integration, and if their API is one call per wallet at roughly one call per second, a 10,000-key revocation is
+   about 2.8 hours of wall clock regardless of the numbers printed above.
+2. It does not prove the KEK is in a KMS. The drill runs against the env KEK, which is exactly what a staging pod
+   has; the ceremony for a real one (two witnesses, HSM or KMS, sealed backup) is a launch item, not a test.
+3. It does not prove we would notice. Detection - the alert that pages a human - is measured by the alert-channel
+   gate and by the ops alarms, not here. A drill that starts at minute zero assumes minute zero was noticed.
+4. It does not prove the money is recoverable. Withdrawals to an attacker's address that already cleared are not
+   reversed by revoking keys; the loss bound is the balance that was hot at that moment, which is a P06 limit,
+   and the drill cannot retire it.
+5. It does not prove the paging works. `incident-paging-phone` is on the launch checklist and nobody has been
+   woken up by this system at 3am yet.
+6. It does not exercise a real restore. The backup/restore drills are `backup_restore_tests` rows and run on their
+   own schedule; a restore from the snapshot this drill would need is a separate measurement.
+7. It does not measure the switch's *end-to-end* refusal latency. What is measured here is that engaging writes an
+   append-only state row and sweeps the queue in the same statement; the executor's own reaction time belongs to
+   P06's `c_kill_switch_latency` and `make chaos-p06`, and a drill that duplicated it would drift from it.
+8. It runs on one process with one SQLite file. Under Postgres with the executor mid-flight the revocation is the
+   same statements and the triggers are the same five declarations - but the *concurrency* is not: 10,000 revokes
+   against a live queue has contention this run cannot show.
+
+verdict: pass

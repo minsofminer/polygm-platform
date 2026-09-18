@@ -1104,7 +1104,12 @@ ADDR_ADD_PROPS = {"address": {"type": "string", "minLength": 8, "maxLength": 128
                   # reason), not a 422 about field shape.
                   "code": {"type": "string", "pattern": "^[0-9]{6}$"}}
 ADDR_RM_REQUIRED = ("addressId",)
-ADDR_RM_PROPS = {"addressId": {"type": "string", "minLength": 4, "maxLength": 64}}
+ADDR_RM_PROPS = {"addressId": {"type": "string", "minLength": 4, "maxLength": 64},
+                 # Same shape as `address_add`: optional in the schema, mandatory in behaviour, so the refusal a
+                 # caller gets is 403 with a reason rather than 422 about field shape. Removal is the step an
+                 # attacker takes to erase the address they just added, so it is an address *change* in the sense
+                 # the second factor exists for.
+                 "code": {"type": "string", "pattern": "^[0-9]{6}$"}}
 REVOKE_REQUIRED = ("reason", "approvers")
 REVOKE_PROPS = {"reason": {"type": "string", "minLength": 4, "maxLength": 400},
                 "approvers": {"type": "array", "minItems": 2, "items": {"type": "string", "minLength": 2}},
@@ -1437,6 +1442,9 @@ def wallet_address_remove(request: Request, body: dict = Body(...)):
     uid, _row, e = _principal(request)
     if e:
         return e
+    code = _totp_gate(request, str(uid), str(body.get("code") or ""), action="address_remove")
+    if code is not None:
+        return code
     res = SEC.remove_address(str(uid), str(body["addressId"]), at=_now_ms())
     if res.get("code") == "REMOVE_DURING_COOLDOWN":
         return err("REMOVE_DURING_COOLDOWN", request.state.request_id, detail=res["message"])

@@ -98,31 +98,31 @@ def first_60_minutes(*, scope: str = "key_compromise") -> list[Step]:
     common = [
         Step(1, "Declare the severity out loud in the incident channel and page the owners in "
                 "`SEVERITIES[severity].who`. The page *is* the clock.", "whoever is on call", 2,
-             "the channel has 2 named humans and a severity string", "test:tools/p07-drill.py step 1"),
+             "the channel has 2 named humans and a severity string", "test:tests/test_security_core.py::TestIncidentResponse::test_the_first_sixty_minutes_has_an_owner_and_a_proof_per_minute_budget"),
         Step(2, "Engage the kill switch with a reason. New orders stop; the queue is swept to "
                 "rejected/RISK_HALT.", "founder-on-call", 5,
              "POST /v1/admin/kill-switch returned engaged=true, and no intent moved after the grace window",
-             "gate:c_kill_switch_latency (P06)"),
+             "gate:p06:c_kill_switch_latency"),
         Step(3, "Revoke every session and every refresh token. This is the attacker's foothold and it is "
                 "ours to take in one statement.", "security owner", 10,
              "an old token returns 401; auth_events shows one revoke_all row",
-             "test:tests/test_security_auth.py::test_revoke_everywhere_kills_old_tokens"),
+             "test:tests/test_security_plane.py::TestSessions::test_logout_ends_one_session_and_everywhere_ends_all_of_them"),
         Step(4, "Freeze withdrawals, key export and address changes at the *policy* level, not by asking.",
              "security owner", 12, "a withdrawal attempt is refused with a reason that names the freeze",
-             "gate:c_export_and_withdrawal_gated"),
+             "gate:p07:c20_admin_cannot_beat_the_plane"),
         Step(5, "Revoke the affected keys at the provider; if the blast radius is unknown, revoke all of them "
                 "and re-provision after. Measure it, do not hope it.", "executor owner", 25,
-             "the revoke_jobs row has finished_ms and failed == 0", "test:tools/p07-drill.py measures the run"),
+             "the revoke_jobs row has finished_ms and failed == 0", "test:tools/p07-drill.py"),
         Step(6, "Preserve: DB snapshot, the auth_events window, the executor's log files, the venue's order "
                 "list for the affected wallets. Write each item's sha256 into the incident record.",
-             "security owner", 35, "the incident row lists four hashes", "gate:c_forensics_are_named"),
+             "security owner", 35, "the incident row lists four sha256 hashes", "test:tests/test_security_core.py::TestIncidentResponse::test_the_preserve_step_names_four_artifacts_and_a_hash"),
         Step(7, "Tell the users. The template, with the money status and the time of the next update. Do not "
                 "wait for the investigation.", "founder", 45,
              "the message exists in the incident record and was sent to every affected owner",
-             "gate:c_notify_template_does_not_minimise"),
+             "test:tests/test_security_core.py::TestIncidentResponse::test_the_customer_templates_pass_our_own_style_rule"),
         Step(8, "Freeze the incident record: what we know, what we do not, who changed what during the "
                 "window. The post-mortem starts here, not in two weeks.", "security owner", 60,
-             "the record is append-only and has an owner for every open question", "gate:c_incident_model_is_a_query"),
+             "the record is append-only and has an owner for every open question", "gate:p07:c28_the_drill_happened_and_says_what_it_did_not_prove"),
     ]
     if scope == "channel_poison":
         return [Step(1, "Stop the broadcast fan-out (one flag, not a deploy).", "alerts owner", 2,

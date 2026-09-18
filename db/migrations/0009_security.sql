@@ -324,6 +324,47 @@ CREATE TABLE incident_findings (
 );
 CREATE UNIQUE INDEX incident_findings_rank ON incident_findings (rank);
 
+CREATE OR REPLACE FUNCTION polygm_withdrawal_hold_holds() RETURNS trigger LANGUAGE plpgsql AS $$
+-- The 24 h hold on a new destination is a control only if the row carrying it cannot be edited out of the hold.
+-- An address may be removed, its label may change, and `usable_ms` may legitimately move *later* (a compliance
+-- freeze). What no UPDATE may do is move it earlier or clear it, because that single write is what turns "we
+-- noticed the takeover in time" into "we did not": the attacker with a SQL write does not bother with the API.
+--
+-- This lives in Postgres only, on purpose: the twin generator special-cases the append-only block and nothing
+-- else (tools/build-sqlite-migrations.py), so a conditional trigger here has no SQLite equivalent. `gate:c8`
+-- therefore asserts the declaration exists, and asserts the *behaviour* where the twin can carry it (the
+-- `skip_cooldown` CHECK refuses at insert). A dev database without this trigger is a weaker box, not a lie
+-- about the shipped one.
+BEGIN
+    IF TG_OP = 'UPDATE' AND (NEW.usable_ms IS NULL
+                             OR (OLD.usable_ms IS NOT NULL AND NEW.usable_ms < OLD.usable_ms)) THEN
+        RAISE EXCEPTION 'the 24h hold on a withdrawal destination cannot be shortened (usable_ms % -> %)',
+            OLD.usable_ms, NEW.usable_ms USING ERRCODE = 'check_violation';
+    END IF;
+    RETURN NEW;
+END $$;
+
+CREATE TRIGGER withdrawal_hold_immutable BEFORE UPDATE ON withdrawal_addresses FOR EACH ROW
+    EXECUTE FUNCTION polygm_withdrawal_hold_holds();
+
+-- >>> append-only tables (the gate check reads exactly this comment form; do not reformat)
+-- The five tables that *are* the evidence: auth events (who logged in, who was refused, who break-glassed),
+-- wash findings (the payout gate's decisions), broadcast gate refusals, backup restore tests, and drill records.
+-- Without these triggers every one of them is an UPDATE away from a different story, and the people writing the
+-- story are the people the story is about. `incident_findings` is deliberately absent: its `status` column moves
+-- from open to mitigated, so making it append-only would make it wrong.
+--
+-- This block is in 0009 rather than 0005 because the phase that creates a table owns its triggers - a deployed
+-- database never re-runs an applied migration. It was missing on the Postgres side while the SQLite twin had it,
+-- which is the shape of gap a test suite that runs on SQLite cannot see: `gate:c11` in tools/p07-gate-check.py
+-- now asserts the declaration in this file, not only the behaviour of the twin.
+CREATE TRIGGER append_only_auth_events          BEFORE UPDATE OR DELETE ON auth_events          FOR EACH ROW EXECUTE FUNCTION polygm_reject_mutation();
+CREATE TRIGGER append_only_wash_findings        BEFORE UPDATE OR DELETE ON wash_findings        FOR EACH ROW EXECUTE FUNCTION polygm_reject_mutation();
+CREATE TRIGGER append_only_broadcast_gates      BEFORE UPDATE OR DELETE ON broadcast_gates      FOR EACH ROW EXECUTE FUNCTION polygm_reject_mutation();
+CREATE TRIGGER append_only_backup_restore_tests BEFORE UPDATE OR DELETE ON backup_restore_tests FOR EACH ROW EXECUTE FUNCTION polygm_reject_mutation();
+CREATE TRIGGER append_only_drill_records        BEFORE UPDATE OR DELETE ON drill_records        FOR EACH ROW EXECUTE FUNCTION polygm_reject_mutation();
+-- <<< append-only tables
+
 COMMIT;
 
 -- Notes moved out of the column lists below: the portable-subset generator splices column

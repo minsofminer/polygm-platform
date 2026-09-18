@@ -74,6 +74,11 @@ SENSITIVE_KEYS: frozenset = frozenset({
     "init_data", "private_key", "privatekey", "signer_key", "signature", "sig", "seed", "mnemonic",
     "totp_secret", "otpauth", "dek", "kek", "wrapped_dek", "x-admin-token", "admin_token", "x-polygm-signature",
     "auth", "credentials", "session",
+    # `pw` because a hand-written log line will always abbreviate something, and the abbreviation is the one that
+    # carries the secret. `code` is deliberately NOT here: it is the HTTP status in every request line, and a list
+    # that redacts useful fields is a list someone turns off — the cost of a false positive here is not noise, it
+    # is the next engineer deciding the scrubber is broken.
+    "pw",
 })
 
 

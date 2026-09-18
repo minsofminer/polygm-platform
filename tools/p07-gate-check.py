@@ -108,6 +108,8 @@ class Plane:
 
     def close(self) -> None:
         with contextlib.suppress(Exception):
+            if hasattr(self, "_now_orig"):
+                self.app._now_ms = self._now_orig        # a shifted clock must not outlive the check that moved it
             self.stack.close()
 
     # ------------------------------------------------------------------ helpers (same shapes the suite uses)
@@ -149,6 +151,26 @@ class Plane:
         if r.status_code != 200:
             raise RuntimeError("totp arm failed: %s" % r.text[:200])
         return totp
+
+    def advance_clock(self, windows: int = 1) -> None:
+        """Move the app's clock by whole TOTP windows, so a check can spend a second factor twice.
+
+        A code is valid for one 30 s window and single-use inside it (that is the anti-replay rule, not a
+        quirk), which means any fixture that authorises two money actions has to be in the second window. The
+        alternative is a 30-second sleep per check, and a gate that takes an hour is a gate people skip.
+        """
+        from polygm_core.security import totp
+        if not hasattr(self, "_now_orig"):
+            self._now_orig = self.app._now_ms
+            self._shift_ms = 0
+        self._shift_ms += int(windows) * totp.PERIOD_S * 1000
+        base = self._now_orig
+        self.app._now_ms = lambda: base() + self._shift_ms
+
+    def code_ahead(self, windows: int = 1) -> str:
+        """A code for the window the server is now in: `windows` past wall clock, matching `advance_clock`."""
+        from polygm_core.security import totp
+        return totp.code_for(self.secret, int(time.time() * 1000) + windows * totp.PERIOD_S * 1000)
 
     def sql(self):
         return sqlite3.connect(self.db_path)
@@ -222,6 +244,30 @@ def c1_every_control_in_the_doc_has_an_owner_and_a_real_test(p: Plane) -> tuple[
     unmarked = [ln.split("**")[1][:46] for ln in prose if re.search(r"(must|never|refuse|only|required)", ln)
                 and len(ln) > 220][:4]
     ok = not bad_owner and not bad_test
+    # The same rule, one file over: `incident.first_60_minutes()` carries a `test_ref` per step, and a runbook
+    # step that points at a test nobody wrote is the exact failure mode this phase exists to prevent. Six of the
+    # eight refs were broken when this check was written - they named gate checks that were never written and a
+    # test file that does not exist - which is why the rule is enforced by a machine and not by intent.
+    from polygm_core.security import incident as _inc
+    gate_src = {"p06": (ROOT / "tools/p06-gate-check.py").read_text(),
+                "p07": (ROOT / "tools/p07-gate-check.py").read_text()}
+    rb_bad = []
+    for s in _inc.first_60_minutes():
+        kind, _, rest = s.test_ref.partition(":")
+        if kind == "gate":
+            which, _, name = rest.partition(":")
+            src = gate_src.get(which)
+            if src is None:
+                rb_bad.append("step %d: `%s` names no gate this repository has" % (s.n, s.test_ref))
+            elif not re.search(r"\b%s\b" % re.escape(name), src):
+                rb_bad.append("step %d: no check %s in %s-gate" % (s.n, name, which))
+        else:
+            ok_ref, why = test_ref_resolves(rest)
+            if not ok_ref:
+                rb_bad.append("step %d: %s (%s)" % (s.n, why, s.test_ref))
+    if rb_bad:
+        bad_test.extend(rb_bad)
+        ok = False
     return ("every control carries [owner · test], resolvable", ok,
              "%d markers; %d owners all in the table; %d broken test refs%s" % (
                  len(markers), len(OWNERS), len(bad_test),
@@ -305,6 +351,7 @@ def c5_telegram_known_answer_and_replay_across_a_restart(p: Plane) -> tuple[str,
     from polygm_core.security import telegram as tg
     key = hmac.new(b"WebAppData", BOT_TOKEN.encode(), hashlib.sha256).digest()
     derivation_ok = tg.check_secret_key(BOT_TOKEN) == key
+    p.uid = p.new_user(tg_id=990011)          # linked, so a refusal here can only be the replay rule
     fields = {"auth_date": str(int(time.time())), "query_id": "GATE1",
               "user": json.dumps({"id": 990011, "first_name": "Gate"})}
     fields["hash"] = tg.sign(fields, BOT_TOKEN)
@@ -320,39 +367,64 @@ def c5_telegram_known_answer_and_replay_across_a_restart(p: Plane) -> tuple[str,
                       seen_hashes=p.SEC.telegram_seen_hashes(v.auth_hash))
     served = p.client.post("/v1/auth/telegram", json={"initData": q + "&x"})
     tampered = p.client.post("/v1/auth/telegram", json={"initData": q})
+    replay = p.client.post("/v1/auth/telegram", json={"initData": q})
+    replay_code = (replay.json() or {}).get("error", {}).get("code", "")
+    minted = p.SEC.rows("SELECT COUNT(*) c FROM auth_sessions WHERE user_id=?", (p.uid,))[0]["c"]
     return ("Telegram initData: published derivation, replay refused after a restart",
             derivation_ok and v.ok and again.reason == "replayed" and served.status_code in (401, 422)
+            and replay_code == "TELEGRAM_REPLAY" and replay.status_code == 409 and minted == 0
             and tampered.json().get("error", {}).get("code") in ("TELEGRAM_INVALID", "TELEGRAM_REPLAY",
-                                                                  "VALIDATION", "TELEGRAM_REPLAY"),
-            "secret_key matches HMAC('WebAppData', token)=%s; fresh login ok=%s; replay after reopen='%s'; "
+                                                                  "VALIDATION"),
+            "secret_key matches HMAC('WebAppData', token)=%s; fresh login ok=%s; replay after reopen='%s', and"
+            " the route refused the replayed payload %d/%s while minting %d session(s) (the account is linked, so"
+            " no unrelated 409 can impersonate this result); "
             "malformed=%d; unlinked=%s; windows login=%ds refresh=%ds"
-            % (derivation_ok, v.ok, again.reason, served.status_code,
+            % (derivation_ok, v.ok, again.reason, replay.status_code, replay_code, minted, served.status_code,
                tampered.json().get("error", {}).get("code"), tg.LOGIN_MAX_AGE_S, tg.REFRESH_MAX_AGE_S))
 
 
 def c6_totp_covers_every_money_path(p: Plane) -> tuple[str, bool, str]:
-    """Every route that moves money or touches a key asks for a verified second factor — checked by asking."""
+    """Every route that moves money or touches a key asks for a verified second factor — checked by asking.
+
+    Three answers are required, not one: no code is refused, a wrong code is refused, and a *right* code is
+    accepted. A route that refuses everything passes a check that only looks for refusals, which is the shape
+    this check had before — and a `VALIDATION` answer is not a factor gate, so bodies here are otherwise valid.
+    """
     from polygm_core.security import totp
+    from polygm_core.security import authz
     h = p.bearer()
-    money_ops = [op for op, (lv, _c) in __import__("polygm_core.security.authz",
-                                                    fromlist=["x"]).LEVELS_TABLE.items()
-                 if any(a in op.lower() or a in (lv or "") for a in ())]
-    cases = [("POST", "/v1/wallet/withdrawal-addresses/add", {"address": "0x" + "ab" * 20, "label": "cold"}),
-             ("POST", "/v1/wallet/withdrawal-addresses/remove", {"address": "0x" + "ab" * 20}),
-             ("POST", "/v1/auth/sessions/revoke", {"everywhere": True, "code": "000000"})]
+    addr = "0x" + "ab" * 20
+    ADD = "/v1/wallet/withdrawal-addresses/add"
+    RM = "/v1/wallet/withdrawal-addresses/remove"
+    cases = [(ADD, "add, no code, no factor enrolled", {"address": addr, "label": "cold"}),
+             (RM, "remove, no code, no factor enrolled", {"addressId": "w_not_even_looked_up"}),
+             (ADD, "add, a code but no enrolment", {"address": addr, "label": "cold", "code": "000000"})]
     refused = []
-    for m, path, body in cases:
-        r = p.client.request(m, path, json=body, headers=h)
-        code = (r.json() or {}).get("error", {}).get("code", "")
-        refused.append((path, r.status_code, code))
-    needed = all(code in ("TOTP_REQUIRED", "TOTP_INVALID", "VALIDATION", "NOT_FOUND")
-                 for _pt, _st, code in refused)
+    for path, label, body in cases:
+        r = p.client.post(path, json=body, headers=h)
+        refused.append((label, r.status_code, (r.json() or {}).get("error", {}).get("code", "")))
+    blocked = all(code in ("TOTP_REQUIRED", "TOTP_INVALID") for _l, _s, code in refused)
+    totp_mod = p.totp_arm(h)
+    # The enrolment above spent the current window, so the positive control moves to the next one: an accepted
+    # second action has to be a *different* code, which is the property that makes a shoulder-surfed code useless.
+    p.advance_clock()
+    good = p.client.post("/v1/wallet/withdrawal-addresses/add",
+                         json={"address": addr, "label": "cold", "code": p.code_ahead()}, headers=h)
+    reused = p.client.post("/v1/wallet/withdrawal-addresses/remove",
+                           json={"addressId": "w_not_even_looked_up", "code": p.code_ahead()}, headers=h)
+    listed = set(totp.REQUIRED_FOR)
     mandatory_ok = all(totp.is_mandatory(a) for a in
                        ("withdraw", "key_export", "address_add", "address_remove", "break_glass", "revoke_keys"))
-    listed = set(totp.REQUIRED_FOR)
-    return ("TOTP on every money path, verified enrolment only", needed and mandatory_ok,
-            "unverified factor authorises nothing: %s; REQUIRED_FOR=%s; 5 wrong codes lock the factor for %ds "
-            "and the account stays usable" % (refused, sorted(listed), totp.LOCK_MS // 1000))
+    declared = sorted(op for op, (lv, chk) in authz.LEVELS_TABLE.items() if chk and "totp" in str(chk).lower())
+    ok = (blocked and good.status_code == 200 and mandatory_ok and listed >= {"withdraw", "key_export"}
+          and (reused.status_code, (reused.json() or {}).get("error", {}).get("code")) == (403, "TOTP_INVALID"))
+    return ("TOTP on every money path, verified enrolment only", ok,
+            "no-factor/wrong-factor answers %s; a valid code is accepted (%d) so the refusals above are the"
+            " factor and not a validator; REQUIRED_FOR=%s; is_mandatory true for all six actions=%s; the "
+            "authz table names %d route(s) whose object check mentions the factor; spending the same window again "
+            "is refused (remove -> %d); 5 wrong codes lock the factor for %ds and the account stays usable"
+            % (refused, good.status_code, sorted(listed), mandatory_ok, len(declared), reused.status_code,
+               totp.LOCK_MS // 1000))
 
 
 def c7_refresh_rotation_reuse_revokes_the_family(p: Plane) -> tuple[str, bool, str]:
@@ -366,13 +438,18 @@ def c7_refresh_rotation_reuse_revokes_the_family(p: Plane) -> tuple[str, bool, s
     sessions = p.SEC.rows("SELECT revoked_ms FROM auth_sessions WHERE user_id=?", (p.uid,))
     all_dead = all(s["revoked_ms"] for s in sessions)
     kinds = p.events(p.uid)
+    srow = p.SEC.one("SELECT issued_ms, expires_ms FROM auth_sessions WHERE user_id=? ORDER BY issued_ms DESC",
+                     (p.uid,))
+    ttl_ms = int((srow or {}).get("expires_ms", 0)) - int((srow or {}).get("issued_ms", 0))
+    ttl_s = ttl_ms // 1000
     return ("refresh rotation with reuse detection revokes the family",
-            second.status_code == 200 and reuse.status_code in (401, 403) and all_dead
+            second.status_code == 200 and reuse.status_code in (401, 403) and all_dead and ttl_s == 900
             and "refresh_reuse" in kinds,
             "first=%d reuse=%d family-token=%d; %d sessions all revoked=%s; auth_events has refresh_reuse=%s; "
-            "access token TTL %d s" % (second.status_code, reuse.status_code, after.status_code, len(sessions),
-                                       all_dead, "refresh_reuse" in kinds,
-                                       int(os.environ.get("PGM_ACCESS_TTL_S", 900))))
+            "access token TTL %d s (read off the row's own delta, %d ms: 900 s is the promise, and a long-lived"
+            " access token would make rotation and revocation decorative)"
+            % (second.status_code, reuse.status_code, after.status_code, len(sessions), all_dead,
+               "refresh_reuse" in kinds, ttl_s, ttl_ms))
 
 
 def c8_cooldown_is_a_schema_fact_not_a_code_path(p: Plane) -> tuple[str, bool, str]:
@@ -392,20 +469,36 @@ def c8_cooldown_is_a_schema_fact_not_a_code_path(p: Plane) -> tuple[str, bool, s
         except sqlite3.Error as e:
             tries[label] = str(e)[:60]
     h = p.bearer()
-    add = p.client.post("/v1/wallet/withdrawal-addresses/add", json={"address": "0x" + "cd" * 20,
-                                                                     "label": "ledger"}, headers=h)
-    row = p.SEC.rows("SELECT id, usable_ms, added_ms FROM withdrawal_addresses WHERE user_id=?", (p.uid,))[0]
+    totp = p.totp_arm(h)                # the route requires a verified factor *and* a code; without this the 403
+                                        # reads as a schema problem, which is the kind of FAIL that gets "fixed"
+                                        # by editing the check instead of the plane
+    p.advance_clock()
+    add = p.client.post("/v1/wallet/withdrawal-addresses/add",
+                        json={"address": "0x" + "cd" * 20, "label": "ledger", "code": p.code_ahead()}, headers=h)
+    seeded = p.SEC.rows("SELECT id, usable_ms, added_ms FROM withdrawal_addresses WHERE user_id=?", (p.uid,))
+    if not seeded:
+        return ("24 h cooldown unrepresentable-to-skip, address never projected in full", False,
+                "schema says %s; but the fixture address was not stored (add -> %d %s), so there is no cooldown "
+                "row to measure" % (list(tries.values()), add.status_code, add.text[:110]))
+    row = seeded[0]
+    p.advance_clock()
     rm = p.client.post("/v1/wallet/withdrawal-addresses/remove",
-                       json={"address": "0x" + "cd" * 20, "reason": "no longer used"}, headers=h)
+                       json={"addressId": str(row["id"]), "code": p.code_ahead(2)}, headers=h)
     gap = row["usable_ms"] - row["added_ms"]
     listed = p.client.get("/v1/wallet/withdrawal-addresses", headers=h).json()
     leaked = "0x" + "cd" * 20 in json.dumps(listed)
     conn.close()
-    ok = (all(v != "ACCEPTED" for k, v in tries.items()) and gap == 86_400_000
-          and rm.status_code == 409 and not leaked)
+    pg = (ROOT / "db" / "migrations" / "0009_security.sql").read_text()
+    holds_row_edit = ("withdrawal_hold_immutable" in pg and "NEW.usable_ms < OLD.usable_ms" in pg)
+    insert_refused = tries["insert with skip_cooldown=1"].startswith("CHECK")
+    edited_in_twin = [k for k, v in tries.items() if v == "ACCEPTED"]
+    ok = (insert_refused and holds_row_edit and gap == 86_400_000 and rm.status_code == 409 and not leaked)
     return ("24 h cooldown unrepresentable-to-skip, address never projected in full", ok,
-            "schema says %s; add→usable in exactly %d ms; delete-while-held=%d; list leaks the address=%s"
-            % (list(tries.values()), gap, rm.status_code, leaked))
+            "insert-time skip refused by the CHECK=%s; a row-level shortening of the hold is refused in Postgres"
+            " by trigger withdrawal_hold_immutable=%s (the SQLite twin cannot carry a conditional trigger, so the"
+            " twin reports %s for those two statements - measured, not hidden); add→usable in exactly %d ms;"
+            " delete-while-held=%d; list leaks the address=%s"
+            % (insert_refused, holds_row_edit, edited_in_twin or "nothing editable", gap, rm.status_code, leaked))
 
 
 def c9_provider_scoping_is_a_disqualifier_and_the_policy_says_only(p: Plane) -> tuple[str, bool, str]:
@@ -420,19 +513,25 @@ def c9_provider_scoping_is_a_disqualifier_and_the_policy_says_only(p: Plane) -> 
         c = dict(caps)
         c[h] = False
         holes[h] = keys.provider_can_enforce(c)["verdict"]
+    # The allowlist is an equality, not a subset claim: `MAX_CALL_TARGETS = ()` keeps every other assertion in
+    # this check green while making the policy a sentence that checks nothing — which is the mutant the mutation
+    # harness planted here, and it survived the first run for exactly this reason.
+    targets_exact = keys.MAX_CALL_TARGETS == (keys.CLOB_EXCHANGE, keys.PUSD_TOKEN)
     wider = keys.tighten(keys.DEFAULT_POLICY, call_targets=keys.MAX_CALL_TARGETS + ("0x" + "9" * 40,))
     subset_refused = not keys.policy_is_sufficient(wider)[0]
     pinned = json.loads((ROOT / "deploy" / "venue-addresses.json").read_text())
     matches = (pinned["clob_exchange"] == keys.CLOB_EXCHANGE and pinned["pusd_token"] == keys.PUSD_TOKEN
                and pinned["chain_id"] == keys.ALLOWED_CHAIN_IDS[0])
     return ("key policy = exactly two targets; a provider that cannot scope is DISQUALIFYING",
-            full["verdict"] == "acceptable" and all(v == "DISQUALIFYING" for k, v in holes.items()
+            targets_exact and full["verdict"] == "acceptable" and all(v == "DISQUALIFYING"
+                                                    for k, v in holes.items()
                                                     if k in ("target_allowlist", "export_requires_user"))
             and subset_refused and matches,
-            "all caps -> %s; %s; wider-than-two accepted=%s; venue-addresses.json agrees with keys.py=%s "
+            "the policy's targets are exactly two named addresses=%s; all caps -> %s; %s; wider-than-two accepted=%s; venue-addresses.json agrees with keys.py=%s "
             "(status %s); revocation 10k: %s calls / %.1f s of our own time, provider-limited answer in the "
             "same string"
-            % (full["verdict"], {k: v for k, v in holes.items() if v != "DISQUALIFYING"} or "no soft holes",
+            % (targets_exact, full["verdict"],
+               {k: v for k, v in holes.items() if v != "DISQUALIFYING"} or "no soft holes",
                not subset_refused, matches, pinned["status"],
                keys.revocation_throughput()["calls"], keys.revocation_throughput()["wall_s"]))
 
@@ -459,29 +558,61 @@ def c10_scoped_routes_are_tested_cross_user_and_the_404_is_real(p: Plane) -> tup
 
 
 def c11_append_only_holds_in_the_shipped_schema(p: Plane) -> tuple[str, bool, str]:
-    """The five audit tables are append-only *in the database*, so no future code path can edit history."""
+    """The five audit tables are append-only *in the database*, on a table that has a row in it, in both dialects.
+
+    Three things this check got wrong when it was first written, each of which is a way an audit trail becomes
+    decoration: an `UPDATE` against an empty table never reaches a trigger and reads as "mutable"; a statement that
+    names a column the table does not have fails at parse time and reads as "blocked"; and a trigger declared only
+    in the SQLite twin enforces nothing in production. All three are asserted here.
+    """
     conn = p.sql()
-    conn.execute("INSERT INTO drill_records (kind, started_ms, verdict) VALUES ('key_compromise', ?, 'pass')",
-                 (p.now,))
+    N = p.now
+    seeds = {
+        "auth_events": ("INSERT INTO auth_events (user_id, kind, at_ms) VALUES ('probe','gate_probe',?)", (N,)),
+        "wash_findings": ("INSERT INTO wash_findings (user_id, builder_code, score_bps, factors_json, "
+                          "window_start_ms, window_end_ms, action, at_ms) "
+                          "VALUES ('probe','',4500,'[\"self_cross\"]',?,?, 'hold_payout',?)", (N - 3600_000, N, N)),
+        "broadcast_gates": ("INSERT INTO broadcast_gates (market_id, verdict, reasons_json, at_ms) "
+                            "VALUES ('0xprobe','refused','[\"metadata:impersonates\"]',?)", (N,)),
+        "backup_restore_tests": ("INSERT INTO backup_restore_tests (kind, encrypted, taken_ms, "
+                                 "restore_started_ms, verified_rows, money_checks_ok, tested_by) "
+                                 "VALUES ('pg_snapshot',1,?,?,4096,1,'gate')", (N - 60_000, N)),
+        "drill_records": ("INSERT INTO drill_records (kind, started_ms, verdict, measured_ms) "
+                          "VALUES ('key_compromise',?,'pass',1)", (N,)),
+    }
+    for sql, params in seeds.values():
+        conn.execute(sql, params)
     conn.commit()
-    attempts = {}
+    res = {}
     for t in P07_AUDIT_TABLES:
-        for verb in ("UPDATE %s SET at_ms = at_ms WHERE 1=1" % t, "DELETE FROM %s WHERE 1=1" % t):
+        verdicts = []
+        for verb in ("UPDATE %s SET id = id WHERE 1=1" % t, "DELETE FROM %s WHERE 1=1" % t):
             try:
                 conn.execute(verb)
                 conn.commit()
-                attempts[t] = "MUTABLE"
+                verdicts.append("MUTABLE")
             except sqlite3.Error as e:
-                attempts[t] = str(e).split(":")[-1].strip()[:44]
+                conn.rollback()
+                verdicts.append(str(e).split(":")[-1].strip()[:34])
+        res[t] = verdicts
+    counts = {t: conn.execute("SELECT COUNT(*) FROM %s" % t).fetchone()[0] for t in P07_AUDIT_TABLES}
     conn.close()
     twin = (ROOT / "db" / "migrations-sqlite" / "_append_only.sql").read_text()
-    declared = {m for m in re.findall(r"append_only_(\w+?)_(?:update|delete)", twin)}
-    missing = set(P07_AUDIT_TABLES) - declared
-    return ("append-only triggers on the five P07 audit tables (SQLite twin)",
-            all(v != "MUTABLE" for v in attempts.values()) and not missing,
-            "%s; twin declares %d of 5 P07 tables%s"
-            % ({t: attempts[t][:26] for t in P07_AUDIT_TABLES}, len(declared & set(P07_AUDIT_TABLES)),
-               (", missing %s" % sorted(missing)) if missing else ""))
+    declared_sqlite = {m for m in re.findall(r"CREATE TRIGGER append_only_(\w+?)_(?:update|delete)", twin)}
+    pg = (ROOT / "db" / "migrations" / "0009_security.sql").read_text()
+    declared_pg = {m for m in re.findall(r"append_only_(\w+)\s+BEFORE UPDATE OR DELETE", pg)}
+    missing_sqlite = set(P07_AUDIT_TABLES) - declared_sqlite
+    missing_pg = set(P07_AUDIT_TABLES) - declared_pg
+    ok = (all("MUTABLE" not in v for v in res.values()) and all(c >= 1 for c in counts.values())
+          and not missing_sqlite and not missing_pg)
+    return ("append-only holds in the shipped schema", ok,
+            "%s; %s; Postgres declares %d of 5%s; every table was probed with a row in it (rows now %s)"
+            % ({t: "/".join(v) for t, v in res.items()},
+               "twin declares 5 of 5" if not missing_sqlite else "twin missing %s" % sorted(missing_sqlite),
+               len(declared_pg & set(P07_AUDIT_TABLES)),
+               (", production missing %s — the twin alone is not a control" % sorted(missing_pg)) if missing_pg
+               else "",
+               {t: counts[t] for t in list(P07_AUDIT_TABLES)[:2]}))
 
 
 def c12_redaction_covers_every_shape_we_emit(p: Plane) -> tuple[str, bool, str]:
@@ -494,7 +625,7 @@ def c12_redaction_covers_every_shape_we_emit(p: Plane) -> tuple[str, bool, str]:
         "bearer": "Authorization: Bearer " + "z" * 40,
         "jwt": "eyJhbGciOiJIUzI1NiJ9." + "A" * 24 + "." + "B" * 24,
         "initData": "?initData=" + "q" * 40 + "&hash=" + "e" * 64,
-        "postgres uri": "postgres://pguser:***" * 12 + "@db:5432/p",
+        "postgres uri": "pool exhausted for postgres://pguser:***" + "p" * 12 + "@db:5432/p",
         "pem": "-----BEGIN PRIVATE KEY-----\nMIIE\n-----END PRIVATE KEY-----",
         "password field": '{"password": "hunter2hunter2"}',
     }
@@ -507,14 +638,15 @@ def c12_redaction_covers_every_shape_we_emit(p: Plane) -> tuple[str, bool, str]:
             if chunk in out:
                 leaked[name] = "fragment survived"
     # And the log line itself, because that is the surface that reaches a third-party retention window.
-    line = redact.line(ev="http", path="/v1/auth/telegram", init_data="***" + q40() + "***" + "f" * 64,
-                       pw="hunter2hunter2")
-    ok = not leaked and "hunter2hunter2" not in line and "***" not in line.replace("***", "")
-    return ("logs and errors are scrubbed before they land (14 patterns + 35 key names)",
-            not leaked and "hunter2" not in line,
-            "%d shapes covered, %d leaked %s; redact.line drops the body-shaped fields; MAX_FIELD=%d; the "
-            "false-positive cost is written in describe_choice() (%d notes)"
-            % (len(samples), len(leaked), leaked or "none", redact.MAX_FIELD, len(redact.describe_choice())))
+    line = redact.line(ev="http", path="/v1/auth/telegram",
+                       init_data="auth_user=%s&hash=%s" % (q40(), "f" * 64), pw="hunter2hunter2")
+    long_runs = re.findall(r"[A-Za-z0-9_]{24,}", line)
+    ok = not leaked and "hunter2hunter2" not in line and not long_runs
+    return ("logs and errors are scrubbed before they land (redact.PATTERNS + SENSITIVE_KEYS)", bool(ok),
+            "%d shapes covered, %d leaked %s; redact.line leaves %d long opaque run(s) %s behind; MAX_FIELD=%d;"
+            " the false-positive cost of the key list is written in describe_choice() (%d notes)"
+            % (len(samples), len(leaked), leaked or "none", len(long_runs), (long_runs or ["none"])[:1],
+               redact.MAX_FIELD, len(redact.describe_choice())))
 
 
 def q40() -> str:
@@ -648,7 +780,7 @@ def c19_break_glass_refuses_every_shortcut(p: Plane) -> tuple[str, bool, str]:
     codes = [(r.json() or {}).get("error", {}).get("code", "") for r in (one, short, dupes)]
     audit = p.SEC.rows("SELECT COUNT(*) c FROM auth_events WHERE kind = 'break_glass_denied'")
     denied = "BREAK_GLASS_DENIED"
-    ok = (no_token.status_code in (401, 403, 503) and codes[0] == "" and one.status_code == 422
+    ok = (no_token.status_code in (401, 403, 503) and one.status_code == 422 and codes[0] == "VALIDATION"
           and codes[1] == denied and codes[2] == denied and good.status_code == 200 and audit[0]["c"] >= 2)
     return ("break-glass needs two distinct humans and a 20-char reason; every attempt is recorded", ok,
             "no token=%d; one approver=%d %s (the schema refuses fewer than two before the policy sees it); "
@@ -701,21 +833,24 @@ def c21_rate_limit_budget_has_no_silent_drop(p: Plane) -> tuple[str, bool, str]:
 
 def c22_broadcast_gate_runs_before_the_broadcast(p: Plane) -> tuple[str, bool, str]:
     """Market quality gates are applied before the megaphone, and a refusal is stored rather than swallowed."""
-    from polygm_core.security import abuse
+    from polygm_core.security import abuse, sanitise
+    trusted = sanitise.resolution_source("https://oracle.polymarket.com/markets/0x11")["trusted"]
+    lookalike = sanitise.resolution_source("https://oracle.polymarket.com.evil/x")["trusted"]
     good = dict(market_id="0x" + "11" * 20, liquidity_micro=10 ** 10, age_ms=86_400_000,
-                resolution_trusted=True, flags=(), audience=400, created_by_wallet_age_h=900,
+                resolution_trusted=trusted, flags=(), audience=400, created_by_wallet_age_h=900,
                 at_ms=p.now, broadcasts_last_hour=0, outcomes=2)
     allow = abuse.broadcast_gate(**good)
     poison = abuse.broadcast_gate(**{**good, "flags": ("impersonates:polymarket.com",),
                                       "resolution_trusted": False})
     rows = p.SEC.rows("SELECT verdict, reasons_json FROM broadcast_gates ORDER BY at_ms DESC LIMIT 3")
     persisted = len(rows) >= 0            # the table exists and is append-only (checked in c11)
-    ok = (allow["verdict"] == "broadcast" and poison["verdict"] == "refused"
+    ok = (allow["verdict"] == "broadcast" and poison["verdict"] == "refused" and trusted and not lookalike
           and any(f.startswith("metadata:") for f in poison["refusals"]) and persisted)
     return ("the alert channel has a gate, and a poisoned market is refused not filtered", ok,
-            "clean market -> %s; poisoned -> %s %s; broadcast_gates is append-only with %d rows; floors: "
+            "clean market (trust derived from sanitise, not handed in) -> %s; poisoned -> %s %s; the lookalike"
+            " host `oracle.polymarket.com.evil` trusted=%s; broadcast_gates rows=%d; floors: "
             "$%.0f book, %d min age, %d h wallet, %d/h ours"
-            % (allow["verdict"], poison["verdict"], poison["refusals"][:2],
+            % (allow["verdict"], poison["verdict"], poison["refusals"][:2], lookalike,
                p.SEC.rows("SELECT COUNT(*) c FROM broadcast_gates")[0]["c"],
                abuse.MIN_LIQUIDITY_MICRO / 10 ** 6, abuse.MIN_MARKET_AGE_MS // 60000,
                abuse.FRESH_WALLET_HOURS, abuse.MAX_BROADCASTS_PER_HOUR))

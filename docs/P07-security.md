@@ -5,11 +5,30 @@ response and the compliance sentences a human will have to say out loud. This is
 mostly *restraint*: the prompt's rule is that no control ships without an owner and a test, and that a control
 whose cost exceeds the loss it prevents is not a control, it is a costume.
 
-Measured in this tree on 2026-09-18: `make p07` → **see `docs/verification/P07-gate.txt`**;
-`python3 -m unittest discover -s tests` → **631 tests OK** (of which 131 are P07: 89 in
-`tests/test_security_core.py`, 42 in `tests/test_security_plane.py`); `make lint` → **8/8 rules clean, 8/8
-canaries fire**; `python3 tools/check-openapi.py` → **176/176**; `tools/ci-log-scan.py --sources` → **132 files,
-0 findings** with a self-test that proves it can fail; `make drill-p07` → **`docs/verification/P07-key-drill.txt`**.
+Measured in this tree on 2026-09-18: `make p07` → **32/32 checks in 45 s** (transcript:
+`docs/verification/P07-gate.txt`); `make drill-p07` → **pass** — 10,000 wrapped keys revoked in 42 ms of our own
+time across 20 batch statements, 0 of 800 sessions surviving the global revocation, the queue sweep landing inside
+the same statement that engaged the switch (`docs/verification/P07-key-drill.txt`); `make gate-p07-mutate` →
+**28 planted weaknesses, 28 KILLED, 0 survived** (`docs/verification/P07-mutation.txt`);
+`python3 -m unittest discover -s tests` → **641 tests OK**, 141 of them P07 (94 in `tests/test_security_core.py`,
+stdlib-only, and 47 in `tests/test_security_plane.py` against a booted API); `make lint` → **8/8 rules clean, 8/8
+canaries fire**; `python3 tools/check-openapi.py` → **176/176**; `tools/ci-log-scan.py --sources` → **133 files,
+0 findings**, with `--self-test` at 0 failures so the scanner is known to be able to fail.
+
+**What the phase's own tools caught, in order of how much it would have cost.** These are not anecdotes; each one
+changed the product. (1) `_principal` derived the authorisation operation from the request *URL*, so every served
+route with an identifier in its path answered 500 `AUTHZ_UNDECLARED` to an entitled caller — invisible to ~600
+green tests because the suite's fixtures authenticate by dev header, and caught only when `gate:c10` demanded a
+404 and got a 500. (2) The five P07 audit tables were append-only **in the SQLite twin only**: `0009_security.sql`
+had no triggers, so production's audit trail was an `UPDATE` away from a different story. `gate:c11` now asserts
+the declaration in the Postgres file, not the behaviour of the twin, and the twin generator's blind spot
+(conditional triggers are PG-only) is written into both files. (3) `totp.REQUIRED_FOR` named `address_remove` and
+no route enforced it: a declared control with no caller. The route now asks, the contract already documented the
+403, and `test_removing_a_destination_also_needs_the_factor` pins it. (4) Six of the eight runbook steps cited
+tests that did not exist; `gate:c1` resolves those references now. (5) Ten of the first 28 mutants survived, and
+every survivor was the same shape: a test that read a constant back instead of calling the function that uses it
+(`attempt_state(totp.MAX_ATTEMPTS)` is green for any value of `MAX_ATTEMPTS`). The fix was never to lower the
+floor; it was to name a number and ask the code.
 
 Every control marker below (an owner handle, then a resolvable test reference) is machine-checked: the gate resolves the owner against the owner
 table and the test against a real `unittest` method in this repository, and fails on a control whose test was
@@ -171,7 +190,11 @@ left to the backend, because the key is rotated by Telegram and fetching it is a
 RFC 4226/6238 vectors are asserted in the suite so a "refactor" of the truncation or the dynamic-offset
 arithmetic is a red test rather than a security incident: the standard's own secret
 (`base32("12345678901234567890")`) produces `755224` at counter 0 and `287082` at counter 1, and 8-digit
-`94287082`. Window is ±1 step of 30 s — five minutes of acceptance is already a replay window, so we take the
+`94287082`. A code is single-use *inside* its window (`last_step` refuses a step at or before the one already
+accepted), which is the property that makes a code watched over a shoulder or screenshotted worth less than
+nothing — and the property that means two money actions are 30 seconds apart by design, not by accident. Tests
+and the gate move the app's clock by a window instead of sleeping; that is the only honest way to exercise the
+sequence. Window is ±1 step of 30 s — five minutes of acceptance is already a replay window, so we take the
 support cost of clock drift instead. A code at or before the last accepted step is refused as `reused`; five
 wrong codes lock the factor for 15 minutes (not the account, so the user can still read their positions); an
 enrolment is not usable until a code is *verified* from it.
@@ -191,8 +214,14 @@ duplicated address. It returns in P10 with a nonce-bound typed payload if the pr
 
 **Withdrawal-address cooldown: 24 hours, enforced in the schema.** `withdrawal_addresses.usable_ms` is
 `created_ms + 86 400 000`, and a CHECK constraint makes `skip_cooldown` unrepresentable — there is no code path
-to forget, and no admin action that can take it (it is in `ADMIN_FORBIDDEN`). An address in cooldown cannot be
-deleted, or "wait a day" becomes "delete it and add the attacker's". Two accounts naming the same destination are
+to forget, and no admin action that can take it (it is in `ADMIN_FORBIDDEN`). The second layer is the row itself:
+trigger `withdrawal_hold_immutable` refuses any `UPDATE` that moves `usable_ms` earlier or to NULL, because the
+write that beats a schema-level rule is the one that does not go through the API. It is Postgres-only by necessity
+— the twin generator special-cases the append-only block and nothing else — so `gate:c8` asserts the behaviour in
+SQLite and the *declaration* in this file, rather than claiming a symmetry that does not exist. An address in
+cooldown cannot be deleted, or "wait a day" becomes "delete it and add the attacker's"; deletion itself needs the
+second factor, for the same reason addition does (this was declared in `totp.REQUIRED_FOR` as `address_remove`
+and not enforced by the route until the gate asked for the refusal — see `test_removing_a_destination_also_needs_the_factor`). Two accounts naming the same destination are
 linked in the record, which is the cheapest detection we have for a takeover in progress. Ten destinations per
 user, because a list of fifty is a dragnet and a list of ten is a person with a hardware wallet.
 [owner: api-owner · test: tests/test_security_plane.py::TestTotpAndAddresses::test_a_new_destination_is_held_for_24_hours_and_cannot_be_deleted_while_held] · [owner: api-owner · test: tests/test_security_plane.py::TestTotpAndAddresses::test_the_destination_cap_holds_and_no_row_can_skip_the_cooldown]

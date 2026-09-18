@@ -990,6 +990,18 @@ class TestIncidentResponse(unittest.TestCase):
         self.assertNotEqual([s.action for s in poison][:3], [s.action for s in steps][:3],
                             "a poisoned alert channel is a different problem and must not read the same list")
 
+    def test_the_preserve_step_names_four_artifacts_and_a_hash(self):
+        """"Preserve the evidence" is four artifacts or it is a mood.
+
+        The step is the one an investigator needs three weeks later, and the failure mode is a snapshot nobody
+        hashed: without a hash the chain of custody is "we think we copied the right file at the right time".
+        """
+        step = next(s for s in incident.first_60_minutes() if "Preserve" in s.action)
+        named = [w for w in ("DB snapshot", "auth_events", "log files", "order list") if w in step.action]
+        self.assertEqual(len(named), 4, "the preserve step must name what to copy, found %s" % (named,))
+        self.assertIn("sha256", step.verify, "and where the proof of each copy goes")
+        self.assertTrue(step.owner and step.test_ref, "with an owner and a thing that checks it")
+
     def test_severity_is_a_rule_two_people_at_4am_apply_the_same_way(self):
         self.assertEqual(incident.SEVERITIES[0].id, "S1")
         self.assertEqual(incident.severity_for(money_moving=True, keys_exposed=False, data_left=False,
@@ -1077,6 +1089,50 @@ class TestIncidentResponse(unittest.TestCase):
             self.assertNotIn(alarm, incident.OPS_ALARMS, "a breach alarm buried among latency pages gets ignored")
         self.assertTrue(incident.TEMPLATES.keys() >= {"key_compromise", "data_exposure"},
                         "every severity that reaches a customer needs a template")
+
+
+class TestGuardsAreBehavioural(unittest.TestCase):
+    """Four rules that a constant does not pin, found by the mutation harness and not by the first draft.
+
+    `tools/p07-mutation-test.py` inverted each guard below and the suite stayed green: the tests read the number
+    and never called the function that uses it. A test that asserts `MIN_LEN = 12` proves the file contains a
+    number; a test that asks the code whether a nine-character password is acceptable is a control.
+    """
+
+    def test_below_floor_names_a_hash_that_is_technically_argon2id(self):
+        weak = "$argon2id$v=19$m=8192,t=1,p=1" + "$" + "A" * 22 + "$" + "B" * 43
+        bad, why = passwords.below_floor(weak)
+        self.assertTrue(bad, "an 8 MiB / 1-iteration hash is 'Argon2id' and worthless; got %r" % (why,))
+        self.assertIn("memory_kib=8192 is below the floor", why)
+
+    def test_the_lockout_actually_locks_at_the_number_it_publishes(self):
+        # Literals on both sides. The first draft of this test passed `passwords.LOCK["max_failed"]` as the
+        # attempt count, which stays green for any value of that constant — the mutation harness pointed at
+        # `max_failed = 100000` and the test said "locked", because it had asked for a million tries. A test that
+        # reads a constant back is a tautology with an assert in it; the doc quotes *ten*, so ten is what the
+        # behaviour has to match.
+        self.assertEqual(passwords.LOCK["max_failed"], 10)
+        st = passwords.lock_state(10, 0, passwords.LOCK["window_ms"] - 1)
+        self.assertTrue(st["locked"], "ten failures inside the window must lock; the guard is not decorative")
+        self.assertFalse(passwords.lock_state(9, 0, passwords.LOCK["window_ms"] - 1)["locked"],
+                         "and nine must not, or the published number is a lie")
+
+    def test_the_totp_attempt_cap_is_the_default_not_a_parameter(self):
+        from polygm_core.security import totp
+        self.assertEqual(totp.MAX_ATTEMPTS, 5)
+        self.assertTrue(totp.attempt_state(5)["locked"],
+                        "five wrong codes lock the factor; a caller that forgets to pass `limit` is still capped")
+        self.assertEqual(totp.attempt_state(4)["tries_left"], 1)
+
+    def test_five_rejections_in_the_window_disable_a_builder_code_and_four_do_not(self):
+        from polygm_core.security import abuse
+        at = 1_700_000_000_000
+        self.assertEqual(abuse.DISABLE_AFTER_REJECTS, 5, "the venue gives no more than five, so neither do we")
+        five = abuse.builder_code_event(state="throttled", reject_count=5, last_reject_ms=at - 1000, at_ms=at)
+        self.assertEqual(five["state"], "disabled", "the counter must be able to reach the decision")
+        self.assertTrue(five["alarm"] and five["strip_code"], "and the alarm plus the fallback travel with it")
+        four = abuse.builder_code_event(state="throttled", reject_count=4, last_reject_ms=at - 1000, at_ms=at)
+        self.assertNotEqual(four["state"], "disabled", "four is a hiccup, not a revocation")
 
 
 class TestModuleIntegrity(unittest.TestCase):

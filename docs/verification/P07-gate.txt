@@ -1,0 +1,67 @@
+P07 gate run, 2026-09-18 03:15:13Z (--fast=False), python3
+
+  PASS   682 ms  every control carries [owner · test], resolvable
+        55 markers; 7 owners all in the table; 0 broken test refs
+  PASS   146 ms  STRIDE table: ≥15 threats by expected loss
+        18 rows, top 150000, bottom 1000, is sorted, 18/18 rows carry STRIDE letters
+  PASS   141 ms  every served route declares a level; mirror agrees
+        22 served, 39 declared, undeclared=none, mirror rows=39, mismatches=0, stale=17 (P08+ promises)
+  PASS   333 ms  Argon2id at or above the floor, rehashed on login
+        login 200; stored hash upgraded to m=65536,t=3; params {'memory_kib': 65536, 'time_cost': 3, 'parallelism': 4, 'hash_len': 32, 'salt_len': 16}; below-floor(before)=False; custom-hash-anywhere=no
+  PASS   179 ms  Telegram initData: published derivation, replay refused after a restart
+        secret_key matches HMAC('WebAppData', token)=True; fresh login ok=True; replay after reopen='replayed', and the route refused the replayed payload 409/TELEGRAM_REPLAY while minting 0 session(s) (the account is linked, so no unrelated 409 can impersonate this result); malformed=401; unlinked=TELEGRAM_REPLAY; windows login=300s refresh=86400s
+  PASS   321 ms  TOTP on every money path, verified enrolment only
+        no-factor/wrong-factor answers [('add, no code, no factor enrolled', 403, 'TOTP_REQUIRED'), ('remove, no code, no factor enrolled', 403, 'TOTP_REQUIRED'), ('add, a code but no enrolment', 403, 'TOTP_REQUIRED')]; a valid code is accepted (200) so the refusals above are the factor and not a validator; REQUIRED_FOR=['address_add', 'address_remove', 'break_glass', 'key_export', 'revoke_keys', 'un-halt', 'withdraw']; is_mandatory true for all six actions=True; the authz table names 0 route(s) whose object check mentions the factor; spending the same window again is refused (remove -> 403); 5 wrong codes lock the factor for 900s and the account stays usable
+  PASS   256 ms  refresh rotation with reuse detection revokes the family
+        first=200 reuse=401 family-token=401; 2 sessions all revoked=True; auth_events has refresh_reuse=True; access token TTL 900 s (read off the row's own delta, 900000 ms: 900 s is the promise, and a long-lived access token would make rotation and revocation decorative)
+  PASS   273 ms  24 h cooldown unrepresentable-to-skip, address never projected in full
+        insert-time skip refused by the CHECK=True; a row-level shortening of the hold is refused in Postgres by trigger withdrawal_hold_immutable=True (the SQLite twin cannot carry a conditional trigger, so the twin reports ['update to clear the cooldown', 'update to set skip'] for those two statements - measured, not hidden); add→usable in exactly 86400000 ms; delete-while-held=409; list leaks the address=False
+  PASS   139 ms  key policy = exactly two targets; a provider that cannot scope is DISQUALIFYING
+        the policy's targets are exactly two named addresses=True; all caps -> acceptable; {'policy_hash_readable': 'conditional', 'per_key_rate_limit': 'conditional', 'instant_revoke': 'conditional'}; wider-than-two accepted=False; venue-addresses.json agrees with keys.py=True (status UNVERIFIED-placeholder); revocation 10k: 20 calls / 0.6 s of our own time, provider-limited answer in the same string
+  PASS   361 ms  object-level authz: cross-user reads are 404s, and a test proves it per route
+        2 scoped ops ['GET /v1/orders/{intentId}', 'POST /v1/orders/{intentId}/cancel']; a foreign/absent intent = 404 NOT_FOUND (never a 403, which is the oracle); revoking someone else's session = 404; a cross-user test exists in the suite = True
+  PASS   144 ms  append-only holds in the shipped schema
+        {'auth_events': 'auth_events is not updatable/auth_events is not deletable', 'wash_findings': 'wash_findings is not updatable/wash_findings is not deletable', 'broadcast_gates': 'broadcast_gates is not updatable/broadcast_gates is not deletable', 'backup_restore_tests': 'backup_restore_tests is not updata/backup_restore_tests is not deleta', 'drill_records': 'drill_records is not updatable/drill_records is not deletable'}; twin declares 5 of 5; Postgres declares 5 of 5; every table was probed with a row in it (rows now {'auth_events': 3, 'wash_findings': 1})
+  PASS   138 ms  logs and errors are scrubbed before they land (redact.PATTERNS + SENSITIVE_KEYS)
+        9 shapes covered, 0 leaked none; redact.line leaves 0 long opaque run(s) ['none'] behind; MAX_FIELD=2000; the false-positive cost of the key list is written in describe_choice() (4 notes)
+  PASS   582 ms  Sentry scrubbing is boot-wired, or the pod refuses to start
+        state=disabled (no PGM_SENTRY_DSN); /readyz names the scrubber problem=False; with PGM_REQUIRE_SECURITY_ENV=1 and no KEK the boot hook runs (rc=0); wiring text: True
+  PASS   150 ms  CSP + frame-ancestors + no-store, per surface
+        api csp="default-src 'self'; script-src 'self' https://telegram.org h"…; mini-app allowlist=True; markets cache=None (public data may be cached); PGM_MINI_APP_FRAME_ANCESTORS is the override Telegram's hostnames need [UNVERIFIED in doc]
+  PASS   690 ms  CI greps every log line before it lands (and the grepper is grepped)
+        planted key -> rc 1 with a fingerprint not the key (leaks=False); sources -> rc 0 (ci-log-scan: 133 file(s) scanned, 0 finding(s)); self-test -> rc 0 (log-scan self-test: 0 pattern(s) failed); both tools wired into ci.yml=True
+  PASS   181 ms  dependencies pinned, digest file tracked, feed consulted or its absence said
+        rc=0; 11 pinned lines (0 unpinned); tracked deploy files=['deploy/image-digests.txt', 'deploy/venue-addresses.json']; the tool states what it could not check=True
+  PASS   135 ms  no ingress to the executor, KEK out of its environment, digest-pinned, read-only
+        internal network=True; live executor block ports=False expose=False; KEK in env=False; digest file named=True; read_only+cap_drop+no-new-privileges=True (the executor service itself is documented-and-commented until P13, so the posture is checked in the block that will be uncommented)
+  PASS   142 ms  a route with no declared level is 500 AUTHZ_UNDECLARED, never a fake 401
+        require() -> AUTHZ_UNDECLARED/500; a served route without a session -> 404 NOT_FOUND (so a real deployment bug is still loud while an anonymous call is still an auth answer)
+  PASS   174 ms  break-glass needs two distinct humans and a 20-char reason; every attempt is recorded
+        no token=503; one approver=422 VALIDATION (the schema refuses fewer than two before the policy sees it); short reason=422 BREAK_GLASS_DENIED; duplicate approver=422 BREAK_GLASS_DENIED; justified call=200; denials recorded in auth_events=2 (a refusal nobody logs is a refusal nobody investigates)
+  PASS   141 ms  admin may not skip the cooldown or un-enrol a factor
+        ADMIN_FORBIDDEN covers 7 actions incl. both; the field is refused by the schema (422) and appears nowhere as a parameter in app.py=True; the refusal text says why: `skip_withdrawal_cooldown` is on the admin-forbidden list: admin
+  PASS   151 ms  alert-rule budget: a per-user share, scheduled, and an alarm before the cliff
+        demand 400/min vs budget 300; per-user cap 75 (2500 bps); exhausted=True; alarm at 7000 bps; policy: schedule round-robin at 75 polls/min/user and say so in the rule's UI; never s
+  PASS   137 ms  the alert channel has a gate, and a poisoned market is refused not filtered
+        clean market (trust derived from sanitise, not handed in) -> broadcast; poisoned -> refused ['resolution_source_untrusted', 'metadata:impersonates:polymarket.com']; the lookalike host `oracle.polymarket.com.evil` trusted=False; broadcast_gates rows=0; floors: $500 book, 30 min age, 72 h wallet, 5/h ours
+  PASS   134 ms  wash trading: scored on fees, enforced on the payout, not on the trade
+        self-cross -> 4500 bps action=hold_payout; payout_gate -> payout held: hold_payout (score 4500 bps: self_cross; a human with round numbers -> 0 bps/True; weights {'self_cross': 4500, 'round_trip': 2500, 'counterparty_concentration': 1800, 'size_regularisation': 1200}; findings table rows=0
+  PASS   133 ms  a disabled builder code tells the user their orders still work
+        disable -> disabled (alarm=True, message quoted in the doc=True); rejections outside the window decay to active, so a venue hiccup cannot strip a code forever
+  PASS   821 ms  money-path lint clean over the whole tree, canaries fire
+        lint rc=0 (  order-via-gate       clean); canary rc=0; the no-secrets rule was itself fixed this phase (it flagged `def verify(query, bot_token, *, purpose="login")` because a name and a quote shared a line)
+  PASS   910 ms  every P07 error code is in the contract, and the contract checker passes
+        check-openapi:   from starlette.testclient import TestClient as; 47 codes in Error.code, missing none
+  PASS 34904 ms  the whole suite runs green, and P07's share of it is counted
+        Ran 641 tests in 34.375s OK; 641 tests total, 141 of them P07 (89 core + 42 route); the core half is stdlib-only and does not import FastAPI at all
+  PASS   145 ms  the key-compromise drill ran and its artifact is current
+        99 lines, dated 2026-09-18, within the 90-day window=True, missing phrases=none; the artifact ends with what it does NOT prove, which is the part a passing run makes people skip
+  PASS   164 ms  the mutation harness killed every planted weakness
+        29 killed, 0 survived of 28; survivors mean a check that cannot fail
+  PASS   147 ms  every [UNVERIFIED] has a numbered launch item
+        14 markers, 15 checklist items, no orphans, stale (closed?) items: ['incident-paging-phone']
+  PASS   143 ms  the geofence decision is written down, with its arithmetic and its reviewer
+        ruling stated=True, reasons enumerated=True, owner+check=True, counsel item on the checklist=True
+  PASS   790 ms  with PGM_REQUIRE_SECURITY_ENV=1 a missing KEK is a boot failure, not a degraded pod
+        REFUSED BootError this pod is configured to require the security plane and cannot start: PGM_KEK_v1, PGM_IP_PEPPER, PGM_SERVICE_TOKEN, PGM_IMAGE_PROXY | the same flag is what turns `SECURITY_ENV_MISSING` from a 503 into a crash-loop, which is the right answer for a signer and the wrong one for a laptop: the tests set it only in the CI job
+P07 gate: 32/32 checks passed in 43887 ms
