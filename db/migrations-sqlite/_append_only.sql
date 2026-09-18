@@ -21,6 +21,26 @@ CREATE TRIGGER append_only_position_snapshots_update BEFORE UPDATE ON position_s
 
 CREATE TRIGGER append_only_position_snapshots_delete BEFORE DELETE ON position_snapshots BEGIN SELECT RAISE(ABORT,'append-only table: position_snapshots is not deletable'); END;
 
+CREATE TRIGGER append_only_auth_events_update BEFORE UPDATE ON auth_events BEGIN SELECT RAISE(ABORT,'append-only table: auth_events is not updatable'); END;
+
+CREATE TRIGGER append_only_auth_events_delete BEFORE DELETE ON auth_events BEGIN SELECT RAISE(ABORT,'append-only table: auth_events is not deletable'); END;
+
+CREATE TRIGGER append_only_wash_findings_update BEFORE UPDATE ON wash_findings BEGIN SELECT RAISE(ABORT,'append-only table: wash_findings is not updatable'); END;
+
+CREATE TRIGGER append_only_wash_findings_delete BEFORE DELETE ON wash_findings BEGIN SELECT RAISE(ABORT,'append-only table: wash_findings is not deletable'); END;
+
+CREATE TRIGGER append_only_broadcast_gates_update BEFORE UPDATE ON broadcast_gates BEGIN SELECT RAISE(ABORT,'append-only table: broadcast_gates is not updatable'); END;
+
+CREATE TRIGGER append_only_broadcast_gates_delete BEFORE DELETE ON broadcast_gates BEGIN SELECT RAISE(ABORT,'append-only table: broadcast_gates is not deletable'); END;
+
+CREATE TRIGGER append_only_backup_restore_tests_update BEFORE UPDATE ON backup_restore_tests BEGIN SELECT RAISE(ABORT,'append-only table: backup_restore_tests is not updatable'); END;
+
+CREATE TRIGGER append_only_backup_restore_tests_delete BEFORE DELETE ON backup_restore_tests BEGIN SELECT RAISE(ABORT,'append-only table: backup_restore_tests is not deletable'); END;
+
+CREATE TRIGGER append_only_drill_records_update BEFORE UPDATE ON drill_records BEGIN SELECT RAISE(ABORT,'append-only table: drill_records is not updatable'); END;
+
+CREATE TRIGGER append_only_drill_records_delete BEFORE DELETE ON drill_records BEGIN SELECT RAISE(ABORT,'append-only table: drill_records is not deletable'); END;
+
 CREATE TRIGGER append_only_audit_log_update BEFORE UPDATE ON audit_log BEGIN SELECT RAISE(ABORT,'append-only table: audit_log is not updatable'); END;
 
 CREATE TRIGGER append_only_audit_log_delete BEFORE DELETE ON audit_log BEGIN SELECT RAISE(ABORT,'append-only table: audit_log is not deletable'); END;
@@ -40,3 +60,35 @@ CREATE TRIGGER append_only_kill_switch_state_delete BEFORE DELETE ON kill_switch
 CREATE TRIGGER append_only_referral_events_update BEFORE UPDATE ON referral_events BEGIN SELECT RAISE(ABORT,'append-only table: referral_events is not updatable'); END;
 
 CREATE TRIGGER append_only_referral_events_delete BEFORE DELETE ON referral_events BEGIN SELECT RAISE(ABORT,'append-only table: referral_events is not deletable'); END;
+
+CREATE TRIGGER append_only_wallet_events_update BEFORE UPDATE ON wallet_events BEGIN SELECT RAISE(ABORT,'append-only table: wallet_events is not updatable'); END;
+
+CREATE TRIGGER append_only_wallet_events_delete BEFORE DELETE ON wallet_events BEGIN SELECT RAISE(ABORT,'append-only table: wallet_events is not deletable'); END;
+
+CREATE TRIGGER append_only_order_lifecycle_update BEFORE UPDATE ON order_lifecycle BEGIN SELECT RAISE(ABORT,'append-only table: order_lifecycle is not updatable'); END;
+
+CREATE TRIGGER append_only_order_lifecycle_delete BEFORE DELETE ON order_lifecycle BEGIN SELECT RAISE(ABORT,'append-only table: order_lifecycle is not deletable'); END;
+
+CREATE TRIGGER append_only_reconcile_actions_update BEFORE UPDATE ON reconcile_actions BEGIN SELECT RAISE(ABORT,'append-only table: reconcile_actions is not updatable'); END;
+
+CREATE TRIGGER append_only_reconcile_actions_delete BEFORE DELETE ON reconcile_actions BEGIN SELECT RAISE(ABORT,'append-only table: reconcile_actions is not deletable'); END;
+
+CREATE TRIGGER append_only_copy_events_update BEFORE UPDATE ON copy_events BEGIN SELECT RAISE(ABORT,'append-only table: copy_events is not updatable'); END;
+
+CREATE TRIGGER append_only_copy_events_delete BEFORE DELETE ON copy_events BEGIN SELECT RAISE(ABORT,'append-only table: copy_events is not deletable'); END;
+
+CREATE TRIGGER append_only_automation_runs_update BEFORE UPDATE ON automation_runs BEGIN SELECT RAISE(ABORT,'append-only table: automation_runs is not updatable'); END;
+
+CREATE TRIGGER append_only_automation_runs_delete BEFORE DELETE ON automation_runs BEGIN SELECT RAISE(ABORT,'append-only table: automation_runs is not deletable'); END;
+
+CREATE TRIGGER append_only_chain_events_update BEFORE UPDATE ON chain_events BEGIN SELECT RAISE(ABORT,'append-only table: chain_events is not updatable'); END;
+
+CREATE TRIGGER append_only_chain_events_delete BEFORE DELETE ON chain_events BEGIN SELECT RAISE(ABORT,'append-only table: chain_events is not deletable'); END;
+
+CREATE TRIGGER append_only_flag_audit_p06_update BEFORE UPDATE ON flag_audit_p06 BEGIN SELECT RAISE(ABORT,'append-only table: flag_audit_p06 is not updatable'); END;
+
+CREATE TRIGGER append_only_flag_audit_p06_delete BEFORE DELETE ON flag_audit_p06 BEGIN SELECT RAISE(ABORT,'append-only table: flag_audit_p06 is not deletable'); END;
+
+CREATE TRIGGER append_only_kill_switch_drills_update BEFORE UPDATE ON kill_switch_drills BEGIN SELECT RAISE(ABORT,'append-only table: kill_switch_drills is not updatable'); END;
+
+CREATE TRIGGER append_only_kill_switch_drills_delete BEFORE DELETE ON kill_switch_drills BEGIN SELECT RAISE(ABORT,'append-only table: kill_switch_drills is not deletable'); END;

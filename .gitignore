@@ -13,3 +13,6 @@ node_modules/
 *.db-shm
 dist/
 coverage/
+
+# scratch: temp DBs and executor child logs from the P06 harnesses when TMPDIR points in here
+.tmp/

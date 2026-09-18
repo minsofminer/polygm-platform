@@ -14,3 +14,8 @@ redis==5.2.1
 # of it fails at install time rather than at 3am. 1.1.0 is the current release, verified against PyPI
 # during this phase.
 py-clob-client-v2==1.1.0
+# P07 · the security plane. Both pins are measured, not remembered: `pip index versions` on 2026-09-18 returned
+# 25.1.0 and 50.0.1 as current. They are runtime deps, not dev extras, because the password hash, the envelope
+# and the log scrubber run in the API and executor processes — a control that only exists in CI is a slide deck.
+argon2-cffi==25.1.0
+cryptography==50.0.1

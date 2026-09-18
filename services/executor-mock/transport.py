@@ -68,6 +68,40 @@ class HttpTransport:
     def cancel_all(self, *, timeout_ms: int) -> dict:
         return self._call("POST", "/v1/cancel-all", {}, timeout_ms)
 
+    # ------------------------------------------------------- P06: batch, cancels, reconciliation reads
+    def post_batch(self, items: list[dict], *, timeout_ms: int) -> dict:
+        """`POST /v1/orders` with {orders:[{order,orderType}]} — at most 15 items (P06 D2).
+
+        The cap is enforced HERE as well as in `clob_v2.plan_batch`, deliberately: the batch planner and the
+        transport are written by different hands at different times, and the second check is the one that
+        fires when the first is wrong. A 400 from the venue is a bug report; a silent truncation is a user
+        whose order never existed.
+        """
+        if len(items) > 15:
+            raise ValueError("BATCH_TOO_LARGE: the venue accepts at most 15 orders per request, got %d"
+                             % len(items))
+        self.post_calls += 1
+        return self._call("POST", "/v1/orders", {"orders": items}, timeout_ms)
+
+    def cancel(self, order_id: str, *, timeout_ms: int = 2000) -> dict:
+        return self._call("POST", "/v1/cancel", {"orderID": order_id}, timeout_ms)
+
+    def cancel_batch(self, order_ids: list[str], *, timeout_ms: int = 2000) -> dict:
+        if len(order_ids) > 15:
+            raise ValueError("BATCH_TOO_LARGE")
+        return self._call("POST", "/v1/cancel", {"orderIDs": list(order_ids)}, timeout_ms)
+
+    def list_orders(self, *, timeout_ms: int = 2000) -> dict:
+        return self._call("GET", "/v1/orders", None, timeout_ms)
+
+    def trades_for(self, order_id: str, *, timeout_ms: int = 2000) -> list[dict]:
+        r = self._call("GET", "/v1/trades?orderID=" + order_id, None, timeout_ms)
+        return list(r.get("trades") or []) if isinstance(r, dict) else []
+
+    def recent_trades(self, *, limit: int = 50, timeout_ms: int = 2000) -> list[dict]:
+        r = self._call("GET", "/v1/trades?limit=%d" % limit, None, timeout_ms)
+        return list(r.get("trades") or []) if isinstance(r, dict) else []
+
     # ------------------------------------------------------------------ test helpers
     def set_scenario(self, name: str, timeout_ms: int = 2000, **kw) -> dict:
         return self._call("POST", "/v1/scenario", dict(kw, scenario=name), timeout_ms)

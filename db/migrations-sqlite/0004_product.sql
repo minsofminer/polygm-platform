@@ -75,7 +75,8 @@ CREATE TABLE copy_configs (
 CREATE TABLE automation_rules (
     id              TEXT PRIMARY KEY,
     user_id         TEXT NOT NULL REFERENCES users(id),
-    kind            TEXT NOT NULL CHECK (kind IN ('take_profit','stop_loss','auto_redeem','scale_out','hedge')),
+    kind            TEXT NOT NULL CHECK (kind IN ('take_profit','stop_loss','auto_redeem','scale_out','hedge',
+                                                  'entry','exit','cancel','alert')),
     trigger_json    TEXT NOT NULL,
     max_loss_micro  INTEGER NOT NULL DEFAULT 0 CHECK (max_loss_micro >= 0),
     enabled         INTEGER NOT NULL DEFAULT FALSE,
@@ -116,6 +117,8 @@ CREATE TABLE audit_log (
     target_table    TEXT,
     target_id       TEXT,
     request_id      TEXT NOT NULL,
-    detail_json     JSONB NOT NULL DEFAULT '{}');
+    detail_json     TEXT NOT NULL DEFAULT '{}',
+    CHECK (substr(trim(detail_json), 1, 1) = '{')
+);
 CREATE INDEX audit_actor_ix ON audit_log (actor_id, at_ms);
 CREATE INDEX audit_action_ix ON audit_log (action, at_ms);

@@ -52,6 +52,20 @@ TABLE_FOR_PATH = {
     "/v1/orders": "ORDER_RESPONSES",
     "/v1/orders/intents/{intent_id}": "INTENT_RESPONSES",
     "/v1/admin/kill-switch": "KILL_RESPONSES",
+    # P07 · the security plane. Mapped here as well as in the yaml, because a new route that is *not* in this
+    # table is silently skipped by the comparison below — the checker's own version of an undocumented endpoint.
+    "/v1/auth/login": "AUTH_RESPONSES",
+    "/v1/auth/refresh": "AUTH_RESPONSES",
+    "/v1/auth/logout": "SESSIONS_RESPONSES",
+    "/v1/auth/sessions": "SESSIONS_RESPONSES",
+    "/v1/auth/sessions/revoke": "SESSIONS_RESPONSES",
+    "/v1/auth/telegram": "AUTH_RESPONSES",
+    "/v1/auth/totp/enroll": "AUTH_RESPONSES",
+    "/v1/auth/totp/verify": "AUTH_RESPONSES",
+    "/v1/wallet/withdrawal-addresses": "SESSIONS_RESPONSES",
+    "/v1/wallet/withdrawal-addresses/add": "ADDRESS_RESPONSES",
+    "/v1/wallet/withdrawal-addresses/remove": "ADDRESS_RESPONSES",
+    "/v1/admin/revoke-sessions": "BREAK_GLASS_RESPONSES",
 }
 
 

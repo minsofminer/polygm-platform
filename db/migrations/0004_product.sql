@@ -105,7 +105,13 @@ CREATE TABLE copy_configs (
 CREATE TABLE automation_rules (
     id              TEXT PRIMARY KEY,
     user_id         TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    kind            TEXT NOT NULL CHECK (kind IN ('take_profit','stop_loss','auto_redeem','scale_out','hedge')),
+    -- P06 extended this list. The five kinds above are what P04's rule UI could express; the automation
+    -- engine needs the ACTION a rule performs, and 'take_profit' is a reason, not an action -- the same
+    -- reason can be executed as a limit, a FAK market order, a cancel or an alert, and the difference
+    -- decides whether it goes through the venue at all. Old rows keep their meaning: every P04 kind is
+    -- still valid, so an existing database needs no data migration, only this widened CHECK.
+    kind            TEXT NOT NULL CHECK (kind IN ('take_profit','stop_loss','auto_redeem','scale_out','hedge',
+                                                  'entry','exit','cancel','alert')),
     -- every rule that can MOVE MONEY is armed with an explicit ceiling; `auto_redeem` needs none because
     -- redemption cannot lose principal, which is the one asymmetry worth encoding in a CHECK.
     trigger_json    JSONB NOT NULL,
@@ -158,10 +164,20 @@ CREATE TABLE audit_log (
     target_id       TEXT,
     request_id      TEXT NOT NULL,               -- joins to the log lines; without it this table is
                                                  -- decorative, and decorative tables are not read at 3am
-    detail_json     JSONB NOT NULL DEFAULT '{}'  CHECK (jsonb_typeof(detail_json) = 'object'),
-    -- the payload must never contain a key or a mnemonic. Enforced in code (services/api redacts) and
-    -- checked in CI by a grep for likely secret shapes in this column's writes.
-    CONSTRAINT no_secret_shapes CHECK (detail_json::text !~ '(""(private_key|mnemonic|secret|api_secret)"")')
+    detail_json     JSONB NOT NULL DEFAULT '{}',
+    -- The object check, as a TABLE-level clause: `jsonb_typeof(detail_json) = 'object'` did not survive the
+    -- SQLite transpiler, so the dev engine was enforcing nothing while the production schema claimed to
+    -- enforce something (P06's new parity check in tools/build-sqlite-migrations.py found it). Same rule,
+    -- both dialects.
+    --
+    -- The OTHER clause that used to live here — `detail_json::text !~ '("private_key"|"mnemonic"|...)'`, a
+    -- no-secrets guard — is deliberately NOT replaced with a portable LIKE. A LIKE cannot tell a key named
+    -- "secret" from prose that contains the word, so it would refuse legitimate audit rows ("rotated the
+    -- signing secret"), and an audit log that sometimes fails to write is an audit log with holes. The
+    -- invariant is kept where it can be exact: services/api redacts before writing, and
+    -- tools/lint-rules.py::no-secrets greps the writers. Losing a schema CHECK is the price of the dev
+    -- engine not having regex; the price of the wrong CHECK is a silent gap in the trail.
+    CHECK (substr(trim(detail_json), 1, 1) = '{')
 );
 CREATE INDEX audit_actor_ix ON audit_log (actor_id, at_ms DESC);
 CREATE INDEX audit_action_ix ON audit_log (action, at_ms DESC);

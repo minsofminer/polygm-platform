@@ -1,0 +1,12 @@
+{
+  "status": "UNVERIFIED-placeholder",
+  "note": "The two addresses below are the SHAPE P07's key policy constrains, not the values we deploy with. P13 replaces them from the venue's published documentation, and `tools/p07-gate-check.py` fails if packages/polygm_core/security/keys.py and this file disagree - drift between the policy the executor signs under and the policy we tell users about is the POLICY_DRIFT incident, started by us.",
+  "chain_id": 137,
+  "clob_exchange": "0x000000000000000000000000000000000000c10b",
+  "pusd_token": "0x0000000000000000000000000000000000000e50",
+  "confirm_before_launch": [
+    "replace both addresses from the venue docs",
+    "set status to confirmed",
+    "re-run make gate-p07"
+  ]
+}

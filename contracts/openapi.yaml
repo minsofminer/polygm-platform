@@ -360,6 +360,15 @@ paths:
                   pattern: '^[0-9]+(\.[0-9]{1,6})?$'
                   maxLength: 24
       responses:
+        '401':
+          description: >-
+            P07: no session. `POST /v1/orders` is `user`, and the identity comes from the bearer token
+            it carries — a `X-User-Id` header is a development identity that a pod configured with
+            `PGM_REQUIRE_SECURITY_ENV=1` does not accept, and a header that disagrees with a valid
+            session is a 403 `SESSION_MISMATCH`, never a preference for whichever one is easier.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
         "202":
           description: queued for the executor
           headers:
@@ -508,6 +517,743 @@ paths:
               schema: {$ref: "#/components/schemas/Error"}
         "503": {$ref: "#/components/responses/Denied"}
         "500": {$ref: "#/components/responses/Internal"}
+
+
+  # --------------------------------------------------------------------------- P07 · authn, sessions, 2FA
+  # P07 · the security plane. The status sets below are the app's `*_RESPONSES` tables transcribed, 500
+  # included, because `tools/check-openapi.py` requires the two sets to be EQUAL: a contract that forgets
+  # the global handler is a client that does not handle it, and a table that gains a status in code has to
+  # gain it here in the same commit or the gate says so.
+  /v1/auth/login:
+    post:
+      tags:
+      - auth
+      summary: Exchange a password for a short session and a single-use refresh token
+      description: 'Argon2id, with the parameters read back out of the stored hash: a credential minted under a weaker
+        setting is re-hashed on a successful login, so the upgrade happens while we hold the plaintext. A wrong identifier
+        and a wrong password return the same body, for the same time, because a login form that says "no such account"
+        is a user-enumeration API. Ten failures in fifteen minutes closes the door on the account; the per-IP budget
+        lives in the ingest rate limiter, where a spray actually hurts. '
+      operationId: authLogin
+      x-auth: public
+      x-rate-class: auth
+      x-cache: no-store
+      x-idempotency-exempt: a login mints a new session by design; two logins are two devices, not a duplicate mutation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+              - identifier
+              - password
+              properties:
+                identifier:
+                  type: string
+                  minLength: 3
+                  maxLength: 200
+                password:
+                  type: string
+                  minLength: 1
+                  maxLength: 1024
+      responses:
+        '200':
+          description: see the summary; every field is derived from a row, no token material
+        '401':
+          description: no bearer session, or the session ended
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: the session is fine; the action needs more
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: the body is not the shape this route takes
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '429':
+          description: too many attempts against this credential
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: the global handler answered with the envelope and a request id; nothing in this route may answer
+            outside that envelope
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: the security backend is not configured here
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /v1/auth/refresh:
+    post:
+      tags:
+      - auth
+      summary: Rotate a refresh token for a new pair (reuse of a spent token kills the family)
+      description: 'The refresh token is single-use. Presenting a spent token is not a retry, it is the signature
+        of a thief who has a copy of it, and the response is to revoke the whole family: the attacker''s token and
+        the victim''s new one, plus an `auth_events` row the alarm reads. The token itself is never stored, only its
+        SHA-256, so a read of this table cannot mint a session. '
+      operationId: authRefresh
+      x-auth: public
+      x-rate-class: auth
+      x-cache: no-store
+      x-idempotency-exempt: rotation is the mutation; the single-use rule is the idempotency mechanism, and a replay
+        is an alarm
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+              - refreshToken
+              properties:
+                refreshToken:
+                  type: string
+                  minLength: 20
+                  maxLength: 200
+      responses:
+        '200':
+          description: see the summary; every field is derived from a row, no token material
+        '401':
+          description: no bearer session, or the session ended
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: the session is fine; the action needs more
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: the body is not the shape this route takes
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '429':
+          description: too many attempts against this credential
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: the global handler answered with the envelope and a request id; nothing in this route may answer
+            outside that envelope
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: the security backend is not configured here
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /v1/auth/logout:
+    post:
+      tags:
+      - auth
+      summary: End this session
+      description: 'Ends the calling session only. "Everywhere" is a separate, explicit action with its own row, because
+        the two are different intents and the wrong one is unrecoverable in the middle of an incident. '
+      operationId: authLogout
+      x-auth: user
+      x-rate-class: auth
+      x-cache: no-store
+      x-idempotency-exempt: 'idempotent by construction: the second call reports zero rows changed and is not an error'
+      responses:
+        '200':
+          description: see the summary; every field is derived from a row, no token material
+        '401':
+          description: no bearer session, or the session ended
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: the body is not the shape this route takes
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: the global handler answered with the envelope and a request id; nothing in this route may answer
+            outside that envelope
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /v1/auth/sessions:
+    get:
+      tags:
+      - auth
+      summary: This account's sessions, with no token material in any field
+      description: 'The per-device list: kind, label, issued, last seen, and the reason it was revoked. Rows are safe
+        to render because the tokens behind them are hashes. This is the screen a user is sent to when an alert says
+        "a new device signed in", which is why it exists before the settings page does. '
+      operationId: listSessions
+      x-auth: user
+      x-rate-class: auth-read
+      x-cache: private, no-store
+      responses:
+        '200':
+          description: see the summary; every field is derived from a row, no token material
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Stamped'
+        '401':
+          description: no bearer session, or the session ended
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: the body is not the shape this route takes
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: the global handler answered with the envelope and a request id; nothing in this route may answer
+            outside that envelope
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /v1/auth/sessions/revoke:
+    post:
+      tags:
+      - auth
+      summary: Revoke one of this account's sessions, or all of them
+      description: 'Object-level authorisation in the WHERE clause: the row is looked up by (id, user), so somebody
+        else''s session id is a miss rather than a 403. A session id is a lockout primitive if that comparison is
+        missing, and a body that guesses the shape of a foreign id gets the same answer as one that guesses wrong
+        about a real one. '
+      operationId: revokeSession
+      x-auth: user-owns-resource
+      x-rate-class: auth
+      x-cache: no-store
+      x-idempotency-exempt: 'revocation converges: two calls for the same session end one session and write one event'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+              - sessionId
+              properties:
+                sessionId:
+                  type: string
+                  maxLength: 64
+                everywhere:
+                  type: boolean
+      responses:
+        '200':
+          description: see the summary; every field is derived from a row, no token material
+        '401':
+          description: no bearer session, or the session ended
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: the body is not the shape this route takes
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: the global handler answered with the envelope and a request id; nothing in this route may answer
+            outside that envelope
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /v1/auth/telegram:
+    post:
+      tags:
+      - auth
+      summary: Sign in from a Telegram Mini App (initData signature, freshness, replay)
+      description: 'Three checks in this order: the HMAC-SHA256 of the data-check-string under the key `HMAC-SHA256("WebAppData",
+        botToken)`; `auth_date` inside five minutes for a login; then the nonce table, which is what makes a captured
+        payload useless a second time. A malformed token in the environment is a 503, not a permissive fallback —
+        every failure mode here is chosen so that a misconfiguration looks broken rather than open. '
+      operationId: authTelegram
+      x-auth: public
+      x-rate-class: auth
+      x-cache: no-store
+      x-idempotency-exempt: 'the replay store IS the idempotency mechanism: the same payload twice is refused, not
+        merged'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+              - initData
+              properties:
+                initData:
+                  type: string
+                  minLength: 20
+                  maxLength: 8000
+      responses:
+        '200':
+          description: see the summary; every field is derived from a row, no token material
+        '401':
+          description: no bearer session, or the session ended
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: the session is fine; the action needs more
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: the body is not the shape this route takes
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '429':
+          description: too many attempts against this credential
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: the global handler answered with the envelope and a request id; nothing in this route may answer
+            outside that envelope
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: the security backend is not configured here
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /v1/auth/totp/enroll:
+    post:
+      tags:
+      - auth
+      summary: Generate an authenticator secret, show it once, store it wrapped
+      description: 'The secret is sealed under the same KEK hierarchy as the signing keys and is never cached after
+        the one comparison that needs it. Enrolment is not complete until a code has been *entered*: `verified_ms`
+        stays null, so a hijacked session cannot attach an attacker''s authenticator and have it mean anything. Re-enrolment
+        is allowed — a lost phone is a real event — and writes an event the user sees on their next login. '
+      operationId: totpEnroll
+      x-auth: user
+      x-rate-class: auth
+      x-cache: no-store
+      x-idempotency-exempt: generating a secret is not a mutation of money or of a session; two calls make one pending
+        enrolment
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: []
+              properties: {}
+      responses:
+        '200':
+          description: see the summary; every field is derived from a row, no token material
+        '401':
+          description: no bearer session, or the session ended
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: the session is fine; the action needs more
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: the body is not the shape this route takes
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '429':
+          description: too many attempts against this credential
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: the global handler answered with the envelope and a request id; nothing in this route may answer
+            outside that envelope
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: the security backend is not configured here
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /v1/auth/totp/verify:
+    post:
+      tags:
+      - auth
+      summary: Verify a 6-digit code (and consume its window)
+      description: 'RFC 6238 with one step of leeway, a five-try budget per enrolment, and single-use steps: a correct
+        code for a step already accepted is `reused`, not `ok`. The distinction is the difference between "the user
+        mistyped" and "somebody watched the user type it", and the second one needs an event. '
+      operationId: totpVerify
+      x-auth: user
+      x-rate-class: auth
+      x-cache: no-store
+      x-idempotency-exempt: the consumed step is the idempotency key; replaying a spent code is an alarm, never a
+        retry
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+              - code
+              properties:
+                code:
+                  type: string
+                  pattern: ^[0-9]{6}$
+      responses:
+        '200':
+          description: see the summary; every field is derived from a row, no token material
+        '401':
+          description: no bearer session, or the session ended
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: the session is fine; the action needs more
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: the body is not the shape this route takes
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '429':
+          description: too many attempts against this credential
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: the global handler answered with the envelope and a request id; nothing in this route may answer
+            outside that envelope
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: the security backend is not configured here
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /v1/wallet/withdrawal-addresses:
+    get:
+      tags:
+      - wallet
+      summary: Saved destinations, with the hold remaining on each
+      description: 'Address values are shown short-form in the API and in full only on the screens where the owner
+        is typing them back. `cooldownRemainingMs` is in the payload because the number is the product''s promise,
+        and hiding it turns a 24-hour safety hold into an unexplained failure. '
+      operationId: listAddresses
+      x-auth: user
+      x-rate-class: auth-read
+      x-cache: private, no-store
+      responses:
+        '200':
+          description: see the summary; every field is derived from a row, no token material
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Stamped'
+        '401':
+          description: no bearer session, or the session ended
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: the body is not the shape this route takes
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: the global handler answered with the envelope and a request id; nothing in this route may answer
+            outside that envelope
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /v1/wallet/withdrawal-addresses/add:
+    post:
+      tags:
+      - wallet
+      summary: Add a withdrawal destination (usable after the 24 hour hold, TOTP required)
+      description: 'The hold starts when the destination is confirmed, not when it was typed, and nothing skips it:
+        the schema column that would allow the skip has a CHECK permitting only `false`, so the temptation is visible
+        in the table. An address already saved by another account is recorded as an event — shared destinations are
+        legitimate (an exchange deposit address) and worth noticing at the same time. '
+      operationId: addAddress
+      x-auth: user
+      x-rate-class: auth
+      x-cache: no-store
+      x-idempotency-exempt: the second call with the same address is refused by the limit and the cooldown, which
+        is the whole point
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+              - address
+              properties:
+                address:
+                  type: string
+                  minLength: 8
+                  maxLength: 128
+                label:
+                  type: string
+                  maxLength: 80
+                code:
+                  type: string
+                  pattern: ^[0-9]{6}$
+      responses:
+        '200':
+          description: see the summary; every field is derived from a row, no token material
+        '401':
+          description: no bearer session, or the session ended
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: the session is fine; the action needs more
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: the destination is inside its 24 hour hold
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: the body is not the shape this route takes
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '429':
+          description: too many attempts against this credential
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: the global handler answered with the envelope and a request id; nothing in this route may answer
+            outside that envelope
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: the security backend is not configured here
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /v1/wallet/withdrawal-addresses/remove:
+    post:
+      tags:
+      - wallet
+      summary: Delete a saved destination (never while it is inside its hold)
+      description: 'Removing a destination you cannot yet use is refused, and that refusal is the control: an attacker
+        who adds their own address uses deletion to erase the evidence before the first payout clears. The hold has
+        to outlast the attacker''s patience, not the session. '
+      operationId: removeAddress
+      x-auth: user-owns-resource
+      x-rate-class: auth
+      x-cache: no-store
+      x-idempotency-exempt: 'removal is state-convergent: the second call finds nothing to remove and reports zero
+        rows'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+              - addressId
+              properties:
+                addressId:
+                  type: string
+                  minLength: 4
+                  maxLength: 64
+      responses:
+        '200':
+          description: see the summary; every field is derived from a row, no token material
+        '401':
+          description: no bearer session, or the session ended
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: the session is fine; the action needs more
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: the destination is inside its 24 hour hold
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: the body is not the shape this route takes
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '429':
+          description: too many attempts against this credential
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: the global handler answered with the envelope and a request id; nothing in this route may answer
+            outside that envelope
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: the security backend is not configured here
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /v1/admin/revoke-sessions:
+    post:
+      tags:
+      - admin
+      summary: 'Break-glass: end every session, one statement, two named approvers'
+      description: 'Two distinct approvers and a reason of at least twenty characters, validated by the same function
+        the P06 kill drill uses. The single most dangerous account in this product is the one that can log everybody
+        out, because that is what an attacker does to stop you from seeing what they did — so the path exists, it
+        is loud, and every use of it is an event. '
+      operationId: adminRevokeSessions
+      x-auth: admin
+      x-rate-class: admin
+      x-cache: no-store
+      x-idempotency-exempt: revocation converges to zero live sessions; the audit rows for each call are the point
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+              - reason
+              - approvers
+              properties:
+                reason:
+                  type: string
+                  minLength: 4
+                  maxLength: 400
+                approvers:
+                  type: array
+                  minItems: 2
+                  items:
+                    type: string
+                    minLength: 2
+                scope:
+                  type: string
+                  enum:
+                  - user
+                  - all
+                userId:
+                  type: string
+                  maxLength: 64
+      responses:
+        '200':
+          description: see the summary; every field is derived from a row, no token material
+        '403':
+          description: the session is fine; the action needs more
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: the body is not the shape this route takes
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: the global handler answered with the envelope and a request id; nothing in this route may answer
+            outside that envelope
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: the security backend is not configured here
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
 
 components:
   headers:
@@ -660,7 +1406,7 @@ components:
                      OFF_TICK, BAD_MARKET_META, BELOW_MIN_SIZE, ZERO_SIZE, BAD_AMOUNT, OVER_ORDER_CAP,
                      PRICE_FAR_FROM_MID, TOO_MANY_OPEN, DAILY_CAP, IDEM_CONFLICT, IDEM_IN_PROGRESS,
                      IDEM_KEY_REQUIRED, RISK_UNAVAILABLE, SIGNER_UNAVAILABLE, BAD_REASON, NOT_FOUND,
-                     VALIDATION, INTERNAL]
+                     VALIDATION, INTERNAL, UNAUTHENTICATED, SESSION_STALE, SESSION_REVOKED, SESSION_MISMATCH, ADMIN_REQUIRED, LOGIN_FAILED, ACCOUNT_LOCKED, TOTP_REQUIRED, TOTP_INVALID, TOTP_LOCKED, ADDRESS_COOLDOWN, ADDRESS_LIMIT, REMOVE_DURING_COOLDOWN, NO_SUCH_RESOURCE, REFRESH_UNKNOWN, REFRESH_REUSED, REFRESH_EXPIRED, TELEGRAM_REPLAY, TELEGRAM_INVALID, SECURITY_ENV_MISSING, KEYSTORE_TAMPER, BREAK_GLASS_DENIED, AUTHZ_UNDECLARED]
             message: {type: string, description: "user-safe by construction"}
             retryable: {type: boolean}
             requestId: {type: string}

@@ -2,4 +2,10 @@
 mypy==1.13.0
 pytest==8.3.4
 ruff==0.8.4
-schemathesis==3.38.7
+
+# schemathesis was pinned here from P04 until P06 removed it: no test or tool imports it (the contract check
+# is tools/check-openapi.py, which validates the served document against the generated schema and applies the
+# migrations), and its dependency set conflicts with the pinned fastapi/starlette pair in requirements.txt.
+# That made `pip install -r requirements-dev.txt` unresolvable, which is a worse outcome for a fresh clone
+# than losing a fuzzing tool that was never run. Re-add it (unpinned, in its own extra) if a property-based
+# contract test is actually written against it.

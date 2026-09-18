@@ -11,7 +11,8 @@ ENVFILE := $(ROOT)/.env
 .DEFAULT_GOAL := help
 .PHONY: help dev dev-core down logs test test-verbose lint typecheck migrate seed seed-sql gate \
         gate-mutate check sql-sqlite sql-sqlite-check openapi openapi-selftest clean doctor probe \
-        p01 p02 p03 p04 p05 gate-p05 gate-p05-offline gate-p05-mutate chaos-p05 seed-rules envelope
+        p01 p02 p03 p04 p05 gate-p05 gate-p05-offline gate-p05-mutate chaos-p05 seed-rules envelope \
+        p06 gate-p06 gate-p06-offline gate-p06-mutate chaos-p06 drill-p06
 
 help:
 	@printf '%s\n' \
@@ -26,7 +27,11 @@ help:
 	 'make p05          P05 gate, offline half (suite + recorded live evidence + invariants)' \
 	 'make gate-p05     the live 300s WebSocket outage, then the gate that reads its artifact' \
 	 'make chaos-p05    the outage alone, streamed to your terminal' \
-	 'make seed-rules   OWNER=demo python3 tools/p05-seed-rules.py — default alert rules'
+	 'make seed-rules   OWNER=demo python3 tools/p05-seed-rules.py — default alert rules' \
+	 'make p06          P06 gate: 31 checks over the trading plane (wallet, venue, reconcile, limits, copy, automation, builder)' \
+	 'make gate-p06     SIGKILL the executor mid-flight, record it, then run the gate on the recording' \
+	 'make chaos-p06    the kills alone, streamed to your terminal' \
+	 'make drill-p06    kill switch against running processes; measures the 1000 ms budget'
 
 # ------------------------------------------------------------------ running
 # `.env` is a real prerequisite, not a nicety: compose reads it, and a fresh clone without one used to die
@@ -148,6 +153,30 @@ gate-p05-mutate:    ## prove the P05 gate can fail
 chaos-p05:          ## just the live outage, on a terminal where you can watch it
 	$(PY) tools/p05-chaos-test.py --subjects 8
 
+# P06 · the trading plane. `p06` is offline and fast (it reads the chaos artifact if one has been recorded,
+# and says plainly that it has not if it has not); `gate-p06` is the target that satisfies the phase, because
+# the phase's headline claim is a process that was SIGKILLed mid-flight.
+p06:
+	$(PY) tools/p06-gate-check.py
+
+gate-p06:
+	@mkdir -p docs/verification
+	$(PY) tools/p06-chaos-test.py --record docs/verification/P06-chaos-output.txt
+	$(PY) tools/p06-gate-check.py
+
+gate-p06-offline:   ## the 31 checks with nothing to kill (reads the recorded artifact)
+	$(PY) tools/p06-gate-check.py --fast
+
+gate-p06-mutate:    ## prove the P06 gate can fail, one broken money rule at a time
+	$(PY) tools/p06-mutation-test.py
+
+chaos-p06:          ## just the SIGKILLs, on a terminal where you can watch the venue counters move
+	$(PY) tools/p06-chaos-test.py
+
+drill-p06:          ## engage the switch against running processes and measure who refuses when
+	@mkdir -p docs/verification
+	$(PY) tools/p06-drill.py --record docs/verification/P06-drill.txt
+
 seed-rules:         ## write the default alert rules for one owner (P09 owns the UI for this table)
 	$(PY) tools/p05-seed-rules.py --owner $${OWNER:-demo}
 
@@ -159,7 +188,7 @@ p03:
 	$(PY) tools/p03-gate-check.py
 	$(PY) tools/p03-mutation-test.py
 
-check: test lint lint-canary openapi-selftest sql-sqlite-check gate gate-mutate p01 p02 p03 p05 probe-fresh
+check: test lint lint-canary openapi-selftest sql-sqlite-check gate gate-mutate p01 p02 p03 p04 p05 p06 probe-fresh
 	@echo "ALL GREEN"
 
 # ------------------------------------------------------------------ diagnostics

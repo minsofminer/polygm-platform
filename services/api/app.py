@@ -30,6 +30,22 @@ from polygm_core.ledger.ledger import IntentState
 from polygm_core.money.cents import MoneyError, ScaleError, fmt_usdc, parse_usdc, price_ticks
 from polygm_core.risk.gate import Intent, Limits, MarketState, evaluate, norm_tick
 from polygm_core.risk.idempotency import Idem
+from polygm_core.security import authz as _authz
+from polygm_core.security import keys as _keys
+from polygm_core.security import passwords as _pwd
+from polygm_core.security import redact as _redact
+from polygm_core.security import sanitise as _san
+from polygm_core.security import telegram as _tg
+from polygm_core.security import totp as _totp
+from polygm_core.security.store import ACCESS_TTL_MS, SecStore, hash_token as _hash_token, token_string as _token_string
+
+# The only place the non-stdlib security primitives are imported. A missing dependency is a refusal on the
+# paths that need it (503 SECURITY_ENV_MISSING), and with `PGM_REQUIRE_SECURITY_ENV=1` it is a refusal to boot.
+try:
+    import security_backends as _secb                                # noqa: F401  (sibling module)
+    _SECB_OK, _SECB_ERR = True, ""
+except Exception as _exc:                                            # noqa: BLE001
+    _secb, _SECB_OK, _SECB_ERR = None, False, type(_exc).__name__
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -58,6 +74,31 @@ CODES = {
     "SIGNER_UNAVAILABLE": ("signing is unavailable; trading disabled", 503, True),
     "NOT_FOUND": ("no such market", 404, False),
     "BAD_REASON": ("a kill-switch change needs a reason of 4-400 characters", 422, False),
+    # P07. Each of these is a *user-safe* sentence: the detail a client needs is here, and the detail an
+    # attacker would like is in the log line, behind the request id.
+    "UNAUTHENTICATED": ("a session is required", 401, False),
+    "SESSION_STALE": ("this session was ended because your credentials changed", 401, False),
+    "SESSION_REVOKED": ("this session has been revoked", 401, False),
+    "ADMIN_REQUIRED": ("this route is admin-only", 403, False),
+    "LOGIN_FAILED": ("wrong user name or password", 401, False),
+    "ACCOUNT_LOCKED": ("too many attempts; try again later", 429, True),
+    "TOTP_REQUIRED": ("a 6-digit code is needed for this action", 403, False),
+    "TOTP_INVALID": ("that code did not work", 403, False),
+    "TOTP_LOCKED": ("the authenticator is locked after too many tries", 429, True),
+    "ADDRESS_COOLDOWN": ("this destination is still in its 24 hour hold", 409, True),
+    "ADDRESS_LIMIT": ("too many saved destinations", 422, False),
+    "REMOVE_DURING_COOLDOWN": ("a destination that has not finished its hold cannot be deleted", 409, False),
+    "NO_SUCH_RESOURCE": ("no such resource", 404, False),
+    "REFRESH_UNKNOWN": ("that session cannot be refreshed", 401, False),
+    "REFRESH_REUSED": ("this session was ended for safety", 401, False),
+    "TELEGRAM_REPLAY": ("that sign-in had already been used", 409, False),
+    "TELEGRAM_INVALID": ("could not verify the Telegram sign-in", 401, False),
+    "SECURITY_ENV_MISSING": ("this action needs a security backend that is not configured", 503, True),
+    "KEYSTORE_TAMPER": ("the key store refused to release a key", 503, False),
+    "BREAK_GLASS_DENIED": ("break-glass needs two named approvers and a 20-character reason", 422, False),
+    "SESSION_MISMATCH": ("the session and the request disagree about who is asking", 403, False),
+    "AUTHZ_UNDECLARED": ("this route has no auth decision on record", 500, False),
+    "REFRESH_EXPIRED": ("that session expired", 401, False),
     # The three below exist so that NOTHING in this API answers outside the envelope. Without them a
     # malformed body gets FastAPI's default 422 `{"detail":[...]}` and a crash gets `{"detail":"Internal
     # Server Error"}` - both leak-free, but a client written against the contract breaks on both, and a
@@ -110,17 +151,51 @@ BOOK_RESPONSES = {404: {"description": "no such market, or a market with no orde
                   422: {"description": "depth outside 1-400"}}
 INTENT_RESPONSES = {404: {"description": "no such intent, or it belongs to another user (never 403: an "
                                          "id-probing endpoint must not confirm existence)"}}
+AUTH_RESPONSES = {
+    401: {"description": "no session, or a session that has been revoked or made stale"},
+    403: {"description": "the session is fine and the action still needs the authenticator"},
+    422: {"description": "the body is not the shape this route takes"},
+    429: {"description": "too many attempts against this credential"},
+    503: {"description": "the security backend is not configured on this pod"},
+}
+BREAK_GLASS_RESPONSES = {
+    403: {"description": "the token is not the admin token, or the two approvers did not check out"},
+    422: {"description": "no reason, or fewer than two approvers"},
+    503: {"description": "this pod has no admin token configured, which is a misconfiguration, not an attack"},
+}
+# A literal, not a `dict(AUTH_RESPONSES, **{...})`: `tools/check-openapi.py` reads these tables out of the
+# module's AST to compare them with the contract, and a call expression reads back as "no statuses at all" —
+# which shows up as a contract that documents errors the app allegedly cannot return.
+ADDRESS_RESPONSES = {
+    401: {"description": "no session, or a session that has been revoked or made stale"},
+    403: {"description": "the session is fine and the action still needs the authenticator"},
+    409: {"description": "the destination is inside its hold, or still in use"},
+    422: {"description": "the body is not the shape this route takes"},
+    429: {"description": "too many attempts against this credential"},
+    503: {"description": "the security backend is not configured on this pod"},
+}
+# Every one of these tables is a *literal with literal values*, because `tools/check-openapi.py` reads them out
+# of the AST: `{401: AUTH_RESPONSES[401]}` parses as "no status", and the contract then looks like it documents
+# errors the API allegedly cannot return. Duplication here is the price of the checker being a parser.
+SESSIONS_RESPONSES = {
+    200: {"description": "the caller's own sessions, with no token material in any field"},
+    401: {"description": "no bearer session, or the session ended"},
+    422: {"description": "the body is not the shape this route takes"},
+}
+
+
 # 500 for every operation except /healthz, which has nothing to fail on and must keep answering 200 while the
 # DB is on fire. Applied in a loop so a tenth endpoint cannot forget it, and `del` so the loop variable does
 # not survive into the module namespace where a reader would take it for state.
 for _t in (READYZ_RESPONSES, LIST_RESPONSES, TAPE_RESPONSES, KILL_RESPONSES, MARKET_RESPONSES,
-           BOOK_RESPONSES, INTENT_RESPONSES):
+           BOOK_RESPONSES, INTENT_RESPONSES, AUTH_RESPONSES, SESSIONS_RESPONSES, ADDRESS_RESPONSES,
+           BREAK_GLASS_RESPONSES):
     _t.update(_INTERNAL)
 del _t
 
 
-def err(code: str, request_id: str, *, detail: str | None = None, where: list[str] | None = None
-        ) -> JSONResponse:
+def err(code: str, request_id: str, *, detail: str | None = None, where: list[str] | None = None,
+        retry_after_s: int | None = None) -> JSONResponse:
     """One envelope shape, always. `detail` is accepted for internal callers but deliberately NOT put in the
     body: it is the free-text half where a Python message would leak, and `log` gets it instead.
 
@@ -131,9 +206,26 @@ def err(code: str, request_id: str, *, detail: str | None = None, where: list[st
     msg, status, retry = CODES.get(code, ("request failed", 400, False))
     if where:
         msg = msg + " (" + ", ".join(where) + ")"
+    # A constant `Retry-After: 2` on a 15-minute lockout is an instruction to hammer us: the header has to say
+    # what the server actually means. Clamped, because a client that trusts us should not be told to wait a year.
+    headers = {}
+    if retry:
+        headers["Retry-After"] = str(max(1, min(3600, int(retry_after_s if retry_after_s else 2))))
     return JSONResponse({"error": {"code": code, "message": msg, "retryable": retry,
-                                   "requestId": request_id}}, status_code=status,
-                        headers={"Retry-After": "2"} if retry else {})
+                                   "requestId": request_id}}, status_code=status, headers=headers)
+
+
+def _ip_hash(request: Request) -> str:
+    """Keyed, truncated, and never reversible. The pepper is a secret, so the same IP hashes differently in
+    dev than in prod and a stolen table cannot be joined to a stolen log."""
+    xff = request.headers.get("x-forwarded-for") or ""
+    ip = xff.split(",")[0].strip() if xff else (request.client.host if request.client else "")
+    return _authz.ip_hash(ip, os.environ.get("PGM_IP_PEPPER", ""))
+
+
+def _ua_hash(request: Request) -> str:
+    ua = (request.headers.get("user-agent") or "").strip()[:256]
+    return _authz.ip_hash(ua, os.environ.get("PGM_IP_PEPPER", "")) if ua else ""
 
 
 def _now_ms() -> int:
@@ -218,8 +310,8 @@ def _on_crash(request: Request, exc: Exception):
     by the request id, where a developer can read it. `type(exc).__name__` is not in the body either: an
     `sqlite3.OperationalError` naming a column is a schema diagram for anyone probing the API."""
     rid = getattr(request.state, "request_id", "-")
-    print(json.dumps({"ts": _now_ms(), "level": "error", "ev": "unhandled", "rid": rid,
-                      "type": type(exc).__name__}, sort_keys=True), flush=True)
+    print(_redact.line(ts=_now_ms(), level="error", ev="unhandled", rid=rid, type=type(exc).__name__,
+                       msg=_redact.redact_text(str(exc))[:400]), flush=True)
     msg, status, retry = CODES["INTERNAL"]
     return JSONResponse({"error": {"code": "INTERNAL", "message": msg, "retryable": retry,
                                   "requestId": rid}}, status_code=status,
@@ -233,6 +325,30 @@ def flags() -> Flags:
     return STORE.current()
 
 
+# D7 · transport and framing. `frame-ancestors` is the one that needs a sentence: the Mini App is *framed by
+# Telegram*, so `X-Frame-Options: DENY` would break the product and `SAMEORIGIN` would too. CSP's
+# `frame-ancestors` is the only directive that can say "these origins, and nobody else", so that is what we set
+# and XFO is deliberately absent — a reviewer looking for it should find this comment, not a silent omission.
+# `base-uri` and `form-action` are pinned to self because a single injected `<base>` rewrites every relative
+# URL on the page, which is how a market title becomes a credential sink.
+SECURITY_HEADERS = {
+    "content-security-policy": ("default-src 'self'; script-src 'self' https://telegram.org "
+                               "https://web.telegram.org; style-src 'self' 'unsafe-inline'; img-src 'self' data: "
+                               "https:; font-src 'self'; connect-src 'self' https://clob.polymarket.com "
+                               "wss://ws-subscriptions-clob.polymarket.com; frame-ancestors 'none'; "
+                               "base-uri 'self'; form-action 'self'; object-src 'none'; upgrade-insecure-requests"),
+    "x-content-type-options": "nosniff",
+    "referrer-policy": "no-referrer",
+    "cross-origin-opener-policy": "same-origin",
+    "cross-origin-resource-policy": "same-origin",
+    "permissions-policy": "geolocation=(), camera=(), microphone=(), payment=(), usb=()",
+    "strict-transport-security": "max-age=31536000; includeSubDomains; preload",
+}
+# The Mini App is the only thing that may frame us; the API itself never frames anything, so `frame-ancestors
+# 'none'` above is right for /v1/* and the *web* app (P08) swaps in the Telegram allowlist at its own edge.
+MINI_APP_FRAME_ANCESTORS = "frame-ancestors https://web.telegram.org https://*.telegram.org"
+
+
 @app.middleware("http")
 async def request_id(request: Request, call_next):
     """A request id on every response and every log line: the 3am requirement. Nothing else in this file
@@ -243,10 +359,23 @@ async def request_id(request: Request, call_next):
     resp = await call_next(request)
     resp.headers["x-request-id"] = rid
     resp.headers["server-timing"] = f"app;dur={((time.perf_counter() - t0) * 1000):.1f}"
+    for k, v in SECURITY_HEADERS.items():
+        resp.headers.setdefault(k, v)
+    # `cache-control` is deliberately not in SECURITY_HEADERS: a public market list is exactly what a CDN should
+    # hold, and P05's `cache.ttlMs` is the contract for that. What must never be stored is anything that says
+    # who you are or that something went wrong, so those two cases get the header here, next to the CSP that
+    # makes the same decision for framing.
+    if request.url.path.startswith(("/v1/auth", "/v1/wallet", "/v1/admin")) or resp.status_code >= 400:
+        resp.headers["cache-control"] = "no-store"
+    if (request.headers.get("x-openout-frame") or "") == "miniapp":
+        resp.headers["content-security-policy"] = SECURITY_HEADERS["content-security-policy"].replace(
+            "frame-ancestors 'none'", MINI_APP_FRAME_ANCESTORS)
     line = {"ts": _now_ms(), "level": "info", "ev": "http", "rid": rid, "path": request.url.path,
             "method": request.method, "status": resp.status_code,
             "dur_ms": round((time.perf_counter() - t0) * 1000, 2)}
-    print(json.dumps(line, sort_keys=True), flush=True)      # structured, stdout, no bodies
+    # `_redact.line`, not `json.dumps`: a path or query that carries a token (`?token=`, `#initData=...`) is a
+    # secret in an access log otherwise, and the access log is the one log everyone keeps forever.
+    print(_redact.line(**line), flush=True)
     return resp
 
 
@@ -255,6 +384,63 @@ def healthz():
     """Liveness: can this process answer at all. Deliberately does not touch Postgres/Redis — a pod that
     fails readiness must not also be declared dead, or the fleet restarts during an upstream outage."""
     return {"ok": True}
+
+
+@app.on_event("startup")
+def _sync_route_levels():
+    """Mirror the authorisation table into the database at boot, so the deployment artifact and the code can be
+    diffed by the gate instead of argued about. A route added without a level shows up as an undeclared row
+    within one restart, not at the next review."""
+    try:
+        SEC.sync_route_levels(_authz.LEVELS_TABLE, at=_now_ms())
+    except Exception:                                          # noqa: BLE001 - never block a boot on a mirror
+        pass
+
+
+def _install_sentry_scrubbing() -> str:
+    """If a DSN is configured, no event leaves this pod without passing through the same redactor the logs use.
+
+    Deliberately *not* an import-time side effect: the SDK must not be needed to import the app (tests and
+    `--help` would then depend on a network service), and a scrubber that fails to install has to be visible in
+    the log line it writes. The rule behind it is D6's: the error reporter is the one destination an engineer
+    forgets is a third party.
+    """
+    dsn = (os.environ.get("PGM_SENTRY_DSN") or "").strip()
+    if not dsn:
+        return "disabled (no PGM_SENTRY_DSN)"
+    try:
+        import sentry_sdk                                            # noqa: WPS433 - optional by design
+    except Exception as exc:                                         # noqa: BLE001
+        msg = "PGM_SENTRY_DSN is set but sentry_sdk is not importable: %s" % type(exc).__name__
+        if _flag("PGM_REQUIRE_SECURITY_ENV"):
+            raise _secb.BootError(msg) from exc
+        print(_redact.line(level="warn", ev="sentry", msg=msg), flush=True)
+        return "missing-sdk"
+    sentry_sdk.init(dsn=dsn, before_send=_redact.before_send, send_default_pii=False, max_breadcrumbs=20,
+                    request_bodies="never")
+    return "installed"
+
+
+_SENTRY = ""
+
+
+@app.on_event("startup")
+def _boot_security_plane():
+    """Boot-time security posture: the Sentry scrubber, and the refusal to serve money paths with no KEK.
+
+    `PGM_REQUIRE_SECURITY_ENV=1` turns "the pod came up in a degraded state" from a dashboard surprise into a
+    failed start. Dev without the flag keeps working, because a repo that cannot boot without five secrets is a
+    repo where nobody runs the auth tests.
+    """
+    global _SENTRY
+    _SENTRY = _install_sentry_scrubbing()
+    if _flag("PGM_REQUIRE_SECURITY_ENV"):
+        missing, notes = _secb.boot_check()["missing"], _secb.boot_check()["notes"]
+        if missing:
+            raise _secb.BootError("this pod is configured to require the security plane and cannot start: %s"
+                                  % ", ".join(missing[:6]))
+        if notes:
+            print(_redact.line(level="warn", ev="security-boot", notes="; ".join(notes)[:300]), flush=True)
 
 
 @app.get("/readyz", responses=READYZ_RESPONSES)
@@ -272,6 +458,10 @@ def readyz():
         problems.append("db_unreachable")
     if STORE.boot_defaults_used:
         problems.append("flags_from_defaults")
+    if _SENTRY == "missing-sdk":
+        # The event reporter is down, which is not a reason to stop serving - but it is a reason for the probe
+        # to say so, because an incident with no error stream is how a second one gets missed.
+        problems.append("sentry_scrubber_unavailable")
     return JSONResponse({"ready": not problems, "problems": problems}, status_code=200 if not problems else 503)
 
 
@@ -367,7 +557,7 @@ def _anon(wallet: str) -> str:
 
 
 def _shares(micro: int) -> str:
-    """Shares, not dollars: the venue quotes size in shares and `fmt_usdc` would imply a $1 cap.
+    r"""Shares, not dollars: the venue quotes size in shares and `fmt_usdc` would imply a $1 cap.
 
     The trailing `.` strip is not cosmetic. `f"{5_000_000 / 1e6:.6f}".rstrip("0")` is `"5."`, which fails the
     contract's own `^[0-9]+(\.[0-9]{1,6})?$` pattern — a bug that sat in the book route's inline formatting too,
@@ -375,6 +565,150 @@ def _shares(micro: int) -> str:
     correct two-step strip. Numbers that leave this file must be strings a schema accepts, not "close enough".
     """
     return f"{int(micro) // 10 ** 6}.{int(micro) % 10 ** 6:06d}".rstrip("0").rstrip(".") or "0"
+
+
+SEC = SecStore(_db)
+
+
+_HASHER = None
+
+
+def _hasher():
+    global _HASHER
+    if _HASHER is None:
+        _HASHER = _secb.Argon2id()
+    return _HASHER
+
+
+def _envelope():
+    """Lazily built so that importing this module never needs a KEK; every *use* of it does, and fails loudly."""
+    global _ENVELOPE
+    if _ENVELOPE is None:
+        kek, v = _secb.kek_from_env()
+        _ENVELOPE = _secb.AesGcmEnvelope(kek, version=v)
+    return _ENVELOPE
+
+
+_ENVELOPE = None
+
+
+def _trust_header() -> bool:
+    """`X-User-Id` is a development identity, not an authentication path.
+
+    Default on for dev/CI (every harness in this repo, and the P06 drill, present that header), default off
+    when `PGM_REQUIRE_SECURITY_ENV=1` — which is what a production compose file sets. `tools/p07-gate-check.py`
+    asserts both halves, because a control that only exists as an env var nobody reads is a comment.
+    """
+    if _flag("PGM_REQUIRE_SECURITY_ENV"):
+        return False
+    return os.environ.get("PGM_TRUST_USER_HEADER", "1") == "1"
+
+
+def _flag(name: str) -> bool:
+    return (os.environ.get(name) or "").strip() in ("1", "true", "yes", "on")
+
+
+def _bearer(request: Request) -> str:
+    h = request.headers.get("authorization") or ""
+    return h[7:].strip() if h[:7].lower() == "bearer " else ""
+
+
+def _principal(request: Request) -> tuple[str | None, dict | None, JSONResponse | None]:
+    """(user_id, session row, error response). One function, so one place can be wrong.
+
+    It does not raise: a route that forgets to check is the bug this returns 401 for, and every route in the
+    table below calls it because `authz.require` is applied to its declared level, not to its good intentions.
+    """
+    rid = request.state.request_id
+    tok = _bearer(request)
+    op = "%s %s" % (request.method, request.scope.get("route_path") or request.url.path)
+    if tok:
+        row = SEC.resolve_session(_hash_token(tok), at=_now_ms())
+        if not row:
+            return None, None, err("UNAUTHENTICATED", rid)
+        d = _authz.require(op, user_id=str(row["user_id"]), session_cred_gen=row.get("cred_gen"),
+                          credential_gen=(SEC.credential(str(row["user_id"])) or {}).get("gen"))
+        if not d.allowed:
+            return None, None, err(d.code if d.code in CODES else "UNAUTHENTICATED", rid, detail=d.reason or None)
+        request.state.authz_level = _authz.lookup(op)[1] if _authz.lookup(op) else "undeclared"
+        SEC.touch_session(row["id"], _now_ms())
+        request.state.session_id = row["id"]
+        request.state.owner_uid = str(row["user_id"])
+        request.state.uid = str(row["user_id"])
+        return str(row["user_id"]), row, None
+    declared = _authz.lookup(op)
+    if declared is None:
+        # Loud, not permissive. A route that nobody classified must not be served on the strength of a forgotten
+        # table row: 500 with a code of its own is what a dashboard shows and what `make gate-p07` refuses.
+        return None, None, err("AUTHZ_UNDECLARED", rid, detail=op)
+    if declared[1] == _authz.PUBLIC:
+        return None, None, None
+    if _trust_header():
+        uid = (request.headers.get("x-user-id") or "").strip()
+        if not uid:
+            return None, None, err("UNAUTHENTICATED", rid,
+                                   detail="no bearer token, and X-User-Id is empty")
+        request.state.dev_identity = True
+        request.state.owner_uid = uid
+        request.state.uid = uid
+        return uid, None, None
+    return None, None, err("UNAUTHENTICATED", rid)
+
+
+def _admin(request: Request) -> tuple[bool, JSONResponse | None]:
+    rid = request.state.request_id
+    tok = request.headers.get("x-admin-token") or ""
+    if not tok:
+        # Deliberately 503 rather than 401 (the P04 rule, still true): a box with no admin token configured is
+        # a misconfiguration, and it must not look like an attack in the dashboards the on-call reads.
+        return False, err("SIGNER_UNAVAILABLE", rid)
+    expected = (os.environ.get("PGM_ADMIN_TOKEN") or "").strip()
+    if not expected or not _authz.check_service_token(tok, expected):
+        return False, err("ADMIN_REQUIRED", rid)
+    return True, None
+
+
+def _totp_gate(request: Request, user_id: str, code: str, *, action: str) -> JSONResponse | None:
+    """The mandatory-second-factor path: withdrawals, address changes, key export, break-glass, revocation.
+
+    Every failure mode returns a *different* code, because support will be asked "why" at 2am and "no" is not
+    an answer. `reused` in particular must never be softened into "try again": it means somebody else has
+    already used that exact code.
+    """
+    rid = request.state.request_id
+    if not _totp.is_mandatory(action):
+        return None
+    st = SEC.totp_state(user_id)
+    if not st:
+        return err("TOTP_REQUIRED", rid, detail="enroll an authenticator before %s" % action.replace("_", " "))
+    if not st.get("verified_ms"):
+        # The route's own promise: `verified_ms` stays NULL until a code has been entered, so an attacker who
+        # enrols their own authenticator through a hijacked session authorises nothing with it. Recorded,
+        # because "somebody attached a factor and immediately tried to spend it" is the incident, not the bug.
+        SEC.auth_event(user_id, "totp_unverified_use", at=_now_ms(), detail={"action": action})
+        return err("TOTP_REQUIRED", rid, detail="finish authenticator enrolment before %s"
+                   % action.replace("_", " "))
+    res = _totp.verify(_ENVELOPE_TOTP_SECRET(st), str(code or ""), at=_now_ms(),
+                       last_step=int(st.get("last_step") or -1), attempts=int(st.get("failed_count") or 0),
+                       locked_until_ms=int(st.get("locked_until_ms") or 0))
+    if not res.ok:
+        SEC.totp_reject(user_id, at=_now_ms())
+        SEC.auth_event(user_id, "totp_%s" % res.reason, at=_now_ms())
+        code_out = "TOTP_LOCKED" if res.reason == "locked" else "TOTP_INVALID"
+        return err(code_out, rid, detail=res.reason if res.reason != "bad_code" else None,
+                   retry_after_s=max(1, int(res.retry_after_ms or 0) // 1000) if res.reason == "locked" else None)
+    SEC.totp_accept(user_id, step=res.step, at=_now_ms())
+    return None
+
+
+def _ENVELOPE_TOTP_SECRET(state: dict) -> str:
+    """Unwrap the TOTP secret for one comparison. No cache: a cached copy is a plaintext second factor sitting
+    in a process that also renders error pages."""
+    if _ENVELOPE is None:
+        raise _secb.BootError("no keystore")
+    return _ENVELOPE.open(ciphertext=state["secret_wrapped"], nonce=state["nonce"], tag=str(state["tag"]),
+                          aad={"user_id": state["user_id"], "kek_version": int(state["kek_version"]),
+                               "dek_version": 0, "policy_hash": "totp"}).decode()
 
 
 def _stamped(payload: dict, *, ttl_ms: int, stale_ms: int, as_of_ms: int | None = None) -> dict:
@@ -688,16 +1022,450 @@ def _body_schema(required: tuple[str, ...], props: dict) -> dict:
                    "properties": props}}}}}
 
 
-def _check_body(body: object, required: tuple[str, ...], rid: str) -> JSONResponse | None:
+def _check_body(body: object, required: tuple[str, ...], rid: str,
+                allowed: tuple[str, ...] | None = None) -> JSONResponse | None:
     """Shape before semantics: a missing field must be a 422 naming the field, not a 500 from a KeyError
-    (which is what `body["tokenId"]` produced for exactly this request, in the first end-to-end test)."""
+    (which is what `body["tokenId"]` produced for exactly this request, in the first end-to-end test).
+
+    `allowed` is the set of keys the endpoint accepts at all; it defaults to `required`, which is right for the
+    P04-P06 routes where every field is mandatory. A route with an optional field MUST pass the wider set, or
+    its own optional field is a 422 — which is how P07's `code` and `scope` arrived looking like an attack.
+    """
     if not isinstance(body, dict):
         return err("VALIDATION", rid, detail="body must be a JSON object")
+    ok = tuple(required) if allowed is None else tuple(allowed)
     missing = ["missing: %s" % k for k in required if k not in body]
-    unknown = ["unknown: %s" % k for k in body if k not in required]
+    unknown = ["unknown: %s" % k for k in body if k not in ok]
     if missing or unknown:
         return err("VALIDATION", rid, where=missing + unknown)
     return None
+
+
+def _check_props(body: dict, props: dict, rid: str) -> JSONResponse | None:
+    """The second half of the contract: `openapi_extra` promises minLength, a pattern and an enum, and a
+    request that breaks them must not reach the crypto.
+
+    This is not decoration. An empty password that reaches Argon2 costs 90 ms of CPU and burns one slot of the
+    lockout budget, so a client bug ("we send an empty string while the field is still loading") becomes a
+    denial of service the attacker does not have to pay for. Length and pattern are checked here, on the same
+    table the OpenAPI document is generated from, so the two cannot drift.
+    """
+    bad = []
+    for k, spec in props.items():
+        if k not in body:
+            continue
+        v = body[k]
+        if spec.get("type") == "string" and not isinstance(v, str):
+            bad.append("%s must be a string" % k)
+            continue
+        if isinstance(v, str):
+            if "minLength" in spec and len(v) < int(spec["minLength"]):
+                bad.append("%s is too short" % k)
+            if "maxLength" in spec and len(v) > int(spec["maxLength"]):
+                bad.append("%s is too long" % k)
+            if "pattern" in spec and not re.match(spec["pattern"], v):
+                bad.append("%s has the wrong shape" % k)
+        if "enum" in spec and v not in spec["enum"]:
+            bad.append("%s must be one of %s" % (k, "/".join(map(str, spec["enum"]))))
+        if spec.get("type") == "array" and isinstance(v, list):
+            if "minItems" in spec and len(v) < int(spec["minItems"]):
+                bad.append("%s needs at least %d entries" % (k, int(spec["minItems"])))
+    if bad:
+        return err("VALIDATION", rid, where=bad)
+    return None
+
+
+# --------------------------------------------------------------------------- P07: authn, sessions, 2FA
+LOGIN_REQUIRED = ("identifier", "password")
+LOGIN_PROPS = {"identifier": {"type": "string", "minLength": 3, "maxLength": 200},
+               "password": {"type": "string", "minLength": 1, "maxLength": 1024}}
+REFRESH_REQUIRED = ("refreshToken",)
+REFRESH_PROPS = {"refreshToken": {"type": "string", "minLength": 20, "maxLength": 200}}
+TELEGRAM_REQUIRED = ("initData",)
+TELEGRAM_PROPS = {"initData": {"type": "string", "minLength": 20, "maxLength": 8000}}
+TOTP_ENROLL_REQUIRED: tuple[str, ...] = ()
+TOTP_ENROLL_PROPS: dict = {}
+TOTP_VERIFY_REQUIRED = ("code",)
+TOTP_VERIFY_PROPS = {"code": {"type": "string", "pattern": "^[0-9]{6}$"}}
+ADDR_ADD_REQUIRED = ("address",)
+ADDR_ADD_PROPS = {"address": {"type": "string", "minLength": 8, "maxLength": 128},
+                  "label": {"type": "string", "maxLength": 80},
+                  # Optional in the schema, mandatory in behaviour: `_totp_gate` refuses without it for
+                  # `address_add`. The schema is permissive so the refusal is the *security* answer (403 with a
+                  # reason), not a 422 about field shape.
+                  "code": {"type": "string", "pattern": "^[0-9]{6}$"}}
+ADDR_RM_REQUIRED = ("addressId",)
+ADDR_RM_PROPS = {"addressId": {"type": "string", "minLength": 4, "maxLength": 64}}
+REVOKE_REQUIRED = ("reason", "approvers")
+REVOKE_PROPS = {"reason": {"type": "string", "minLength": 4, "maxLength": 400},
+                "approvers": {"type": "array", "minItems": 2, "items": {"type": "string", "minLength": 2}},
+                "scope": {"type": "string", "enum": ["user", "all"]},
+                "userId": {"type": "string", "maxLength": 64}}
+
+
+@app.post("/v1/auth/login", status_code=200, responses=AUTH_RESPONSES,
+           openapi_extra=_body_schema(LOGIN_REQUIRED, LOGIN_PROPS))
+def auth_login(request: Request, body: dict = Body(...)):
+    """Email-or-identifier + password. Returns a short access token and a single-use refresh token.
+
+    The response carries the refresh token exactly once, and the row that backs it is a hash. A login that
+    succeeds with parameters below the current floor re-hashes before it answers, so the upgrade happens while
+    we hold the plaintext and never again.
+    """
+    rid = request.state.request_id
+    bad = _check_body(body, LOGIN_REQUIRED, rid, allowed=tuple(LOGIN_PROPS))
+    if bad is not None:
+        return bad
+    bad = _check_props(body, LOGIN_PROPS, rid)
+    if bad is not None:
+        return bad
+    ident = str(body["identifier"]).strip().lower()
+    pw = str(body["password"])
+    # The account-side budget, from the event log we already write: 10 failures in 15 minutes stops the door,
+    # and the window is fixed from the first failure so the answer is explainable to the person locked out.
+    # Two budgets, both read out of the event log we already write, and *neither* of them global: a single
+    # counter over all failures is a denial of service somebody hands to the attacker, who then locks every
+    # account in the product by spraying ten bad passwords. The account bucket keys on the identifier (or on
+    # the id we resolved), the address bucket is looser and only stops *password guessing*.
+    win_from = _now_ms() - _pwd.LOCK["window_ms"]
+    iph = _ip_hash(request)
+    acct = SEC.one("SELECT COUNT(*) AS n, MIN(at_ms) AS first_ms FROM auth_events WHERE kind=? AND user_id=?"
+                   " AND at_ms>=?", ("login_bad_password", ident, win_from)) or {}
+    from_ip = SEC.one("SELECT COUNT(*) AS n, MIN(at_ms) AS first_ms FROM auth_events WHERE kind=? AND ip_hash=?"
+                      " AND at_ms>=?", ("login_bad_password", iph, win_from)) or {}
+    st = _pwd.lock_state(int(acct.get("n") or 0), int(acct.get("first_ms") or _now_ms()), _now_ms())
+    st_ip = _pwd.lock_state(int(from_ip.get("n") or 0), int(from_ip.get("first_ms") or _now_ms()), _now_ms(),
+                            limit=_pwd.LOCK["ip_max_failed"])
+    if st["locked"] or st_ip["locked"]:
+        which = "account" if st["locked"] else "address"
+        wait = max(st["retry_after_ms"], st_ip["retry_after_ms"])
+        SEC.auth_event(ident, "login_locked", at=_now_ms(), ip_hash=iph,
+                       detail={"retry_after_ms": wait, "bucket": which})
+        return err("ACCOUNT_LOCKED", rid, detail="retry in %ds" % (wait // 1000),
+                   retry_after_s=max(1, wait // 1000))
+    who = SEC.identity_user("email", ident) or SEC.identity_user("handle", ident) or (
+        ident if SEC.one("SELECT id FROM users WHERE id=?", (ident,)) else None)
+    row = {"user_id": who} if who else None
+    cred = SEC.credential(str((row or {}).get("user_id") or ""))
+    t0 = time.perf_counter()
+    # A missing user and a wrong password run the *same* code path, and the same body: the difference between
+    # "no such account" and "wrong password" is a user-enumeration oracle on a product where the identifier is
+    # an email address.
+    if not row or not cred:
+        # Keyed on the identifier when no account matched: that is what makes "10 tries for THIS email"
+        # countable, and the identifier never reaches a log line (see `redact.py`).
+        SEC.auth_event(ident, "login_bad_password", at=_now_ms(), ip_hash=_ip_hash(request))
+        return err("LOGIN_FAILED", rid)
+    verdict = _hasher().verify(str(cred["phc"]), pw)
+    if verdict.startswith("bad"):
+        SEC.auth_event(str(row["user_id"]), "login_bad_password", at=_now_ms(), ip_hash=_ip_hash(request))
+        return err("LOGIN_FAILED", rid)
+    fam = "fam_" + uuid.uuid4().hex[:12]
+    acc, ref = _token_string(), _token_string()
+    SEC.mint_session(str(row["user_id"]), token_hash=_hash_token(acc), family_id=fam, at=_now_ms(),
+                     ip_hash=_ip_hash(request), ua_hash=_ua_hash(request), cred_gen=int(cred["gen"]))
+    SEC.mint_refresh(str(row["user_id"]), token_hash=_hash_token(ref), family_id=fam, at=_now_ms())
+    if verdict == "ok_needs_rehash":
+        SEC.set_password(str(row["user_id"]), _hasher().hash(pw), at=_now_ms())
+    SEC.auth_event(str(row["user_id"]), "login_ok", at=_now_ms(), ip_hash=_ip_hash(request),
+                   detail={"ms": round((time.perf_counter() - t0) * 1000, 1), "rehashed": verdict == "ok_needs_rehash"})
+    return _stamped({"accessToken": acc, "refreshToken": ref, "tokenType": "Bearer",
+                     "expiresInMs": ACCESS_TTL_MS, "user": {"id": str(row["user_id"])}},
+                    ttl_ms=0, stale_ms=0)
+
+
+@app.post("/v1/auth/refresh", status_code=200, responses=AUTH_RESPONSES,
+           openapi_extra=_body_schema(REFRESH_REQUIRED, REFRESH_PROPS))
+def auth_refresh(request: Request, body: dict = Body(...)):
+    """Rotation, with the reuse alarm. A `REFRESH_REUSED` is a security event: it means a token that was
+    already spent came back, which means somebody else has it."""
+    rid = request.state.request_id
+    bad = _check_body(body, REFRESH_REQUIRED, rid, allowed=tuple(REFRESH_PROPS))
+    if bad is not None:
+        return bad
+    bad = _check_props(body, REFRESH_PROPS, rid)
+    if bad is not None:
+        return bad
+    old = _hash_token(str(body["refreshToken"]))
+    new = _token_string()
+    res = SEC.rotate_refresh(old, new_hash=_hash_token(new), at=_now_ms())
+    if not res.get("ok"):
+        SEC.auth_event("", "refresh_%s" % str(res.get("code", "")).lower(), at=_now_ms())
+        return err(str(res.get("code") or "REFRESH_UNKNOWN"), rid)
+    acc = _token_string()
+    SEC.mint_session(str(res["user_id"]), token_hash=_hash_token(acc), family_id=str(res["family_id"]),
+                     at=_now_ms(), ip_hash=_ip_hash(request), ua_hash=_ua_hash(request),
+                     cred_gen=int((SEC.credential(str(res["user_id"])) or {}).get("gen") or 1))
+    return _stamped({"accessToken": acc, "refreshToken": new, "tokenType": "Bearer", "expiresInMs": ACCESS_TTL_MS,
+                     "user": {"id": str(res["user_id"])}}, ttl_ms=0, stale_ms=0)
+
+
+@app.post("/v1/auth/logout", status_code=200, responses=SESSIONS_RESPONSES)
+def auth_logout(request: Request):
+    uid, row, e = _principal(request)
+    if e:
+        return e
+    if not row:
+        return err("UNAUTHENTICATED", request.state.request_id, detail="the dev identity has no session to end")
+    SEC.revoke_session(str(row["id"]), at=_now_ms(), reason="logged out", user_id=uid or "")
+    return {"ended": True}
+
+
+@app.get("/v1/auth/sessions", responses=SESSIONS_RESPONSES)
+def auth_sessions(request: Request):
+    """The per-device list with a revocation button behind it. No token material, ever — the rows are hashes
+    and labels, and that is what makes this endpoint safe to render in a page."""
+    uid, _row, e = _principal(request)
+    if e:
+        return e
+    return _stamped({"items": SEC.sessions_for(str(uid), at=_now_ms()), "ttlMs": ACCESS_TTL_MS},
+                    ttl_ms=5_000, stale_ms=60_000)
+
+
+@app.post("/v1/auth/sessions/revoke", status_code=200, responses=SESSIONS_RESPONSES,
+           openapi_extra=_body_schema(("sessionId",), {"sessionId": {"type": "string", "maxLength": 64},
+                                                       "everywhere": {"type": "boolean"}}))
+def auth_sessions_revoke(request: Request, body: dict = Body(...)):
+    # `_principal` first, and for a reason worth stating: this route takes a session id and kills it. Without an
+    # authenticated owner the (id, user_id) lookup below is a lookup against an empty string, which turns every
+    # revocation into a 404 - safe by accident, and an accident is not a control.
+    uid, _srow, e = _principal(request)
+    if e:
+        return e
+    bad = _check_body({k: v for k, v in (body or {}).items() if k in ("sessionId", "everywhere")},
+                      ("sessionId",), request.state.request_id, allowed=("sessionId", "everywhere"))
+    if bad is not None:
+        return bad
+    sid = str(body.get("sessionId") or "")
+    if str(body.get("everywhere") or "").lower() in ("1", "true", "yes"):
+        # The current session dies with the rest, which is the point of the button; the caller has to sign in
+        # again, and every device gets an explicit `session_revoked` event so support can say what happened.
+        out = SEC.revoke_all_sessions(user_id=str(uid), at=_now_ms(),
+                                      reason="user asked to be logged out everywhere")
+        return _stamped(out, ttl_ms=0, stale_ms=0)
+    # Object-level authorisation: a session id belongs to a user, and revoking somebody else's session is an
+    # account lockout primitive. The row is looked up by (id, user) so a wrong id is a miss, not a 403.
+    row = SEC.one("SELECT id, user_id FROM auth_sessions WHERE id=? AND user_id=?", (sid, uid_owner(request)))
+    if not row:
+        return err("NO_SUCH_RESOURCE", request.state.request_id)
+    return _stamped(SEC.revoke_session(sid, at=_now_ms(), reason="revoked from the session list",
+                                       user_id=uid_owner(request)), ttl_ms=0, stale_ms=0)
+
+
+def uid_owner(request: Request) -> str:
+    return str(getattr(request.state, "owner_uid", "") or getattr(request.state, "uid", "") or "")
+
+
+@app.post("/v1/auth/telegram", status_code=200, responses=AUTH_RESPONSES,
+           openapi_extra=_body_schema(TELEGRAM_REQUIRED, TELEGRAM_PROPS))
+def auth_telegram(request: Request, body: dict = Body(...)):
+    """Telegram Mini App sign-in: signature, freshness, then the replay store. In that order, all three.
+
+    The replay table is what makes "valid forever" false. A payload copied off a phishing page still carries a
+    correct signature — with the freshness window it is at most `LOGIN_MAX_AGE_S` useful, and with the nonce it
+    is useful exactly once.
+    """
+    rid = request.state.request_id
+    bad = _check_body(body, TELEGRAM_REQUIRED, rid, allowed=tuple(TELEGRAM_PROPS))
+    if bad is not None:
+        return bad
+    bad = _check_props(body, TELEGRAM_PROPS, rid)
+    if bad is not None:
+        return bad
+    token = (os.environ.get("PGM_TELEGRAM_BOT_TOKEN") or "").strip()
+    if not token:
+        return err("SECURITY_ENV_MISSING", rid, detail="PGM_TELEGRAM_BOT_TOKEN is not set on this pod")
+    try:
+        seen = SEC.telegram_seen_hashes(_tg.auth_hash(str(body["initData"])))
+        res = _tg.verify(str(body["initData"]), token, at=_now_ms(), purpose="login", seen_hashes=seen)
+    except _tg.InitDataError as exc:
+        SEC.auth_event("", "telegram_malformed", at=_now_ms(), detail={"why": str(exc)[:120]})
+        return err("TELEGRAM_INVALID", rid)
+    if not res.ok:
+        SEC.auth_event(res.tg_user_id, "telegram_%s" % res.reason, at=_now_ms(), ip_hash=_ip_hash(request),
+                       detail={"age_s": res.age_s, "hash": res.auth_hash[:12]})
+        return err("TELEGRAM_REPLAY" if res.reason == "replayed" else "TELEGRAM_INVALID", rid,
+                   detail=res.reason)
+    uid = SEC.identity_user("telegram", res.tg_user_id)
+    if not uid:
+        # Refused without saying whether the id exists, is unverified, or belongs to someone else. The
+        # `link` flow (P09) is where a proof is checked; this route only ever consumes one.
+        return err("TELEGRAM_INVALID", rid, detail="this Telegram account is not linked to an Openout user")
+    acc, ref = _token_string(), _token_string()
+    fam = "fam_" + uuid.uuid4().hex[:12]
+    srow = SEC.mint_session(uid, token_hash=_hash_token(acc), family_id=fam, at=_now_ms(), kind="telegram",
+                            ip_hash=_ip_hash(request), ua_hash=_ua_hash(request))
+    SEC.mint_refresh(uid, token_hash=_hash_token(ref), family_id=fam, at=_now_ms())
+    SEC.telegram_consume(res.auth_hash, uid, at=_now_ms(), session=srow["id"])
+    SEC.auth_event(uid, "login_telegram", at=_now_ms(), ip_hash=_ip_hash(request),
+                   detail={"age_s": res.age_s, "session": srow["id"]})
+    return _stamped({"accessToken": acc, "refreshToken": ref, "tokenType": "Bearer",
+                     "expiresInMs": ACCESS_TTL_MS, "user": {"id": uid}, "telegramAgeS": res.age_s},
+                    ttl_ms=0, stale_ms=0)
+
+
+@app.post("/v1/auth/totp/enroll", status_code=200, responses=AUTH_RESPONSES,
+           openapi_extra=_body_schema(TOTP_ENROLL_REQUIRED, TOTP_ENROLL_PROPS))
+def auth_totp_enroll(request: Request, body: dict = Body(default={})):
+    """Generate a secret, wrap it, show the QR once, and keep nothing readable.
+
+    Enrolment is deliberately *not* verified-and-armed in one step: `verified_ms` stays NULL until the user
+    enters a code, so a support agent or a session hijacker cannot silently attach their own authenticator and
+    call it done.
+    """
+    uid, _row, e = _principal(request)
+    if e:
+        return e
+    if not _SECB_OK:
+        return err("SECURITY_ENV_MISSING", request.state.request_id, detail=_SECB_ERR)
+    if SEC.totp_enrolled(str(uid)) and not str(body.get("force") or ""):
+        # Re-enrolment replaces a factor, which is exactly what an attacker with a session wants. It is allowed
+        # — the user must be able to recover a lost phone — but only through an explicit call, and the event is
+        # written to the account's own audit trail so the *first* thing they see on login is the replacement.
+        SEC.auth_event(str(uid), "totp_reenrolled", at=_now_ms(),
+                       detail={"note": "the previous authenticator stops working immediately"})
+    try:
+        secret = _totp.new_secret(os.urandom(_totp.SECRET_BYTES))
+        env = _envelope()
+        w = env.seal(secret.encode(), {"user_id": str(uid), "kek_version": env.version, "dek_version": 0,
+                                       "policy_hash": "totp"})
+    except _secb.BootError as exc:
+        return err("SECURITY_ENV_MISSING", request.state.request_id, detail=str(exc)[:120])
+    SEC.totp_enroll(str(uid), secret_wrapped=w["ciphertext"], nonce=w["nonce"], at=_now_ms(),
+                    tag=w["tag"], kek_version=env.version)
+    SEC.auth_event(str(uid), "totp_enrolled", at=_now_ms())
+    return _stamped({"secret": secret, "uri": _totp.provisioning_uri(label=str(uid), secret_b32=secret),
+                     "digits": _totp.DIGITS, "periodS": _totp.PERIOD_S, "verified": False,
+                     "next": "enter a code from the app to finish; an unverified authenticator authorises nothing"},
+                    ttl_ms=0, stale_ms=0)
+
+
+@app.post("/v1/auth/totp/verify", status_code=200, responses=AUTH_RESPONSES,
+           openapi_extra=_body_schema(TOTP_VERIFY_REQUIRED, TOTP_VERIFY_PROPS))
+def auth_totp_verify(request: Request, body: dict = Body(...)):
+    bad = _check_body(body, TOTP_VERIFY_REQUIRED, request.state.request_id, allowed=tuple(TOTP_VERIFY_PROPS))
+    if bad is not None:
+        return bad
+    bad = _check_props(body, TOTP_VERIFY_PROPS, request.state.request_id)
+    if bad is not None:
+        return bad
+    uid, _row, e = _principal(request)
+    if e:
+        return e
+    st = SEC.totp_state(str(uid))
+    if not st:
+        return err("TOTP_REQUIRED", request.state.request_id, detail="no authenticator on this account")
+    res = _totp.verify(_ENVELOPE_TOTP_SECRET(st), str(body["code"]), at=_now_ms(),
+                       last_step=int(st.get("last_step") or -1), attempts=int(st.get("failed_count") or 0),
+                       locked_until_ms=int(st.get("locked_until_ms") or 0))
+    if not res.ok:
+        SEC.totp_reject(str(uid), at=_now_ms())
+        SEC.auth_event(str(uid), "totp_%s" % res.reason, at=_now_ms())
+        return err("TOTP_LOCKED" if res.reason == "locked" else "TOTP_INVALID", request.state.request_id,
+                   detail=res.reason if res.reason in ("reused", "expired", "locked") else None,
+                   retry_after_s=max(1, int(res.retry_after_ms or 0) // 1000) if res.reason == "locked" else None)
+    SEC.totp_accept(str(uid), step=res.step, at=_now_ms())
+    return _stamped({"ok": True, "verified_ms": _now_ms()}, ttl_ms=0, stale_ms=0)
+
+
+@app.get("/v1/wallet/withdrawal-addresses", responses=SESSIONS_RESPONSES)
+def wallet_addresses(request: Request):
+    uid, _row, e = _principal(request)
+    if e:
+        return e
+    # The list is the screen an attacker sees over your shoulder and the one a compromised session reads first,
+    # so it carries `0x1234…abcd` and a label, never the whole destination: a UI that has the full string in the
+    # DOM is a UI that offers "copy", and clipboard substitution is on the threat list (D1). The complete address
+    # is in the *add* response, where the user just typed it and can compare it once.
+    items = [{k: v for k, v in row.items() if k != "address"} for row in SEC.addresses(str(uid), at=_now_ms())]
+    return _stamped({"items": items, "cooldownMs": _authz.COOLDOWN_MS,
+                     "reveal": "the full destination is shown when you add it; a list is not a reveal"},
+                    ttl_ms=0, stale_ms=0)
+
+
+# A `POST …/add` rather than a POST on the collection path: FastAPI gives one path one schema, and
+# `tools/check-openapi.py` compares *path* to a single `responses=` table. Listing the same statuses twice, for
+# two verbs that genuinely differ, would have meant a contract that lies about one of them.
+@app.post("/v1/wallet/withdrawal-addresses/add", status_code=200, responses=ADDRESS_RESPONSES,
+           openapi_extra=_body_schema(ADDR_ADD_REQUIRED, ADDR_ADD_PROPS))
+def wallet_address_add(request: Request, body: dict = Body(...)):
+    """Add a destination. It cannot be used for 24 hours, and the hold starts when it is confirmed.
+
+    The 60-second confirmation step exists so the "are you sure?" page and the cooldown share one moment in
+    time; an address that was typed and never confirmed is not a destination, it is a note.
+    """
+    bad = _check_body(body, ADDR_ADD_REQUIRED, request.state.request_id, allowed=tuple(ADDR_ADD_PROPS))
+    if bad is not None:
+        return bad
+    bad = _check_props(body, ADDR_ADD_PROPS, request.state.request_id)
+    if bad is not None:
+        return bad
+    uid, _row, e = _principal(request)
+    if e:
+        return e
+    code = _totp_gate(request, str(uid), str(body.get("code") or ""), action="address_add")
+    if code is not None:
+        return code
+    try:
+        out = SEC.add_address(str(uid), str(body["address"]), at=_now_ms(), label=str(body.get("label") or ""))
+    except ValueError as exc:
+        return err("ADDRESS_LIMIT" if "ADDRESS_LIMIT" in str(exc) else "VALIDATION", request.state.request_id,
+                   detail=str(exc)[:160])
+    if out["shared_with"]:
+        SEC.auth_event(str(uid), "address_shared", at=_now_ms(), detail={"others": out["shared_with"][:5]})
+    return _stamped(out, ttl_ms=0, stale_ms=0)
+
+
+@app.post("/v1/wallet/withdrawal-addresses/remove", status_code=200, responses=ADDRESS_RESPONSES,
+           openapi_extra=_body_schema(ADDR_RM_REQUIRED, ADDR_RM_PROPS))
+def wallet_address_remove(request: Request, body: dict = Body(...)):
+    bad = _check_body(body, ADDR_RM_REQUIRED, request.state.request_id, allowed=tuple(ADDR_RM_PROPS))
+    if bad is not None:
+        return bad
+    bad = _check_props(body, ADDR_RM_PROPS, request.state.request_id)
+    if bad is not None:
+        return bad
+    uid, _row, e = _principal(request)
+    if e:
+        return e
+    res = SEC.remove_address(str(uid), str(body["addressId"]), at=_now_ms())
+    if res.get("code") == "REMOVE_DURING_COOLDOWN":
+        return err("REMOVE_DURING_COOLDOWN", request.state.request_id, detail=res["message"])
+    if res.get("code") == "NOT_FOUND":
+        return err("NO_SUCH_RESOURCE", request.state.request_id)
+    return _stamped(res, ttl_ms=0, stale_ms=0)
+
+
+@app.post("/v1/admin/revoke-sessions", status_code=200, responses=BREAK_GLASS_RESPONSES,
+           openapi_extra=_body_schema(REVOKE_REQUIRED, REVOKE_PROPS))
+def admin_revoke_sessions(request: Request, body: dict = Body(...)):
+    """Break-glass. Two named approvers, a real reason, and every session in scope dies in one statement.
+
+    The second approver is not bureaucracy: the single most dangerous account in this product is the one that
+    can log everybody out, because that is what an attacker does to stop you seeing what they did.
+    """
+    rid = request.state.request_id
+    ok, e = _admin(request)
+    if e:
+        return e
+    bad = _check_body(body, REVOKE_REQUIRED, rid, allowed=tuple(REVOKE_PROPS))
+    if bad is not None:
+        return bad
+    bad = _check_props(body, REVOKE_PROPS, rid)
+    if bad is not None:
+        return bad
+    g = _keys.break_glass_ok(list(body.get("approvers") or []), reason=str(body.get("reason") or ""),
+                             now_ms=_now_ms())
+    if not g["ok"]:
+        return err("BREAK_GLASS_DENIED", rid, detail="; ".join(g["denied"].values())[:200])
+    scope = str(body.get("scope") or "all")
+    target = str(body.get("userId") or "") if scope == "user" else None
+    if scope == "user" and not target:
+        return err("VALIDATION", rid, detail="scope=user needs userId")
+    out = SEC.revoke_all_sessions(user_id=target or None, at=_now_ms(), reason=str(body["reason"])[:200])
+    SEC.auth_event(target or "", "admin_revoke_all", at=_now_ms(),
+                   detail={"approvers": body.get("approvers"), "scope": scope, **out})
+    return _stamped({"revoked": out, "scope": scope, "atMs": _now_ms()}, ttl_ms=0, stale_ms=0)
 
 
 @app.post("/v1/orders", status_code=202, responses=ORDER_RESPONSES,
@@ -706,6 +1474,16 @@ def place_order(request: Request, body: dict = Body(...),
                 idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
                 x_user_id: str | None = Header(default=None, alias="X-User-Id")):
     rid = request.state.request_id
+    if _bearer(request):
+        # P07: a bearer session is the identity, and a header that disagrees with it is refused rather than
+        # preferred. Accepting "whichever is present" is how a permissive dev path survives into production.
+        uid2, _srow, e2 = _principal(request)
+        if e2 is not None:
+            return e2
+        if x_user_id and str(x_user_id) != str(uid2):
+            SEC.auth_event(str(uid2), "identity_mismatch", at=_now_ms(), detail={"header": str(x_user_id)[:40]})
+            return err("SESSION_MISMATCH", rid)
+        x_user_id = uid2
     if not x_user_id:
         return err("SIGNER_UNAVAILABLE", rid, detail="no user context")     # in prod: 401 from auth middleware
     if not idempotency_key or not _IDEM_RE.match(idempotency_key):
@@ -810,6 +1588,13 @@ def place_order(request: Request, body: dict = Body(...),
 
 @app.get("/v1/orders/intents/{intent_id}", responses=INTENT_RESPONSES)
 def get_intent(intent_id: str, request: Request, x_user_id: str | None = Header(default=None, alias="X-User-Id")):
+    if _bearer(request):
+        uid2, _srow, e2 = _principal(request)
+        if e2 is not None:
+            return e2
+        x_user_id = uid2
+    # Object-level authorisation, in the WHERE clause rather than in a comparison after the read: a row that is
+    # never fetched cannot leak through an exception, a debug page, or a future refactor that forgets the check.
     row = _db.execute("SELECT state,risk_code,venue_order_id,updated_ms FROM order_intents WHERE id=? AND user_id=?",
                       (intent_id, x_user_id)).fetchone()
     if row is None:

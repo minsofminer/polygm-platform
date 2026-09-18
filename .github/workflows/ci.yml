@@ -54,6 +54,21 @@ jobs:
         run: |
           python3 tools/check-openapi.py
           python3 tools/check-openapi.py --self-test
+      # P07 D6: the log pipeline is scanned before it is trusted. `--sources` is the repo-wide half (a
+      # hard-coded secret in a helper), and the CI job's own log lines are scanned by the same rules on the
+      # artifacts the steps below produce.
+      - name: log scanner can fail (self-test)
+        run: python3 tools/ci-log-scan.py --self-test
+      - name: log scanner over tracked sources
+        run: python3 tools/ci-log-scan.py --sources
+      - name: dependency scan (pins, lockfile rule, image digests, advisory feed)
+        run: python3 tools/dependency-scan.py
+      - name: P07 security gate + the 10,000-key revocation drill
+        run: |
+          python3 tools/p07-gate-check.py
+          python3 tools/p07-drill.py --record docs/verification/P07-key-drill.txt
+      - name: prove the P07 gate can fail
+        run: python3 tools/p07-mutation-test.py
       - name: unit and integration tests
         run: make test
       - name: end-to-end envelope demo over real sockets

@@ -263,3 +263,60 @@ the `price_change` top-of-book detector has fired in a synthetic test and not ye
 lost deltas" is asserted by construction and not yet by observation. `market_stats` activity numbers are stored
 and used for policy but not reconciled against the venue's own displayed figures. Nothing was pushed to
 `polygm-platform` (it has no remote); the spec repo push carries §15.
+
+## P06 — the trading plane · 2026-09-18
+
+**Built.** `db/migrations/0008_trading_plane.sql` (+ generated sqlite twin): 29 tables, including
+`builder_attribution_terms`. In `polygm_core`: `venue/clob_v2.py` (pinned `py-clob-client-v2==1.1.0` shapes,
+15-order batch cap refused rather than truncated, `int` fees rounded up, cancel budget 250/10 s, the 10-step
+preflight), `wallets/lifecycle.py` (6 states, 13 legal transitions of 36, policy-drift refusal, typed-amount
+guard, deposit floor = 10× the measured on-chain bill, export refused while the wallet owes anyone anything),
+`risk/{limits,gate}.py` (78 deny codes with status/retry/severity, breaker that fails closed and half-opens,
+loss halt that needs a named actor), `copy/engine.py`, `automation/engine.py`, `reconcile/reconciler.py`
+(eight cases, each with a handler and an executed test), `revenue/attribution.py`. `services/executor` talks
+HTTP to `services/executor-mock` as a **separate process**, so `SIGKILL` is a real event rather than a mock
+flag. `docs/P06-trading-plane.md` is the phase's decisions with their numbers.
+
+**Fixed in the product, not in the harness.** Five, each found by a probe that tried to make the answer wrong:
+the wallet state machine was a diagram — `Store.set_wallet_state` never called `assert_transition`, so
+`suspended → provisioned` was accepted; `_norm_decimal` referenced a name it never imported and a broad
+`except` turned every typed amount into the same sentinel, so the withdrawal guard passed by agreeing with
+itself; the deposit bill divided wei→µUSD twice, making the minimum economic deposit $0.0000004; the
+unlimited-allowance sentinel was `2**256-1`, which does not fit a `BIGINT` column in either dialect, so the
+"unlimited" row threw at INSERT and a caller that swallowed it would have stored *zero* approval in the one
+column where the direction of the mistake is the whole point; and the copy and automation engines had no view
+of the kill switch at all — a source fill during a halt queued an intent whose Activity line read "copied" for
+two seconds before the executor rejected it, and a live automation tick placed orders with `enabled=1`. Both
+now refuse at the moment of decision (`disabled:…`, `RISK_HALT`), and a dry run still evaluates so an operator
+can read what the rules would have done.
+
+**Measured (all re-runnable).** `make p06` → 31/31. `python3 -m unittest discover -s tests` → 500 OK, 22.1 s.
+`make chaos-p06` → 7/7 against a real `SIGKILL` after signing, inside the POST, and after a fill was booked;
+the verdict is read from the **venue's** counters (`orders created: 1`, POST count unchanged when the order was
+adopted) and one `cash_ledger` row per venue trade. `make drill-p06` → 5/5 components refuse the switch within
+**460 ms** against `lm.KILL_BUDGET_MS = 1000` (api 3 ms over HTTP, executor and worker 460 ms, copy and
+automation ~1 ms), with **0** venue POSTs after the propagation window and two in-flight orders legitimately
+finished inside it. `make gate-p06-mutate` → **26/26 mutants killed**.
+
+**What the mutation harness taught, in order.** It caught its own first draft: 10 of 29 anchors did not exist,
+and the pre-flight that requires each anchor to be present turned a silent skip into a hard error. Then three
+mutants survived, and all three were the harness's fault rather than the product's — the fee check asserted
+`floor` on an example with no remainder (so "rounds up" was prose), the breaker check tested only the
+consecutive-failure trip and not the 50 % error-rate trip, and the recovery check ran `tick(reconcile=False)`,
+which cannot see the reconcile-before-requeue ordering the phase depends on. Each got a real assertion; two
+survivors were *equivalent mutants* (a `min(share, observed)` line upstream made the pay-the-estimate bug
+inert; the `enable()` guard, not the tick guard, is the enforcement the gate owns) and were retargeted rather
+than deleted.
+
+**Gate weakness recorded for P07.** `c_schema_parity_and_append_only` is a *subset* test: it asks that every
+source CHECK appear in the dev twin, and so it happily passed while the twin lagged my own migration edits and
+was missing the P06 triggers and the widened `automation_rules.kind` CHECK. `build-sqlite-migrations.py
+--write` has been re-run and the twin now matches; the check should compare generator output byte-for-byte, the
+way `sql-sqlite-check` does for drops.
+
+**[UNVERIFIED] / owed by later phases.** Provider pricing (`turnkey`, `privy`, `dynamic`, `self_hosted`) is
+carried as `[UNVERIFIED]` in the doc and in `PROVIDERS[i].verified = False`; the venue's fee and `builder`
+semantics are pinned against the mock and the pinned client, and a real venue change is a P13 finding; the
+on-chain `OrderFilled` measurement has a table, a job and an idempotent write but no live RPC in CI, so the
+first real day may legitimately read `unreconciled`. Nothing in this phase has touched real money: the signer is
+an HMAC and the venue is ours — per `docs/AGENTS-BUILD.md`, funds wait for P13 and P14 to be green.

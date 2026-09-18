@@ -148,7 +148,22 @@ class TestPostgresText(unittest.TestCase):
         self.assertIn("notional_tick_aligned", five,
                       "the notional CHECK is Postgres-only; if it is not recorded, the tests silently "
                       "do not cover the money invariant and nobody would know")
-        self.assertIn("no_secret_shapes", " ".join(dropped["0004_product.sql"]))
+        # P06 replaced `CONSTRAINT no_secret_shapes CHECK (detail_json::text !~ ...)` with a portable
+        # object-shape CHECK, so the PG-only drop list no longer carries it. What must stay true is the
+        # reason the constraint existed, and it is now checkable on BOTH engines: the audit payload is an
+        # object, and no secret-shaped key can be written at all. If somebody reintroduces a Postgres-only
+        # formulation here, this test is where the argument gets re-litigated.
+        self.assertNotIn("no_secret_shapes", " ".join(dropped["0004_product.sql"]),
+                         "the secret-shape regex is back; it cannot be enforced on the dev engine, and the "
+                         "portable CHECK is the one that is actually tested")
+        con = sqlite3.connect(":memory:")
+        con.executescript("\n".join((LITE / n).read_text() for n in sorted(LITE.glob("*.sql"))))
+        con.execute("INSERT INTO audit_log (at_ms,actor_type,actor_id,action,request_id,detail_json) "
+                    "VALUES (1,'user','u','a','r','{\"reason\": \"rotated the signing secret\"}')")
+        with self.assertRaises(sqlite3.IntegrityError):
+            con.execute("INSERT INTO audit_log (at_ms,actor_type,actor_id,action,request_id,detail_json) "
+                        "VALUES (2,'user','u','a','r','[1,2]')")
+        con.close()
 
 
 class TestPortableBehaviour(unittest.TestCase):

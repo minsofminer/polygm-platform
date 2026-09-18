@@ -11,7 +11,15 @@ It is deliberately NOT a fake that always says yes:
     instead of a silent fill;
   * it rejects a price/size float that cannot round-trip to the integer we sent — the only way to test the
     `to_float_for_sdk` assertion end-to-end instead of trusting it;
-  * it has scenarios: `timeout_after_accept`, `reject`, `partial_fill`, `rate_limit`, `unreachable`.
+  * it has scenarios: `timeout_after_accept`, `reject`, `partial_fill`, `rate_limit`, `unreachable`;
+    P06 added `ghost_order` (a cancel that says success and changes nothing) and `cancel_races_fill` (a
+    cancel that loses to a fill), because D3's reconciliation cases are only testable if the venue can be
+    *wrong* in those specific ways;
+  * it takes a V2 batch (`POST /v1/orders` with {orders: [...]}), enforces the 15-item cap, and answers
+    per item, so partial failure is a response shape we handle rather than a story we tell.
+
+Every scenario models a venue that is behaving *plausibly badly*, never randomly: a random mock produces
+tests that pass for the wrong reason.
 
 `ScenarioTransport` is the in-process Transport used by unit tests; `serve()` exposes the same state over
 HTTP so `make dev` and the compose stack can drive it, and so the HTTP path itself has one test.
@@ -39,6 +47,9 @@ class MockClob:
         self.scenario_args: dict = {}
         self.requests: list[str] = []
         self.cancelled_all = 0
+        self.cancelled = 0
+        self.batch_requests = 0
+        self.cancel_requests = 0
 
     # ---------------------------------------------------------------- scenarios
     def set_scenario(self, s: str, **kw) -> None:
@@ -57,6 +68,11 @@ class MockClob:
             # accepted-and-then-lost: the response never arrives, but the order IS live. This is the case
             # that turns "retry the POST" into a duplicate order.
             self._accept(signed, acknowledged=False)
+            # `delay_ms` exists so a chaos harness can land a real SIGKILL inside the request. Without it the
+            # window here is a few microseconds and the "mid-flight" kill is a race we win by accident.
+            delay = int(self.scenario_args.get("delay_ms") or 0)
+            if delay:
+                time.sleep(delay / 1000.0)
             raise TimeoutError("mock: read timeout after accept")
         if scen == "rate_limit":
             return {"success": False, "code": "rate_limited",
@@ -69,6 +85,72 @@ class MockClob:
                     "message": "mock: rejection for the specified reason"}
         oid = self._accept(signed, acknowledged=True)
         return {"success": True, "orderID": oid, "status": "live"}
+
+    def post_orders(self, items: list) -> list[dict]:
+        """V2 batch: at most 15 orders, answered positionally, each item independent.
+
+        The positional contract is the whole point: our reader maps results back to intents BY INDEX and
+        treats a missing answer as UNCERTAIN. A mock that answered as a dict keyed by order id would let
+        that rule go untested.
+        """
+        out: list[dict] = []
+        for it in items:
+            order = it.get("order") if isinstance(it, dict) else None
+            if not isinstance(order, dict):
+                out.append({"success": False, "code": "malformed", "message": "mock: item has no order"})
+                continue
+            try:
+                out.append(self.post_order(order))
+            except (TimeoutError, ConnectionError) as e:
+                # The batch is not atomic. Some items exist, and saying "the batch failed" is the lie that
+                # produces duplicate orders, so each item that may exist answers as a per-item timeout.
+                out.append({"success": False, "code": "timeout" if isinstance(e, TimeoutError) else "unreachable",
+                            "message": "mock: %s (this item may exist)" % e})
+        return out
+
+    def cancel(self, order_id: str) -> dict:
+        with self.lock:
+            scen = self.scenario
+            o = self.orders.get(order_id)
+        if o is None:
+            # "not found" is NOT an error for our purposes: cancelling something that is not there is what
+            # the user asked for, so it resolves as success. The venue's own answer is different and the
+            # reconciler must not read a 404 as "the order still exists".
+            return {"success": True, "code": "not_found", "message": "mock: nothing to cancel",
+                    "canceled": False}
+        if scen == "cancel_races_fill":
+            with self.lock:
+                total = round(o["payload"]["size"] * 10**6)
+                o["size_matched"] = total
+                o["status"] = "matched"
+                self.trades.append({"tradeID": "0x" + uuid.uuid4().hex[:16], "orderID": order_id,
+                                    "price": o["payload"]["price"], "size": o["payload"]["size"],
+                                    "side": o["side"], "maker": True, "timestamp": _now_ms() // 1000,
+                                    "status": "matched", "size_micro": total,
+                                    "notional_micro": round(o["payload"]["price"] * o["payload"]["size"]
+                                                            * 10**6)})
+            return {"success": False, "code": "already_filled",
+                    "message": "mock: filled before the cancel arrived"}
+        if scen == "ghost_order":
+            # Says yes, does nothing: the order stays live. This is the case that makes a "cancelled" row in
+            # our DB a lie, and it is why `ghost_order` reconciliation exists.
+            return {"success": True, "code": "canceled", "message": "mock: ack, not applied",
+                    "canceled": True, "ghost": True}
+        with self.lock:
+            was = o["status"]
+            if was in ("live", "partial", "delayed"):
+                o["status"] = "canceled"
+                self.cancelled += 1
+            elif was in ("matched", "canceled"):
+                return {"success": True, "code": was, "message": "mock: already terminal", "canceled": False}
+            else:
+                o["status"] = "canceled"
+                self.cancelled += 1
+        return {"success": True, "code": "canceled", "message": "mock: canceled", "canceled": True}
+
+    def trades_for(self, order_id: str) -> list[dict]:
+        with self.lock:
+            return [dict(t) for t in self.trades if t.get("orderID") == order_id]
 
     def _validate(self, signed: dict) -> dict | None:
         """Venue-side validation. Returns an error dict, or None when the order is acceptable."""
@@ -118,7 +200,15 @@ class MockClob:
             o = dict(self.orders[oid])
             o["status"] = o["status"]
             return {"orderID": oid, "status": o["status"], "size_matched": o["size_matched"],
-                    "acknowledged": o["acknowledged"]}
+                    "acknowledged": o["acknowledged"],
+                    "average_price": o.get("average_price"),
+                    "size_micro": round(o["payload"]["size"] * 10**6),
+                    "builder": o["payload"].get("builder", ""),
+                    "maker": o["payload"].get("maker", ""),
+                    "token_id": o.get("token_id", ""),
+                    "side": o.get("side", ""),
+                    "placed_ms": o.get("placed_ms", 0),
+                    "size_micro": round(o["payload"]["size"] * 10**6)}
 
     def cancel_all(self) -> dict:
         with self.lock:
@@ -168,8 +258,17 @@ class MockClob:
     def snapshot(self) -> dict:
         with self.lock:
             return {"orders": {k: {"status": v["status"], "size_matched": v.get("size_matched", 0),
-                                   "acknowledged": v["acknowledged"]}
+                                   "acknowledged": v["acknowledged"],
+                                   "builder": v["payload"].get("builder", ""),
+                                   "maker": v["payload"].get("maker", ""),
+                                   "token_id": v.get("token_id", ""),
+                                   "side": v.get("side", ""),
+                                   "price": v.get("average_price"),
+                                   "size_micro": round(v["payload"]["size"] * 10**6),
+                                   "placed_ms": v.get("placed_ms", 0),
+                                   "client_order_hash": v.get("client_order_hash", "")}
                                for k, v in self.orders.items()},
+                    "cancelled": self.cancelled, "batch_requests": self.batch_requests,
                     "trades": self.trades, "scenario": self.scenario,
                     "requests": list(self.requests), "cancelled_all": self.cancelled_all}
 
@@ -189,6 +288,8 @@ class ScenarioTransport:
         self.signer_pubkey = signer_pubkey
         self.post_calls = 0
         self.lookup_calls = 0
+        self.cancel_calls = 0
+        self.batch_calls = 0
 
     def post_order(self, signed: dict, *, timeout_ms: int) -> dict:
         self.post_calls += 1
@@ -203,6 +304,36 @@ class ScenarioTransport:
 
     def cancel_all(self, *, timeout_ms: int) -> dict:
         return self.mock.cancel_all()
+
+    # ---- P06: the same seams the HTTP transport exposes, so a unit test and the chaos harness exercise
+    # ---- the identical venue behaviours. A venue adapter that only exists over a socket would leave the
+    # ---- batch/partial-failure logic tested by exactly one of the two paths.
+    def post_batch(self, items: list[dict], *, timeout_ms: int) -> dict:
+        self.post_calls += 1
+        self.batch_calls += 1
+        if len(items) > 15:
+            raise ValueError("BATCH_TOO_LARGE")
+        return {"orders": self.mock.post_orders(items), "batch": True}
+
+    def cancel(self, order_id: str, *, timeout_ms: int = 2000) -> dict:
+        self.cancel_calls += 1
+        return self.mock.cancel(order_id)
+
+    def cancel_batch(self, order_ids: list[str], *, timeout_ms: int = 2000) -> dict:
+        return {"results": [self.mock.cancel(i) for i in order_ids]}
+
+    def list_orders(self, *, timeout_ms: int = 2000) -> dict:
+        self.mock.tick_scenario()
+        return self.mock.snapshot()
+
+    def snapshot(self, *, timeout_ms: int = 2000) -> dict:
+        return self.mock.snapshot()
+
+    def trades_for(self, order_id: str, *, timeout_ms: int = 2000) -> list[dict]:
+        return self.mock.trades_for(order_id)
+
+    def recent_trades(self, *, limit: int = 50, timeout_ms: int = 2000) -> list[dict]:
+        return list(self.mock.snapshot()["trades"][-limit:])
 
 
 # ------------------------------------------------------------------ HTTP layer
@@ -235,6 +366,9 @@ class Handler(BaseHTTPRequestHandler):
             self.mock.tick_scenario()
             q = parse_qs(u.query)
             limit = int((q.get("limit") or ["50"])[0])
+            oid = (q.get("orderID") or [""])[0]
+            if oid:
+                return self._send(200, {"trades": self.mock.trades_for(oid)})
             return self._send(200, {"trades": self.mock.trades[-limit:]})
         return self._send(404, {"error": "no_route", "path": u.path})
 
@@ -247,6 +381,19 @@ class Handler(BaseHTTPRequestHandler):
                                                                      if k != "scenario"})
             return self._send(200, {"ok": True, "scenario": self.mock.scenario})
         if u.path == "/v1/orders":
+            if isinstance(body, dict) and isinstance(body.get("orders"), list):
+                items = body["orders"]
+                if len(items) > 15:
+                    # The cap is refused, not truncated: a client that silently drops the 16th order has
+                    # created a user-visible inconsistency, which is worse than an error.
+                    return self._send(400, {"success": False, "code": "batch_too_large",
+                                           "message": "mock: at most 15 orders per request, got %d" % len(items)})
+                self.mock.batch_requests += 1
+                try:
+                    return self._send(200, {"orders": self.mock.post_orders(items), "batch": True})
+                except (TimeoutError, ConnectionError) as e:
+                    return self._send(504, {"success": False, "code": "gateway_timeout",
+                                           "message": "mock: %s" % e})
             try:
                 return self._send(200, self.mock.post_order(body))
             except TimeoutError as e:
@@ -255,6 +402,13 @@ class Handler(BaseHTTPRequestHandler):
             except ConnectionError as e:
                 return self._send(503, {"success": False, "code": "unreachable",
                                         "message": "mock: %s" % e})
+        if u.path == "/v1/cancel":
+            self.mock.cancel_requests += 1
+            ids = body.get("orderIDs") or ([body["orderID"]] if body.get("orderID") else [])
+            if len(ids) > 15:
+                return self._send(400, {"success": False, "code": "batch_too_large",
+                                       "message": "mock: at most 15 cancels per request"})
+            return self._send(200, {"results": [self.mock.cancel(i) for i in ids]})
         if u.path == "/v1/cancel-all":
             return self._send(200, self.mock.cancel_all())
         if u.path == "/v1/fill":

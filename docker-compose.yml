@@ -35,7 +35,8 @@ services:
     image: postgres:16-alpine
     environment:
       POSTGRES_USER: polygm
-      POSTGRES_PASSWORD: polygm          # dev-only. Compose refuses to start without .env setting
+      POSTGRES_PASSWORD: polygm          # dev-only, and P07's `no-secrets` lint rule carries an explicit
+                                         # allowlist for this line so the exception is written down (D6)
       POSTGRES_DB: polygm                 # POLYGM_DEV_DB_PASSWORD for a machine that is not a laptop:
     command: ["postgres", "-c", "shared_preload_libraries=", "-c", "jit=off",
               "-c", "max_connections=200"]
@@ -144,4 +145,27 @@ services:
   #     ports: ["127.0.0.1:5173:5173"]
   #     depends_on: [api]
 
+  # ---- P07 D7: the executor's network position, stated rather than assumed ------------------
+  # When the real executor service is uncommented (it is documented in the block above, and it is the reason
+  # this note lives here and not in a wiki):
+  #   * no `ports:` at all, and no `expose:` either - `expose` only documents, and a document that says
+  #     "reachable" is what a reviewer trusts. Ingress to the signer is the finding D7 is about.
+  #   `networks: [internal]` with `internal: true` on the network below, so egress goes through the proxy and
+  #    nothing on the host can dial it.
+  #   `image:` pinned by digest (`@sha256:...`) rather than by tag, read from deploy/image-digests.txt at build
+  #    time by `make digest-check`. A tag is a moving part on the path to private keys.
+  #   `read_only: true` + `cap_drop: [ALL]` + `no-new-privileges:true`, because the executor needs no syscall
+  #    that a compromised image could use.
+  #   environment: only PGM_SERVICE_TOKEN, the DB URL and the venue URL - never the KEK. The key lives in the
+  #    KMS/HSM behind `keys.POLICY`; if the provider cannot scope a key to "the CLOB exchange contract and the
+  #    pUSD token", it is disqualified (D2), and that test is `tools/p07-gate-check.py`.
+
 volumes: {pg-data: {}}
+
+networks:
+  default: {}
+  # Declared even while the executor is a comment: `internal: true` is the one line that means "no ingress, and
+  # egress only through what we allow", and a network that exists is a network someone can forget to remove.
+  internal:
+    internal: true
+

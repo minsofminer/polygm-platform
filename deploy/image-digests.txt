@@ -1,0 +1,10 @@
+# GENERATED-BY: make digests   (a human writes this once per deploy; CI refuses to let it drift)
+# Pinned digests for the images the security plane trusts. `tools/p07-gate-check.py` asserts every image named
+# in docker-compose.yml for the *critical* set (api, executor, migrate) is either listed here with an
+# @sha256: digest or is built locally with a recorded digest, because "build: ." alone is a moving part on the
+# path to a signing key.
+#
+# Format: <compose-service> <image-ref-with-digest> <recorded-utc> <who>
+#
+# Deliberately empty in this commit: the build environment has no container daemon, so any digest written here
+# would be invented. [UNVERIFIED - must confirm before launch]

@@ -198,7 +198,12 @@ def r_v1_client(files: list[Path]) -> list[Finding]:
 
 # `statistics` joined for P05's z-score rule: the alternative is hand-rolled mean/pstdev inside the pure core,
 # which is more code to audit for no gain, and the rule's actual subject is third-party dependencies.
+# The point of this list is "no third-party imports in the core", so it has to be the *whole* stdlib surface a
+# reviewer would expect to see. P07 added base64/struct/html/urllib (TOTP secrets, the code truncation, and the
+# untrusted-metadata parser) after the rule told it to move working code to the services tree: a lint rule that
+# pushes logic away from where it belongs is a rule that needs its allowlist finished.
 CORE_STDLIB = {"polygm_core", "__future__", "dataclasses", "typing", "decimal", "math", "statistics", "time",
+               "base64", "struct", "binascii", "secrets", "html", "urllib", "ipaddress", "codecs",
                "json",
                "hashlib", "hmac", "os", "sys", "re", "enum", "collections", "itertools", "functools",
                "argparse", "sqlite3", "pathlib", "random", "heapq", "bisect", "copy", "abc", "contextlib",

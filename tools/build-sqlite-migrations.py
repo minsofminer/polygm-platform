@@ -24,8 +24,20 @@ ROOT = Path(__file__).resolve().parent.parent
 SRC, DST = ROOT / "db" / "migrations", ROOT / "db" / "migrations-sqlite"
 SENTINEL = "@@DROPPED@@"
 
+
+# P07 joins the list with the tables that are *only ever inserted*: the auth trail, the abuse findings, the
+# broadcast gate's decisions, and the two readiness records. Tables that converge in place — `revoke_jobs`
+# (progress), `key_wraps` (rotation), `kek_versions` (retirement), `route_auth_levels` (a mirror of the code),
+# `withdrawal_addresses` (removal), `incident_findings` (open -> mitigated) — are deliberately NOT here: an
+# append-only promise on a state machine is a bug report waiting to happen, and the honest alternative is a
+# history table, which P06 already has for the states that need one.
 APPEND_ONLY = ["cash_ledger", "fills", "tape_trades", "builder_attribution", "position_snapshots",
-               "audit_log", "flag_audit", "alert_fires", "kill_switch_state", "referral_events"]
+               "auth_events", "wash_findings", "broadcast_gates", "backup_restore_tests", "drill_records",
+               "audit_log", "flag_audit", "alert_fires", "kill_switch_state", "referral_events",
+               # P06: the trading plane's evidence tables. Each one exists so a decision made at 3am can be
+               # read back; a table you can UPDATE is a table you cannot trust after an incident.
+               "wallet_events", "order_lifecycle", "reconcile_actions", "copy_events", "automation_runs",
+               "chain_events", "flag_audit_p06", "kill_switch_drills"]
 API_TABLES = {"markets", "events", "tokens", "book_levels", "tape_trades", "users", "idempotency_keys",
               "kill_switch_state", "order_intents", "orders", "fills", "cash_ledger", "position_lots",
               "position_snapshots", "builder_attribution", "feature_flags", "flag_audit", "audit_log",
@@ -176,8 +188,16 @@ def transpile(text: str, dropped: list[str]) -> str:
     out: list[str] = []
     skip_until_semi = False
     in_dollar = False
+    # P07 found the hole: the PG-only test below is a *prefix* test, and this loop reads lines, not
+    # statements. A column whose name begins with a PG-only keyword - `revoked_ms`, `revoked_reason`,
+    # `revoked`, `grant_id`, `comment_count` - was classified as `REVOKE`/`COMMENT ON`/`GRANT`, its line
+    # dropped, and `skip_until_semi` then ate the rest of the table up to the next `;`. Six columns across
+    # 0009 vanished while the file still "executed", which is precisely the silently-smaller subset this
+    # tool exists to prevent. Tracking paren depth means the test only fires where a statement can start.
+    depth = 0
     for raw in strip_inline_comments(text).splitlines():
         st = raw.strip()
+        at_statement_start = depth == 0
         if in_dollar:
             if "$$" in st:
                 in_dollar = False
@@ -190,8 +210,11 @@ def transpile(text: str, dropped: list[str]) -> str:
         if not st:
             continue
         up = st.upper()
+        depth += st.count("(") - st.count(")")
+        if depth < 0:
+            depth = 0
 
-        if up.startswith(PG_ONLY_STATEMENTS):
+        if at_statement_start and up.startswith(PG_ONLY_STATEMENTS):
             # A column added by ALTER is not in the same class as a trigger or a deferrable constraint: dropping
             # it leaves dev/CI running a schema that is MISSING a column production has, and the code that reads
             # it fails in whichever test gets there first. "Portable subset" must never mean "silently smaller".
@@ -204,7 +227,7 @@ def transpile(text: str, dropped: list[str]) -> str:
             in_dollar = "$$" in st
             skip_until_semi = (";" not in st) and not in_dollar
             continue
-        if up.startswith(("CREATE UNIQUE INDEX", "CREATE INDEX")):
+        if at_statement_start and up.startswith(("CREATE UNIQUE INDEX", "CREATE INDEX")):
             if " WHERE " in up or "DATE_TRUNC" in up or "LOWER(" in up:
                 dropped.append("partial/expression index: " + st[:70])
                 skip_until_semi = ";" not in st
@@ -292,9 +315,57 @@ def build() -> tuple[dict[str, str], dict[str, dict]]:
         # parity at `DEFAULT '[]',` and ate the next three columns (the first run of test_migrations caught
         # `first_seen_ms` vanishing from markets). Parity state must not be rebuilt over already-processed
         # text.
+        leftovers = sorted(set(__import__("re").findall(
+            r"\bJSONB\b|\bBIGSERIAL\b|\bNUMERIC\(\d+,\s*\d+\)|\bTIMESTAMPTZ\b|\bSMALLINT\b",
+            __import__("re").sub(r"^--.*$", "", header + body, flags=__import__("re").M))))
+        if leftovers:
+            raise SystemExit("%s: PG-only type names survived into the portable subset: %s. The transpiler "
+                             "widened them in the lines it kept and did not widen them in text it re-spliced "
+                             "after a clause move; SQLite tolerates unknown type names, so this is silent "
+                             "until a CHECK or an index disagrees between engines."
+                             % (src.name, ", ".join(leftovers)))
+        lost = check_parity(src.name, header + body)
+        if lost:
+            # P06 found the case: a column-level CHECK written across several lines (`event TEXT NOT NULL
+            # CHECK (event IN\n  (...))`) was dropped by the line-based clause mover in silence, so the
+            # portable subset quietly enforced nothing while the Postgres source enforced everything. Any
+            # dropped constraint is now a build failure, because a subset that is smaller than its source is
+            # only honest if the subset SAYS so — and this one could not, since a CHECK clause is not a
+            # droppable construct the way a trigger is.
+            raise SystemExit("%s: CHECK clauses present in the Postgres source are missing from the generated "
+                             "file for: %s. Write the constraint as a TABLE-level CHECK on its own line "
+                             "(a column-level CHECK whose body spans lines is not portable through this "
+                             "parser)." % (src.name, ", ".join(lost)))
         rendered[src.name] = header + body
         manifest[src.name] = {"dropped": dropped, "check_clauses_reordered": moved}
     return rendered, manifest
+
+
+def _table_bodies(sql: str) -> dict[str, str]:
+    """`CREATE TABLE x (...)` -> the text inside the parens, by bracket depth (a comment-free scan)."""
+    out: dict[str, str] = {}
+    for m in re.finditer(r"CREATE TABLE (\w+) \(", sql):
+        depth, j = 0, m.end() - 1
+        while j < len(sql):
+            if sql[j] == "(":
+                depth += 1
+            elif sql[j] == ")":
+                depth -= 1
+                if depth == 0:
+                    break
+            j += 1
+        out[m.group(1)] = sql[m.end():j]
+    return out
+
+
+def check_parity(name: str, rendered_sql: str) -> list[str]:
+    """Tables whose CHECK count fell during transpilation. Compares the Postgres source of the same file."""
+    src = (SRC / name).read_text()
+    src_sql = "\n".join(l for l in src.splitlines() if not comment_line(l))
+    src_sql = strip_inline_comments(src_sql)
+    a = {t: v.count("CHECK (") + v.count("CHECK(") for t, v in _table_bodies(src_sql).items()}
+    b = {t: v.count("CHECK (") + v.count("CHECK(") for t, v in _table_bodies(rendered_sql).items()}
+    return sorted(t for t in a if b.get(t, 0) < a[t])
 
 
 def main() -> int:
