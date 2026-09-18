@@ -135,6 +135,16 @@ def r_money_column_type(files: list[Path]) -> list[Finding]:
 
 SECRET_NAME = re.compile(r"(?i)\b(private_key|privkey|secret_key|api_key|apikey|auth_token|access_token|"
                          r"bot_token|mnemonic|seed_phrase|signing_key|webhook_secret)\b")
+# A secret-named argument or field with a literal value, seen one fragment at a time. `STR` is what
+# `code_lines` leaves behind for any quoted body, and `environ`/`getenv` stay clean because indirection is the
+# mechanism this repo uses for every real secret.
+FRAG_SECRET = re.compile(r"\b(" + "|".join(
+    ("private_key", "privkey", "secret_key", "api_key", "apikey", "auth_token", "access_token", "bot_token",
+     "mnemonic", "seed_phrase", "signing_key", "webhook_secret", "session_token", "refresh_token", "admin_token",
+     "init_data", "initdata", "totp_secret", "kek", "wrapped_dek")) + r")\b\s*(?::\s*[\w\[\]]+)?\s*=\s*STR\s*$",
+    re.I)
+
+
 SECRET_SHAPE = re.compile(r"\bghp_[A-Za-z0-9]{20,}\b|\bgithub_pat_[A-Za-z0-9_]{20,}\b|"
                           r"\bxox[baprs]-[A-Za-z0-9-]{10,}\b|\bsk_(live|test)_[A-Za-z0-9]{16,}\b|"
                           r"-----BEGIN [A-Z ]*PRIVATE KEY-----|\beyJ[A-Za-z0-9_-]{20,}\.eyJ")
@@ -158,9 +168,17 @@ def r_secrets(files: list[Path]) -> list[Finding]:
             if raw_assign.search(raw):
                 out.append((rel, no, "no-secrets", "literal assigned to a secret name: " + raw.strip()[:70]))
                 continue
-            if SECRET_NAME.search(code) and re.search(r"[:=]", code) and "\"STR\"" not in code \
-                    and re.search(r"[:=]\s*(\"|')", raw) and "environ" not in code and "getenv" not in code:
-                out.append((rel, no, "no-secrets", "secret-named field given a literal: " + raw.strip()[:70]))
+            # Per-argument, not per-line. `code_lines` has already replaced every string body with STR, so the
+            # shape to look for is "a secret NAME and its own literal, in the same comma-separated fragment".
+            # Scanning the whole line instead made `def verify(query: str, bot_token: str, *, at: int,
+            # purpose: str = "login")` a finding — a parameter *named* bot_token is the correct way to take a
+            # secret, and a rule that calls that a leak gets `lint-allow:` sprayed over the codebase until the
+            # marker stops meaning anything. `api_key: str = STR` still trips it, which is the case that matters:
+            # a Pydantic field default is a secret someone committed.
+            for frag in code.split(","):
+                if FRAG_SECRET.match(frag.strip()):
+                    out.append((rel, no, "no-secrets", "secret-named field given a literal: " + raw.strip()[:70]))
+                    break
     return out
 
 
@@ -305,6 +323,11 @@ def collect() -> list[Path]:
 CANARY = {  # one planted violation per rule, in RULES order
     "float-in-money": ("packages/polygm_core/money/probe.py", "usd = raw * 1.0\n"),
     "money-col-integer": ("db/migrations/9999_probe.sql", "  amount_micro NUMERIC(20,6) NOT NULL\n"),
+    # Deliberately not token-shaped. The rule has two branches - a secret NAME holding a literal, and a
+    # credential SHAPE anywhere - and the canary only needs to be found, so it trips the name branch with an
+    # ordinary string. A real-looking `sk_live_…` here got the branch rejected by GitHub push protection, which
+    # is the correct outcome for a repo that also holds migrations and docs: a planted fake and a real leak are
+    # indistinguishable to a scanner, and to the person who has to rotate something at 3am.
     "no-secrets": ("services/api/probe.py", 'API_KEY = "a literal assigned to a secret-named field"\n'),
     "order-via-gate": ("services/api/probe.py", "    return client.post_order(signed)\n"),
     "clob-v2-only": ("services/api/probe.py", "from py_clob_client.client import ClobClient\n"),

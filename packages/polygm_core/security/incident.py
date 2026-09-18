@@ -160,14 +160,17 @@ TEMPLATES: dict[str, str] = {
         "We found a read of data we did not intend to expose\n\n"
         "Between {from_time} and {to_time}, {what} could be read by {who}. We have closed it. We are not "
         "minimising this: if we can rule out that your information was included, we will tell you how we "
-        "ruled it out."
+        "ruled it out.\n\nNo key changed and no money moved as a result of this read: your wallet, your "
+        "withdrawal address list and your trading limits are exactly as you left them.\n\nWe will update you "
+        "by {next_update}, whether or not there is anything new to say."
     ),
     "channel_poison": (
         "A message we sent was misleading\n\n"
         "At {time} our alert channel broadcast a market that had been set up to look like something it was "
         "not. Nothing was moved and no funds were at risk from us, but if you acted on that message, the "
         "position is yours to close and we will cover the fees on any trade you made in the {window} after it. "
-        "We have changed the gate that let it through: {fix}."
+        "We have changed the gate that let it through: {fix}.\n\nWe will update you by {next_update}, and the "
+        "fee credit needs no form: it lands on the same balance the trade came from."
     ),
 }
 

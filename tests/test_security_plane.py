@@ -22,7 +22,7 @@ import uuid
 
 from conftest import import_app, refresh_flags  # noqa: F401
 
-BOT_TOKEN = "7123456789:" + "Aa4" + "x" * 40          # shape only; nothing here is a real token
+BOT_TOKEN = "7123456789:" + "Aa4" + "x" * 40  # lint-allow: shape only, never a real token
 ADMIN = "adm_" + "k" * 44
 DOC_PATHS = ("/openapi.json", "/docs", "/docs/oauth2-redirect", "/redoc")
 
@@ -711,7 +711,7 @@ class TestHeadersAndRedaction(RouteBase):
     def test_the_redactor_covers_the_shapes_we_actually_emit(self):
         from polygm_core.security import redact
         for secret in ("0x" + "ab" * 32,
-                       "-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----",
+                       "-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----",  # lint-allow: fixture
                        "user someone@example.com failed to unlock",
                        "wallet seed: " + "abandon " * 12 + "zoo",
                        "secret=ghp_" + "T" * 36):

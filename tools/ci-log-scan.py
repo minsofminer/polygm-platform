@@ -69,10 +69,18 @@ ALLOW = (
 )
 
 
-def findings(text: str, rules=None) -> list[tuple[int, str, str]]:
+def findings(text: str, rules=None, where: str = "") -> list[tuple[int, str, str]]:
+    r"""(line number, rule, redacted excerpt) for every line that looks like a secret.
+
+    `where` is the file path, and it is part of the string the allowlist is matched against — that is the whole
+    point of entries like `tools/ci-log-scan\.py` (this file quotes the shapes it hunts) and `tests/` (fixtures
+    are planted on purpose). Matching the line alone made those entries decorative: the path never appeared in
+    the text being tested, so the exemptions people *read* in the list were not the exemptions in force, and the
+    first honest run of `--sources` lit up on our own self-test table.
+    """
     out = []
     for no, line in enumerate(text.splitlines(), 1):
-        if any(a.search(line) for a in ALLOW):
+        if any(a.search(where + ":" + line) for a in ALLOW):
             continue
         for name, rx in (rules or RULES):
             m = rx.search(line)
@@ -120,6 +128,12 @@ def main() -> int:
             if findings(s):
                 print("  FALSE POSITIVE on: %s -> %s" % (s[:50], findings(s)[0][1]))
                 bad += 1
+        # And the two ways an allowlist is wrong, checked rather than asserted: an exemption that does not
+        # match anything is a hiding place, so the path-scoped entries must actually silence the line they name.
+        if findings("passphrase=hunter2xx", where="tests/test_x.py"):
+            print("  ALLOWLIST does not honour a path-scoped exemption"); bad += 1
+        if not findings("passphrase=hunter2xx", where="src/app.py"):
+            print("  ALLOWLIST silences a real secret outside those paths"); bad += 1
         print("log-scan self-test: %d pattern(s) failed" % bad)
         return 1 if bad else 0
 
@@ -145,7 +159,7 @@ def main() -> int:
 
     total = []
     for name, text in texts:
-        for no, rule, shown in findings(text, SOURCE_RULES if a.sources else None):
+        for no, rule, shown in findings(text, SOURCE_RULES if a.sources else None, where=name):
             total.append({"file": name, "line": no, "rule": rule, "excerpt": shown})
     if a.json:
         import json

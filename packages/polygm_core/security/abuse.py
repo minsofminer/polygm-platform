@@ -153,8 +153,15 @@ def builder_code_event(*, state: str, reject_count: int, last_reject_ms: int, at
     elif state == "unknown":
         out.update(alarm=False, strip_code=False, why="no observation yet; orders continue and we watch for "
                                                        "rejections rather than assuming health")
+    elif reject_count and at_ms - int(last_reject_ms or 0) <= DISABLE_WINDOW_MS:
+        out.update(state="throttled", why="%d rejections inside the window, below the disable threshold"
+                   % reject_count)
     elif reject_count:
-        out.update(state="throttled", why="%d recent rejections, below the disable threshold" % reject_count)
+        # The state has to be able to come back on its own. A counter that only ever ratchets is how a venue
+        # hiccup last Tuesday keeps a builder's commission code stripped in March, and the old wording claimed
+        # "recent" about rejections that were the opposite: the sentence and the arithmetic must agree.
+        out.update(state="active", why="%d rejections, all older than %d s: outside the window they are history, "
+                                       "not a pattern" % (reject_count, DISABLE_WINDOW_MS // 1000))
     return out
 
 
