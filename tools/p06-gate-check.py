@@ -931,7 +931,10 @@ def c_copy_through_the_queue_only(p: Plane) -> tuple[str, bool, str]:
     # from the row the queue wrote, not from a column someone might add to the wrong table.
     queued = p.rows("SELECT i.id AS id, d.audience AS audience FROM order_intents i JOIN order_directives d"
                     " ON d.intent_id = i.id WHERE d.audience='copy'")
-    events = p.rows("SELECT action,reason FROM copy_events")
+    # Scoped to THIS copier: `copy_events` is a global log, and P10's seed gives its demo config a copy
+    # history (the terminal's monitor screen needs one to show). Asserting over the whole table would make this
+    # check depend on what the seed happens to contain - a green check that a busier fixture turns red.
+    events = p.rows("SELECT action,reason FROM copy_events WHERE copier_id='cc-1'")
     copied = [e for e in events if e["action"] == "copied"]
     dupes = [e for e in events if e["action"] == "skipped"]
     executed = p.ex.tick(at=p.at + 2, reconcile=False)

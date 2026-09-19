@@ -2267,15 +2267,20 @@ TRADER_RESPONSES = {404: {"description": "no trader with that pseudonym in the s
 # table, and both verbs genuinely answer both statuses - GET 404s on an unknown `configId` filter and 422s on a
 # bad `limit`, POST 404s on an unknown source and 422s on a bad body. Sharing a table with a lie in it would be
 # worse than sharing one where both entries are true for both verbs.
-COPY_CREATE_RESPONSES = {404: {"description": "unknown source pseudonym, or an unknown configId filter"},
+COPY_CREATE_RESPONSES = {401: {"description": "a session is required"},
+                         404: {"description": "unknown source pseudonym, or an unknown configId filter"},
                          422: {"description": "missing field, an unknown field, or maxOrder above maxDaily"}}
-COPY_GUARD_RESPONSES = {404: {"description": "no such config for this account"},
+COPY_GUARD_RESPONSES = {401: {"description": "a session is required"},
+                         404: {"description": "no such config for this account"},
                         409: {"description": "refused: the state does not allow this yet (no acknowledgement, "
                                              "or no dry-run history)"},
                         422: {"description": "missing field or an out-of-range guard"}}
-COPY_MONITOR_RESPONSES = {404: {"description": "no such config for this account"}}
-PORTFOLIO_RESPONSES = {}
-WHALE_VIEW_RESPONSES = {404: {"description": "no such market or rule"},
+COPY_MONITOR_RESPONSES = {401: {"description": "a session is required"},
+                         404: {"description": "no such config for this account"}}
+PORTFOLIO_RESPONSES = {401: {"description": "a session is required"}}
+WHALE_VIEW_RESPONSES = {409: {"description": "refused: a notifying view needs a market target "
+                                             "(`alert_rules` requires one)"}, 401: {"description": "a session is required"},
+                         404: {"description": "no such market or rule"},
                         422: {"description": "a notifying view needs a market scope"}}
 
 COPY_CREATE_REQUIRED = ("sourceAnon", "maxOrderMicro", "maxDailyMicro")
@@ -2298,15 +2303,14 @@ COPY_GUARD_PROPS = {"configId": {"type": "string", "minLength": 1, "maxLength": 
                     "stopLossMicro": {"type": "integer", "minimum": 1, "maximum": 999999}}
 WHALE_VIEW_REQUIRED = ("name",)
 WHALE_VIEW_PROPS = {"name": {"type": "string", "minLength": 1, "maxLength": 48},
-                    "severity": {"type": "string", "enum": ["info", "notice", "urgent"]},
-                    "channel": {"type": "string", "enum": ["telegram", "email", "webhook"]},
-                    "scope": {"type": "string", "enum": ["global", "market"]},
+                    "minSeverity": {"type": "string", "enum": ["info", "notice", "urgent"]},
+                    "minNotionalMicro": {"type": "integer", "minimum": 0},
+                    "multiple": {"type": "integer", "minimum": 2, "maximum": 1000},
                     "marketId": {"type": "string", "maxLength": 64},
-                    "filters": {"type": "object"},
-                    "createRule": {"type": "boolean"},
-                    "ruleId": {"type": "string", "maxLength": 64},
-                    "firesPerWindow": {"type": "integer", "minimum": 1, "maximum": 24},
-                    "windowMs": {"type": "integer", "minimum": 60000}}
+                    "channel": {"type": "string", "enum": ["telegram", "email", "webhook"]},
+                    "severity": {"type": "string", "enum": ["info", "notice", "urgent"]},
+                    "firesPerWindow": {"type": "integer", "minimum": 1, "maximum": 100},
+                    "ruleWindowMs": {"type": "integer", "minimum": 60000, "maximum": 86400000}}
 
 _LABEL_FACTS = {c["label"]: c for c in _labels.catalogue()}
 
@@ -3093,7 +3097,8 @@ def list_copy_configs(request: Request,
 
 @app.post("/v1/copy/configs", status_code=200, responses=COPY_CREATE_RESPONSES,
            openapi_extra=_body_schema(COPY_CREATE_REQUIRED, COPY_CREATE_PROPS))
-def create_copy_config(request: Request, body: dict = Body(...)):
+def create_copy_config(request: Request, body: dict = Body(...),
+                       idempotency_key: str | None = Header(default=None, alias="Idempotency-Key")):
     """Create a copy config. It is ALWAYS a dry run — and the response says so, in a field and in a sentence.
 
     The prompt's rule is that the latency/slippage warning appears in the UI before the confirm. The API's half
@@ -3101,6 +3106,9 @@ def create_copy_config(request: Request, body: dict = Body(...)):
     the create schema that turns copying live. Turning it live is a second call with two conditions on it.
     """
     rid = request.state.request_id
+    bad_key = _idem_shape(idempotency_key)
+    if bad_key is not None:
+        return bad_key
     bad = _check_body(body, COPY_CREATE_REQUIRED, rid, allowed=tuple(COPY_CREATE_PROPS))
     if bad is not None:
         return bad
@@ -3138,7 +3146,8 @@ def create_copy_config(request: Request, body: dict = Body(...)):
 
 @app.post("/v1/copy/configs/guards", status_code=200, responses=COPY_GUARD_RESPONSES,
            openapi_extra=_body_schema(COPY_GUARD_REQUIRED, COPY_GUARD_PROPS))
-def set_copy_guards(request: Request, body: dict = Body(...)):
+def set_copy_guards(request: Request, body: dict = Body(...),
+                    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key")):
     """Set a config's guard rails, including turning dry-run OFF — the only path by which live copying begins.
 
     Refused (409 `REFUSED`) unless the caller sends `acknowledgeSlippage: true` AND the config already has
@@ -3147,6 +3156,9 @@ def set_copy_guards(request: Request, body: dict = Body(...)):
     costs nothing and prevents nothing; a required dry-run history is evidence.
     """
     rid = request.state.request_id
+    bad_key = _idem_shape(idempotency_key)
+    if bad_key is not None:
+        return bad_key
     bad = _check_body(body, COPY_GUARD_REQUIRED, rid, allowed=tuple(COPY_GUARD_PROPS))
     if bad is not None:
         return bad
@@ -3225,6 +3237,18 @@ def set_copy_guards(request: Request, body: dict = Body(...)):
 
 def _as_opt_int(value):
     return None if value is None else _tm._int(value)
+
+
+def _idem_shape(key: str | None) -> JSONResponse | None:
+    """A malformed `Idempotency-Key` is a 422 naming the field.
+
+    The header is documented on every mutating operation, so it has to behave like one: present-and-malformed is
+    refused here rather than silently ignored, because a client whose key never reaches the idempotency store is
+    a client that will double-submit the first time a request times out, and it will believe it is protected.
+    """
+    if key is None or _IDEM_RE.match(str(key)):
+        return None
+    return err("VALIDATION", "idem", where=["Idempotency-Key must be 8-128 chars of [A-Za-z0-9_-]"])
 
 
 @app.get("/v1/copy/configs/monitor", responses=COPY_MONITOR_RESPONSES)
@@ -3420,7 +3444,11 @@ def list_whale_views(request: Request,
             + (" AND v.id=?" if viewId else "") + " ORDER BY v.created_ms DESC LIMIT ?",
             ((str(uid), str(viewId), limit) if viewId else (str(uid), limit))).fetchall():
         items.append({"viewId": str(vid), "name": str(name), "filters": _json_load(filters),
-                      "channel": str(channel), "severity": str(severity), "scope": str(scope),
+                      # A view saved without a channel is a filter, and `str(None)` would have rendered it as
+                      # the literal channel "None" - which a client's enum check would reject and a human would
+                      # read as a channel called None. NULL crosses as null.
+                      "channel": (str(channel) if channel else None), "severity": str(severity),
+                      "scope": str(scope),
                       "marketId": (None if market_id is None else str(market_id)),
                       "ruleId": (None if rule_id is None else str(rule_id)), "createdMs": _tm._int(created),
                       # A view notifies only when it is bound to a rule, and `alert_rules` requires a target:
@@ -3434,15 +3462,24 @@ def list_whale_views(request: Request,
 
 @app.post("/v1/whale-views", status_code=200, responses=WHALE_VIEW_RESPONSES,
            openapi_extra=_body_schema(WHALE_VIEW_REQUIRED, WHALE_VIEW_PROPS))
-def create_whale_view(request: Request, body: dict = Body(...)):
+def create_whale_view(request: Request, body: dict = Body(...),
+                      idempotency_key: str | None = Header(default=None, alias="Idempotency-Key")):
     """D4's saved view, plus the inline alert rule it may create.
 
-    A view is a filter with a name. A view that *notifies* must own an `alert_rules` row, and this endpoint can
-    create that row in the same request (`createRule: true`) so a user never has to walk a second screen to get
-    an alert. What it will not do is notify without a rule: P05's budget rule is what stops a tracker becoming
-    a firehose, and a feature that bypassed it would undo that phase.
+    The body follows the contract: `name` is the only required field, the filters are three flat knobs
+    (`minSeverity`, `minNotionalMicro`, `multiple`) and `marketId` decides the scope. A `channel` is what makes
+    a view NOTIFY - and a notifying view with no market is refused with 409 `REFUSED`, because `alert_rules`
+    carries a `rule_has_target` CHECK: a rule with no target matches everything and therefore fires on
+    everything, and the API's job is to say so rather than to invent a wildcard that the database would then
+    reject five layers down.
+
+    Alert-rule creation is inline (`channel` given) because D4 asks for it inline: a form that posts to a second
+    endpoint is a form that loses what the user just typed.
     """
     rid = request.state.request_id
+    bad_key = _idem_shape(idempotency_key)
+    if bad_key is not None:
+        return bad_key
     bad = _check_body(body, WHALE_VIEW_REQUIRED, rid, allowed=tuple(WHALE_VIEW_PROPS))
     if bad is not None:
         return bad
@@ -3452,49 +3489,51 @@ def create_whale_view(request: Request, body: dict = Body(...)):
     uid, _row, e = _principal(request)
     if e:
         return e
-    scope = str(body.get("scope") or ("market" if body.get("marketId") else "global"))
     market_id = body.get("marketId")
-    if scope == "market":
-        if not market_id or _db.execute("SELECT 1 FROM markets WHERE id=?",
-                                        (str(market_id),)).fetchone() is None:
-            return err("VALIDATION", rid, detail="scope=market needs an existing marketId")
-    elif market_id:
-        return err("VALIDATION", rid, detail="a global view must not carry a marketId")
-    rule_id = body.get("ruleId")
-    if rule_id and _db.execute("SELECT 1 FROM alert_rules WHERE id=?", (str(rule_id),)).fetchone() is None:
-        return err("VALIDATION", rid, detail="unknown ruleId")
-    if body.get("createRule") and not rule_id:
-        if scope != "market":
-            # `alert_rules` carries a CHECK (`rule_has_target`): a rule must name a market or an event, because
-            # a rule with no target matches everything and fires on everything. The schema is right and the UI
-            # is what has to change, so this refuses with the reason instead of inventing a wildcard.
-            return err("VALIDATION", rid,
-                       detail=("a notifying view needs a market: alert_rules requires a market or event target,"
-                               " so save a global view as a filter or scope it to a market"))
-        fires = _tm._int(body.get("firesPerWindow", 4))
-        window = _tm._int(body.get("windowMs", 3_600_000))
-        if not (1 <= fires <= 24 and window >= 60_000):
-            return err("VALIDATION", rid, detail="firesPerWindow 1-24 and windowMs 60000 or more")
+    if market_id is not None and _db.execute("SELECT 1 FROM markets WHERE id=?",
+                                             (str(market_id),)).fetchone() is None:
+        return err("NOT_FOUND", rid, detail="unknown marketId")
+    scope = "market" if market_id else "global"
+    channel = body.get("channel")
+    if channel and scope != "market":
+        return err("REFUSED", rid, detail=(
+            "refused: a notifying view needs a market. `alert_rules` requires a target (market or event), so a "
+            "global view can be saved as a filter but cannot notify - save it without a channel, or scope it to "
+            "a market"))
+    severity = str(body.get("severity") or "notice")
+    # The filters are stored as the knobs that produced them, so a saved view is reproducible from its own row
+    # rather than from a version of this endpoint somebody has to remember.
+    filters = {"minSeverity": str(body.get("minSeverity") or "notice"),
+               "minNotionalMicro": _tm._int(body.get("minNotionalMicro") or 0),
+               "multiple": (None if body.get("multiple") is None else _tm._int(body["multiple"]))}
+    rule_id = None
+    fires = window = None
+    if channel:
+        fires = _tm._int(body.get("firesPerWindow") or 4)
+        window = _tm._int(body.get("ruleWindowMs") or 3_600_000)
         rule_id = "wr-" + uuid.uuid4().hex[:12]
-        # The severity, channel and filters live in `params_json`: P04's rule table has a window cap, a kind and
-        # a target, and a column per future knob would be a schema that grows with the UI.
+        # Severity, channel and filters live in `params_json`: P04's rule table has a target, a kind and a
+        # window budget, and a column per future knob is a schema that grows with the UI.
         _db.execute("INSERT INTO alert_rules (id, user_id, market_id, event_id, kind, fires_per_window,"
                     " window_ms, params_json, enabled, created_ms) VALUES (?,?,?,?,?,?,?,?,1,?)",
                     (str(rule_id), str(uid), str(market_id), None, "whale_fill", fires, window,
-                     json.dumps({"severity": str(body.get("severity") or "notice"),
-                                 "channel": str(body.get("channel") or "telegram"),
-                                 "filters": body.get("filters") or {}, "source": "whale_view"}),
-                     _now_ms()))
+                     json.dumps({"severity": severity, "channel": str(channel), "filters": filters,
+                                 "source": "whale_view"}), _now_ms()))
     view_id = "wv-" + uuid.uuid4().hex[:12]
     _db.execute("INSERT INTO whale_views (id, user_id, name, filters_json, channel, severity, scope,"
                 " market_id, rule_id, created_ms) VALUES (?,?,?,?,?,?,?,?,?,?)",
-                (view_id, str(uid), str(body["name"]).strip(), json.dumps(body.get("filters") or {}),
-                 str(body.get("channel") or "telegram"), str(body.get("severity") or "notice"), scope,
+                (view_id, str(uid), str(body["name"]).strip(), json.dumps(filters),
+                 (str(channel) if channel else None), severity, scope,
                  (str(market_id) if scope == "market" else None), (str(rule_id) if rule_id else None),
                  _now_ms()))
-    return _stamped({"viewId": view_id, "ruleId": (str(rule_id) if rule_id else None),
+    return _stamped({"viewId": view_id, "name": str(body["name"]).strip(), "filters": filters,
+                     "channel": (str(channel) if channel else None), "severity": severity, "scope": scope,
+                     "marketId": (str(market_id) if scope == "market" else None),
+                     "ruleId": (str(rule_id) if rule_id else None), "createdMs": _now_ms(),
                      "notifies": bool(rule_id),
-                     "note": ("a saved view without a rule is a filter you look at; with a rule it is an alert."
+                     "firesPerWindow": fires, "ruleWindowMs": window,
+                     "ruleEnabled": (True if rule_id else None),
+                     "note": ("a saved view without a channel is a filter you look at; with one it is an alert."
                               " This one is %s." % ("bound to a rule" if rule_id else "a filter only"))},
                     ttl_ms=0, stale_ms=0)
 

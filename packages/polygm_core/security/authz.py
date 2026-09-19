@@ -68,7 +68,11 @@ LEVELS_TABLE: dict[str, tuple[str, str]] = {
     "POST /v1/wallet/withdraw": (USER, ""),
     "POST /v1/wallet/export": (USER, ""),
     "GET /v1/copy/record": (PUBLIC, ""),
-    "POST /v1/copy/config": (USER, ""),
+    # P06 wrote this row as `POST /v1/copy/config` (singular) and never served it. P10 serves the collection:
+    # `POST /v1/copy/configs` creates, `GET /v1/copy/configs` lists, and both are declared with the P10 block
+    # at the bottom of this table. The singular key is GONE rather than kept "just in case" - a registry that
+    # keeps a row for a path nobody serves is the corpse the coverage check exists to find, and the plural is a
+    # different path, not a spelling of this one.
     "POST /v1/automation/rules": (USER, ""),
     "POST /v1/admin/kill-switch": (ADMIN, ""),
     "POST /v1/admin/revoke-sessions": (ADMIN, ""),

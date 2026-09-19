@@ -68,6 +68,16 @@ CREATE TABLE IF NOT EXISTS copy_dry_runs (
     at_ms               BIGINT NOT NULL,
     CHECK (would_action IN ('enter', 'exit', 'skip'))
 );
+-- Index reasoning: each of the five below serves exactly one read path, and nothing is indexed
+-- speculatively. `copy_dry_runs` is read per config newest-first (the monitor, and the "has this
+-- config ever run?" check that gates going live). `trader_metric_snapshots` is read per wallet
+-- newest-first (the dossier's stored figures). `trader_metric_series` is read per wallet+window in
+-- time order (the PnL curve with its drawdown overlay - a sort by ts_ms, which is why the index
+-- carries it). `whale_views` is read per user newest-first (the saved-views list). `wallet_pseudonyms`
+-- is looked up by `anon_id`, and UNIQUE because two wallets sharing a pseudonym would merge two
+-- traders into one row on a public page. A scan of the tape for a wallet's fills is deliberately NOT
+-- indexed by this migration: the source of truth for it is P06's `copy_source_stats`, and an index
+-- added for a query the product does not run is a write tax with no reader.
 CREATE INDEX IF NOT EXISTS copy_dry_runs_config_idx ON copy_dry_runs(config_id, at_ms DESC);
 
 CREATE TABLE IF NOT EXISTS trader_metrics (

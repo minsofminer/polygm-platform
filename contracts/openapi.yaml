@@ -1512,7 +1512,555 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+  /v1/tape/fills:
+    get:
+      tags: [market]
+      summary: The market-wide tape, filterable (P10 D2)
+      description: |
+        Every fill we hold, newest first, across all markets. `/v1/tape` is per-market and reads the P04
+        fixture; this reads the durable `tape_fills` log and is the only tape the terminal uses.
 
+        Filtering happens SERVER-side for three reasons that each bit during the design pass: a filter applied
+        after a `LIMIT` silently hides matches; the relative whale threshold needs the same window the rows
+        came from; and the count behind a filter is a fact the client cannot compute. The response therefore
+        carries `filterNote` saying the counts are of the page while `/v1/tape/facets` has the window's totals.
+      operationId: getTapeFills
+      x-auth: none
+      x-rate-class: public-read
+      x-cache: private, no-store for authed, 500ms shared
+      parameters:
+        - name: marketId
+          in: query
+          schema: {type: string}
+          description: when present, only this market's fills; the market must exist (404 otherwise)
+        - name: since
+          in: query
+          description: exclusive cursor = the VENUE's clock (`ts_ms`). Mixing it with our ingest clock produces
+            a duplicate or a hole, and a hole in a tape reads as a suppressed trade.
+          schema: {type: integer, minimum: 0}
+        - name: windowMs
+          in: query
+          description: >-
+            how far back the response (and the whale threshold it ships) reaches. Capped at 24h: the threshold
+            is computed from a bounded in-process sample, and a bound that is not enforced is a bound that
+            becomes a table scan the first time somebody asks for 30 days.
+          schema: {type: integer, minimum: 1, maximum: 86400000, default: 3600000}
+        - name: limit
+          in: query
+          schema: {type: integer, minimum: 1, maximum: 500, default: 64}
+        - name: side
+          in: query
+          schema: {type: string, enum: [BUY, SELL]}
+        - name: outcome
+          in: query
+          schema: {type: string}
+        - name: category
+          in: query
+          schema: {type: string}
+        - name: label
+          in: query
+          description: only fills whose wallet carries this PUBLISHABLE label; an unpublishable one matches nothing
+          schema: {type: string, enum: [whale, smart_money, new_wallet, cluster, wash_like]}
+        - name: wallet
+          in: query
+          description: a pseudonym from `anonWallet`, never an address. An unknown value is a 404 rather than an
+            empty page, because "no fills" and "no such trader" are different answers.
+          schema: {type: string}
+        - name: minNotionalMicro
+          in: query
+          description: absolute floor in micro-USDC (D2's absolute filter, alongside the relative whale rule)
+          schema: {type: integer, minimum: 0}
+      responses:
+        "200":
+          description: fills, newest first, each carrying the whale threshold it was judged against
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Stamped"
+                  - type: object
+                    required: [rows, counts, windowMs, filterNote]
+                    properties:
+                      rows:
+                        type: array
+                        maxItems: 500
+                        items: {$ref: "#/components/schemas/TerminalFill"}
+                      counts: {$ref: "#/components/schemas/TapeCounts"}
+                      windowMs: {type: integer}
+                      nextCursor: {type: ["integer", "null"], description: "exclusive venue-clock cursor"}
+                      filterNote: {type: string}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "422": {$ref: "#/components/responses/Validation"}
+
+        "500": {$ref: "#/components/responses/Internal"}
+  /v1/tape/facets:
+    get:
+      tags: [market]
+      summary: What is in the window, and every filter's options with counts (P10 D2/D4)
+      description: |
+        The data behind the filter bar. Served as one payload because a filter bar assembled from six requests
+        is a filter bar that shows six different windows, and the faceted counts are what make a filter honest:
+        a user picking "whale" should see how many exist before picking it.
+
+        This is also where the whale threshold is DEFINED for a window, so a screen can state the rule before
+        the first fill arrives. Every classification label comes with its rule and its disclaimer - a badge
+        whose rule is not visible is an accusation.
+      operationId: getTapeFacets
+      x-auth: none
+      x-rate-class: public-read
+      x-cache: shared, 1s
+      parameters:
+        - name: marketId
+          in: query
+          schema: {type: string}
+        - name: windowMs
+          in: query
+          schema: {type: integer, minimum: 1, maximum: 86400000, default: 3600000}
+      responses:
+        "200":
+          description: the window's distribution, its thresholds and its facets
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Stamped"
+                  - $ref: "#/components/schemas/TapeFacets"
+        "404": {$ref: "#/components/responses/NotFound"}
+        "422": {$ref: "#/components/responses/Validation"}
+
+        "500": {$ref: "#/components/responses/Internal"}
+  /v1/whales:
+    get:
+      tags: [market]
+      summary: The whale feed - the same rule as the tape, applied per market (P10 D4)
+      description: |
+        Every fill at or above ITS OWN market's threshold, sorted by notional. The threshold is per market and
+        the rule travels with the response (`thresholds`) so a global feed cannot imply a global rule: $5,000 is
+        a whale in one market and the median fill in another, and a feed that hides which one it used cannot be
+        tuned.
+
+        `multiple` switches the relative term to N x the market's median fill - the tunable form a saved view
+        exposes - and the absolute floor applies either way. `reason` per market says which term won, which is
+        the difference between a threshold a user can reproduce and a number they have to trust.
+      operationId: getWhales
+      x-auth: none
+      x-rate-class: public-read
+      x-cache: shared, 1s
+      parameters:
+        - name: marketId
+          in: query
+          description: per-market mode; absent means the global feed
+          schema: {type: string}
+        - name: windowMs
+          in: query
+          schema: {type: integer, minimum: 1, maximum: 86400000, default: 3600000}
+        - name: multiple
+          in: query
+          description: relative term as a whole multiple of the market's median fill (20 = 20x). Bounded,
+            because "10,000x the median" is a filter that can never match and a control that cannot match
+            anything is a broken control.
+          schema: {type: integer, minimum: 2, maximum: 1000}
+        - name: minSeverity
+          in: query
+          schema: {type: string, enum: [info, notice, urgent], default: info}
+        - name: limit
+          in: query
+          schema: {type: integer, minimum: 1, maximum: 200, default: 50}
+      responses:
+        "200":
+          description: the feed and the rule it was computed with
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Stamped"
+                  - $ref: "#/components/schemas/WhaleFeed"
+        "404": {$ref: "#/components/responses/NotFound"}
+        "422": {$ref: "#/components/responses/Validation"}
+
+        "500": {$ref: "#/components/responses/Internal"}
+  /v1/traders/{anon}:
+    get:
+      tags: [market]
+      summary: A trader's dossier, by pseudonym (P10 D3)
+      description: |
+        One wallet: four windows of the SAME metric set, the PnL curve with its drawdown per point, the
+        positions still open, the behaviour labels with their rules, and the methodology for every number.
+
+        Two rules are structural rather than decorative: a win rate below the sample gate is `null` WITH A
+        REASON (never a percentage - a 3-for-4 record is not a 75% win rate), and every curve point carries
+        `peakMicro` and `drawdownMicro`, so no chart can draw PnL without the overlay. Both are computed in
+        `polygm_core.terminal.metrics`, so a client cannot opt out of either.
+
+        The header carries the pseudonym and never an address: `/v1/tape/fills` names traders the same way, and
+        a screen that resolved one to an address would make the other pointless.
+      operationId: getTrader
+      x-auth: none
+      x-rate-class: public-read
+      x-cache: shared, 5s
+      parameters:
+        - name: anon
+          in: path
+          required: true
+          schema: {type: string}
+        - name: window
+          in: query
+          description: which window `curve`, `positions` and `breakdown` describe; all four metrics always ship
+          schema: {type: string, enum: [7d, 30d, 90d, all], default: 30d}
+      responses:
+        "200":
+          description: the dossier
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Stamped"
+                  - $ref: "#/components/schemas/TraderDossier"
+        "404": {$ref: "#/components/responses/NotFound"}
+        "422": {$ref: "#/components/responses/Validation"}
+
+        "500": {$ref: "#/components/responses/Internal"}
+  /v1/copy/configs:
+    get:
+      tags: [trading]
+      summary: This account's copy configs, with the pre-confirm warning and the source's record (P10 D7)
+      description: |
+        The list sorts a source by RISK-ADJUSTED return, not raw PnL, and says so in `sourceStats.ranking`:
+        a $50k profit with a $40k drawdown and a $50k profit with a $4k drawdown are not the same product, and
+        a list ordered by the first number is a list that sells the second one as a surprise.
+
+        Each config carries `warning` - the slippage this SOURCE actually produced, measured on our own copies -
+        and `sourceStats`, including windows where the source lost money. A copy screen that only shows
+        winners is the feature working as a trap.
+      operationId: listCopyConfigs
+      x-auth: user
+      x-rate-class: authed-read
+      x-cache: no-store
+      responses:
+        "200":
+          description: configs for this account
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Stamped"
+                  - type: object
+                    required: [items, count, note]
+                    properties:
+                      items:
+                        type: array
+                        items: {$ref: "#/components/schemas/CopyConfig"}
+                      count: {type: integer}
+                      note: {type: string}
+        "401": {$ref: "#/components/responses/Denied"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "422": {$ref: "#/components/responses/Validation"}
+        "500": {$ref: "#/components/responses/Internal"}
+    post:
+      tags: [trading]
+      summary: Create a copy config - always in DRY-RUN (P10 D7)
+      description: |
+        Creation never enables live copying. The response carries the slippage warning the confirm dialog will
+        show and the source's own record, and turning a config live is a separate call that must both
+        acknowledge the slippage and point at dry-run history this account already produced.
+
+        `sourceAnon` is a pseudonym, not an address. The engine resolves it internally; a client never needs
+        the address to copy somebody, and a client that has it is a client that can leak it.
+      operationId: createCopyConfig
+      x-auth: user
+      x-rate-class: authed-write
+      x-cache: no-store
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [sourceAnon, maxOrderMicro, maxDailyMicro]
+              properties:
+                sourceAnon:
+                  type: string
+                  description: the pseudonym from `anonWallet`
+                mode: {type: string, enum: [cap, ratio], default: cap}
+                ratioBps:
+                  type: integer
+                  minimum: 1
+                  maximum: 10000
+                  description: required when mode=ratio; the multiplier in basis points (10000 = 1x mirror)
+                maxOrderMicro: {type: integer, minimum: 1000000, description: "per-trade cap, micro-USDC"}
+                maxDailyMicro: {type: integer, minimum: 1000000, description: "daily cap, micro-USDC"}
+                blockedMarkets:
+                  type: array
+                  items: {type: string}
+                  maxItems: 50
+      responses:
+        "200":
+          description: the config, its warning, and the source's record
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Stamped"
+                  - type: object
+                    required: [configId, sourceAnon, dryRun, warning, sourceStats, next]
+                    properties:
+                      configId: {type: string}
+                      sourceAnon: {type: string}
+                      mode: {type: string}
+                      dryRun:
+                        type: boolean
+                        const: true
+                        description: creation is dry-run by construction; the const is the contract's promise
+                      maxOrderMicro: {type: integer}
+                      maxDailyMicro: {type: integer}
+                      warning: {$ref: "#/components/schemas/SlippageFacts"}
+                      sourceStats: {$ref: "#/components/schemas/SourceStats"}
+                      next: {type: string}
+        "401": {$ref: "#/components/responses/Denied"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "422": {$ref: "#/components/responses/Validation"}
+
+        "500": {$ref: "#/components/responses/Internal"}
+  /v1/copy/configs/guards:
+    post:
+      tags: [trading]
+      summary: Set the guard rails, including turning dry-run off (P10 D7)
+      description: |
+        Refused with 409 `REFUSED` unless the caller sends `acknowledgeSlippage: true` AND the config already
+        has at least one dry-run event recorded. The second condition is the interesting one: nobody goes live
+        before the system has shown them, in their own account, what the strategy would have done. A dialog that
+        asks "are you sure?" costs nothing and prevents nothing; a required dry-run history is evidence, and it
+        is the difference between a warning and a gate.
+      operationId: setCopyGuards
+      x-auth: user
+      x-rate-class: authed-write
+      x-cache: no-store
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [configId]
+              properties:
+                configId: {type: string}
+                dryRun:
+                  type: boolean
+                  description: false is the only way live copying starts, and it needs the two conditions above
+                acknowledgeSlippage: {type: boolean}
+                skipIfMovedCents:
+                  type: integer
+                  minimum: 0
+                  maximum: 50
+                  description: >-
+                    skip the copy if the price moved this many cents against us before we could act. DEFAULT 2,
+                    and the default is "skip instead of chase": a copied fill that chases is the one that turns
+                    a good source's record into a bad copier's.
+                doNotEnterWithinHours:
+                  type: integer
+                  minimum: 0
+                  maximum: 168
+                  description: default 24. Entering a market that resolves in minutes is a coin flip with fees.
+                categoryFilter:
+                  type: string
+                  description: only copy into this category; '' means every category
+                minPriceMicro: {type: integer, minimum: 1, maximum: 999999}
+                maxPriceMicro: {type: integer, minimum: 1, maximum: 999999}
+                takeProfitMicro: {type: integer, minimum: 1, maximum: 999999}
+                stopLossMicro: {type: integer, minimum: 1, maximum: 999999}
+      responses:
+        "200":
+          description: the config with its guards; `dryRun:false` means live copying has begun
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Stamped"
+                  - $ref: "#/components/schemas/CopyConfig"
+        "401": {$ref: "#/components/responses/Denied"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409":
+          description: >-
+            REFUSED - the state does not allow this yet (no acknowledged slippage, or no dry-run history for
+            this config). Distinct from 400 on purpose: the body was well-formed and the request is refused by
+            the state, and a client that retries a 400 forever is worse than one that knows to wait.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Error"}
+        "422": {$ref: "#/components/responses/Validation"}
+
+        "500": {$ref: "#/components/responses/Internal"}
+  /v1/copy/configs/monitor:
+    get:
+      tags: [trading]
+      summary: Source price vs our fill vs slippage, and every skip with its reason (P10 D7)
+      description: |
+        Real fills (`copy_events`) and would-be fills (`copy_dry_runs`) are two lists, not one time-ordered
+        stream. The one thing this screen must never allow is mistaking a simulation for a trade, and a merged
+        list is exactly how that happens; every row carries `dryRun` for the same reason, and so does a fill
+        with no intent: a copied event with an empty `intentId` never reached the venue.
+      operationId: getCopyMonitor
+      x-auth: user
+      x-rate-class: authed-read
+      x-cache: no-store
+      parameters:
+        - name: configId
+          in: query
+          required: true
+          schema: {type: string}
+        - name: limit
+          in: query
+          schema: {type: integer, minimum: 1, maximum: 200, default: 50}
+      responses:
+        "200":
+          description: both lists, the slippage the source produced, and why the skips were skipped
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Stamped"
+                  - type: object
+                    required: [configId, sourceAnon, live, wouldDo, skips, slippage, sourceStats, skipReasons]
+                    properties:
+                      configId: {type: string}
+                      sourceAnon: {type: string}
+                      live:
+                        type: array
+                        items: {$ref: "#/components/schemas/CopyEvent"}
+                      wouldDo:
+                        type: array
+                        items: {$ref: "#/components/schemas/CopyEvent"}
+                      skips:
+                        type: array
+                        description: the subset of `live` the engine refused to copy, with the engine's reason
+                        items: {$ref: "#/components/schemas/CopyEvent"}
+                      slippage: {$ref: "#/components/schemas/SlippageFacts"}
+                      sourceStats: {$ref: "#/components/schemas/SourceStats"}
+                      skipReasons:
+                        type: array
+                        items: {type: string}
+        "401": {$ref: "#/components/responses/Denied"}
+        "404": {$ref: "#/components/responses/NotFound"}
+
+        "500": {$ref: "#/components/responses/Internal"}
+  /v1/me/portfolio:
+    get:
+      tags: [trading]
+      summary: Positions marked, grouped by event, with the curve and the benchmark (P10 D6)
+      description: |
+        Positions marked at the last fill we saw, grouped by event where the event is negRisk (exactly one
+        outcome pays, so a long-Yes book across k outcomes is one position with k legs and the group's ceiling
+        is the best leg, not the sum), the order history with its `unknown` rows INTACT, and the realised curve
+        against a stated benchmark.
+
+        Rows whose lifecycle we cannot name are returned rather than filtered: a table that hides them claims
+        every order resolved, and the reason a user needs is usually in `reason`. A position with no mark is
+        returned with an empty `mark` and `markSource: unknown` - dropping it would mean a position stops
+        existing as far as its holder is concerned.
+      operationId: getPortfolio
+      x-auth: user
+      x-rate-class: authed-read
+      x-cache: no-store
+      responses:
+        "200":
+          description: positions, groups, orders, curve, totals, benchmark
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Stamped"
+                  - $ref: "#/components/schemas/Portfolio"
+        "401": {$ref: "#/components/responses/Denied"}
+
+        "500": {$ref: "#/components/responses/Internal"}
+  /v1/whale-views:
+    get:
+      tags: [market]
+      summary: This account's saved whale views (P10 D4)
+      description: |
+        A saved view is a name plus the filters it was saved with, and optionally the alert rule it is bound
+        to. `notifies` says whether the view is allowed to fire: a view bound to a rule that has no target
+        cannot notify, because an alert with no target is a notification about nothing.
+      operationId: listWhaleViews
+      x-auth: user
+      x-rate-class: authed-read
+      x-cache: no-store
+      responses:
+        "200":
+          description: saved views
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Stamped"
+                  - type: object
+                    required: [items, count]
+                    properties:
+                      items:
+                        type: array
+                        items: {$ref: "#/components/schemas/WhaleView"}
+                      count: {type: integer}
+        "401": {$ref: "#/components/responses/Denied"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/Validation"}
+        "500": {$ref: "#/components/responses/Internal"}
+    post:
+      tags: [market]
+      summary: Save a whale view, optionally with its alert rule (P10 D4)
+      description: |
+        The same call creates the view and, when a channel is given, the alert rule it fires through: D4 asks
+        for alert-rule creation inline, and an inline form that posts to a second endpoint is an inline form
+        that loses what the user just typed.
+      operationId: createWhaleView
+      x-auth: user
+      x-rate-class: authed-write
+      x-cache: no-store
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: {type: string, minLength: 1, maxLength: 48}
+                minSeverity: {type: string, enum: [info, notice, urgent], default: notice}
+                minNotionalMicro: {type: integer, minimum: 0}
+                multiple: {type: integer, minimum: 2, maximum: 1000}
+                marketId:
+                  type: string
+                  description: per-market view; absent means a global one
+                channel:
+                  type: string
+                  enum: [telegram, email, webhook]
+                  description: >-
+                    when present this view NOTIFIES, which requires a target - a per-market view sets one. A
+                    global view with a channel is refused (the schema's own rule, `rule_has_target`).
+                severity: {type: string, enum: [info, notice, urgent], default: notice}
+                firesPerWindow: {type: integer, minimum: 1, maximum: 100}
+                ruleWindowMs: {type: integer, minimum: 60000, maximum: 86400000}
+      responses:
+        "200":
+          description: the saved view, with the rule it created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Stamped"
+                  - $ref: "#/components/schemas/WhaleView"
+        "401": {$ref: "#/components/responses/Denied"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/Validation"}
+
+        "500": {$ref: "#/components/responses/Internal"}
 components:
   headers:
     xRequestId:
@@ -1538,8 +2086,558 @@ components:
         dev only (PGM_AUTH_MODE=dev-header). In every other deployment this is a bearer token and the user id
         comes from it; a header a client can set is not an authentication mechanism.
       schema: {type: string}
-
   schemas:
+    # ---------------------------------------------------------------- P10 · terminal rows and dossiers
+    LabelFact:
+      type: object
+      description: >-
+        one PUBLISHABLE classification label with the rule that produced it and its disclaimer. P09's `Labels`
+        carries the label NAMES; the terminal's rows carry the facts, because D2's badge tooltip has to state
+        the exact rule and a rule that only arrives on another endpoint is a rule most users never see.
+      required: [label, confidence, rule, disclaimer]
+      properties:
+        label: {type: string, enum: [whale, smart_money, new_wallet, cluster, wash_like]}
+        confidence: {type: integer, minimum: 0, maximum: 1000, description: "the classifier's own confidence, per mille"}
+        rule: {type: string, description: "the threshold sentence, in the words the classifier ran"}
+        disclaimer: {type: string, description: "what the label does NOT claim; required wherever the label is shown"}
+        evidence:
+          type: object
+          description: the numbers behind the call, so a user can disagree with the classifier and say why
+
+    WhaleThreshold:
+      type: object
+      description: >-
+        `max(p99.5 of this market's window fills, $500 floor)`. Below 40 fills in the window the relative term
+        is DISCARDED and the floor applies alone (`sampleOk: false`), because a p99.5 of five fills is a
+        statement about five fills. `reason` names the term that won, so a threshold is reproducible instead of
+        trusted.
+      required: [thresholdMicro, fills, reason, rule]
+      properties:
+        thresholdMicro: {type: integer, minimum: 1}
+        fills: {type: integer, minimum: 0}
+        medianMicro: {type: integer, minimum: 0}
+        p995Micro: {type: integer, minimum: 0}
+        relativeMicro: {type: integer, minimum: 0, description: "the p99.5 term, before the floor"}
+        floorMicro: {type: integer, minimum: 0, description: "the absolute floor ($500) or a size-bucket override"}
+        sampleOk: {type: boolean, description: "false when the window has too few fills for a percentile"}
+        mode: {type: string, description: "'relative' (default) or 'multiple' when the caller supplied N x median"}
+        multiple: {type: ["integer", "null"]}
+        reason: {type: string, enum: [relative, absolute_floor, absolute_fallback]}
+        rule: {type: string}
+
+    TerminalFill:
+      type: object
+      description: >-
+        one fill row of the terminal tape. Same names and kinds as `DurableFill` (`price`, `shares` and
+        `notional` as decimal strings), plus the market's own identity for the one-click jump, the labels with
+        their rules, and the threshold the row was judged against. `tsMs` + `lagMs` replace `venueTs` +
+        `ingestMs`: the tape renders one timestamp and how far behind the feed is, and shipping two clocks to
+        a client that needs one is how a client ends up comparing them.
+      required: [tsMs, price, shares, notionalMicro, side, anonWallet, marketId, tick, thresholdMicro, isWhale]
+      properties:
+        tsMs: {type: integer, description: "venue clock, ms - the same clock the cursor uses"}
+        lagMs: {type: integer, minimum: 0, description: "ingest minus venue; the freshness indicator's number"}
+        conditionId: {type: string}
+        tokenId: {type: string}
+        marketId: {type: string, description: "our id, for the row's market link; '' when the market is not in our catalogue"}
+        marketSlug: {type: string}
+        question: {type: string, description: "venue text, rendered as sanitised PLAIN TEXT by the client"}
+        category: {type: string}
+        tick: {type: string, description: "the market's tick, because a price string cannot be rendered without it"}
+        side: {type: string, enum: [BUY, SELL]}
+        outcome: {type: string}
+        price: {$ref: "#/components/schemas/Price"}
+        shares: {type: string, pattern: '^[0-9]+(\.[0-9]{1,6})?$'}
+        notionalMicro:
+          type: integer
+          description: micro-USDC, exact; the field the whale rule is expressed against
+        anonWallet: {type: string}
+        labels:
+          type: array
+          items: {$ref: "#/components/schemas/LabelFact"}
+        source: {type: string, enum: [rest, ws]}
+        thresholdMicro: {type: integer}
+        thresholdRule: {type: string, description: "the sentence the badge tooltip shows"}
+        thresholdReason: {type: string, enum: [relative, absolute_floor, absolute_fallback]}
+        severity: {type: string, enum: [info, notice, urgent]}
+        ratioBps: {type: integer, description: "notional / threshold, in bps; 10000 = exactly at the threshold"}
+        rule: {type: string, description: "the severity formula, stated on every row that carries a severity"}
+        isWhale: {type: boolean, description: "notionalMicro >= thresholdMicro, computed server-side so no client re-derives it"}
+
+    TapeCounts:
+      type: object
+      required: [returned, whales, hasMore]
+      properties:
+        returned: {type: integer}
+        whales: {type: integer}
+        hasMore:
+          type: boolean
+          description: "computed from limit+1, not inferred from a full page: a page that ends on a boundary is not a hasMore"
+        overThresholdOnPage: {type: integer}
+
+    FacetBucket:
+      type: object
+      required: [value, fills, notionalMicro]
+      properties:
+        value: {type: string}
+        fills: {type: integer}
+        notionalMicro: {type: integer}
+
+    FacetMarket:
+      type: object
+      required: [marketId, fills, notionalMicro, thresholdMicro]
+      properties:
+        marketId: {type: string}
+        slug: {type: string}
+        question: {type: string}
+        category: {type: string}
+        fills: {type: integer}
+        notionalMicro: {type: integer}
+        whales: {type: integer}
+        thresholdMicro: {type: integer}
+        thresholdRule: {type: string}
+        thresholdReason: {type: string}
+        sizeBucket:
+          type: string
+          enum: [small, mid, large]
+          description: >-
+            the market's own size class, derived from its median fill; D4's tunable defaults hang off it, so a
+            $500 floor on a market whose median fill is $4 and on one whose median is $900 are the same number
+            and not the same rule
+        bucketFloorMicro: {type: integer}
+
+    TapeFacets:
+      type: object
+      required: [fills, medianNotionalMicro, whale, sides, categories, classifications]
+      properties:
+        marketId: {type: ["string", "null"]}
+        windowMs: {type: integer}
+        fills: {type: integer}
+        sampleMax: {type: integer}
+        sampled:
+          type: boolean
+          description: true when the window held more fills than the in-process sample cap; the counts are then
+            of the sample, and a facet count that quietly means something else is a facet count nobody can trust
+        medianNotionalMicro: {type: integer}
+        p95NotionalMicro: {type: integer}
+        maxNotionalMicro: {type: integer}
+        whale: {$ref: "#/components/schemas/WhaleThreshold"}
+        severityRule: {type: string}
+        sides:
+          type: array
+          items: {$ref: "#/components/schemas/FacetBucket"}
+        outcomes:
+          type: array
+          items: {$ref: "#/components/schemas/FacetBucket"}
+        categories:
+          type: array
+          items: {$ref: "#/components/schemas/FacetBucket"}
+        sources:
+          type: array
+          items: {$ref: "#/components/schemas/FacetBucket"}
+        wallets:
+          type: array
+          items:
+            allOf:
+              - $ref: "#/components/schemas/FacetBucket"
+              - type: object
+                required: [anonWallet]
+                properties:
+                  anonWallet: {type: string}
+                  labels:
+                    type: array
+                    items: {$ref: "#/components/schemas/LabelFact"}
+        markets:
+          type: array
+          items: {$ref: "#/components/schemas/FacetMarket"}
+        classifications:
+          type: array
+          description: label, how many wallets carry it, and how many fills they made - the counts a user needs
+            to judge whether a filter is worth applying
+          items:
+            type: object
+            required: [label, wallets, fills]
+            properties:
+              label: {type: string}
+              wallets: {type: integer}
+              fills: {type: integer}
+              rule: {type: string}
+              disclaimer: {type: string}
+
+    WhaleFeed:
+      type: object
+      required: [scope, windowMs, rows, counts, thresholds]
+      properties:
+        scope: {type: string, enum: [global, market]}
+        marketId: {type: ["string", "null"]}
+        windowMs: {type: integer}
+        multiple: {type: ["integer", "null"]}
+        rows:
+          type: array
+          maxItems: 200
+          items: {$ref: "#/components/schemas/TerminalFill"}
+        counts:
+          type: object
+          required: [overThreshold, returned, marketsWithFills]
+          properties:
+            overThreshold: {type: integer}
+            returned: {type: integer}
+            marketsWithFills: {type: integer}
+        thresholds:
+          type: object
+          description: per market id, the threshold this feed applied; present even for markets the page cut off,
+            so a missing row is explicable
+          additionalProperties: {$ref: "#/components/schemas/WhaleThreshold"}
+
+    TraderMetric:
+      type: object
+      description: >-
+        one window of the metric set D3 requires to be recomputed as a WHOLE when the window changes. Every
+        field is here for every window: a switcher that swaps some numbers and leaves others is a screen that
+        cannot be read.
+      required: [fills, resolvedMarkets, wins, insufficientSample, sampleGate, volumeMicro, realisedMicro,
+                 unrealisedMicro, maxDrawdownMicro, avgHoldMs]
+      properties:
+        fills: {type: integer}
+        resolvedMarkets:
+          type: integer
+          description: settled markets this wallet traded - the denominator of the win rate, per MARKET and not
+            per fill, because a wallet that bought six times and sold once made one decision
+        wins: {type: integer}
+        winRateBps:
+          type: ["integer", "null"]
+          description: 'null below the sample gate. Never rendered as a percentage: "2 of 3" is not 67%'
+        insufficientSample: {type: boolean}
+        sampleNote: {type: string, description: "the sentence the UI shows instead of a win rate"}
+        sampleGate: {type: integer}
+        volumeMicro: {type: integer}
+        realisedMicro: {type: integer, description: "settled markets only"}
+        unrealisedMicro: {type: integer, description: "open positions at the last mark we hold; 0 when none"}
+        bestMicro: {type: integer}
+        worstMicro: {type: integer}
+        maxDrawdownMicro: {type: integer, minimum: 0}
+        avgHoldMs: {type: integer}
+        medianHoldMs: {type: integer}
+        openFills: {type: integer}
+        matchedPositions: {type: integer}
+        distinctMarkets: {type: integer}
+        categories: {type: integer}
+        source: {type: string, enum: [rollup, sampled]}
+        asOfMs: {type: integer}
+        computedMs: {type: integer}
+        storedWinRateBps: {type: ["integer", "null"], description: "the materialised row's value, when one exists"}
+
+    CurvePoint:
+      type: object
+      description: >-
+        one point of the cumulative realised curve. `peakMicro` and `drawdownMicro` are REQUIRED: the prompt's
+        constraint is that drawdown appears wherever PnL appears, and the way to make that structural is for a
+        curve point to be unable to exist without it.
+      required: [tsMs, cumMicro, peakMicro, drawdownMicro]
+      properties:
+        tsMs: {type: integer}
+        cumMicro: {type: integer}
+        peakMicro: {type: integer}
+        drawdownMicro: {type: integer, minimum: 0}
+        openPositions: {type: integer}
+
+    TraderDossier:
+      type: object
+      required: [anonWallet, window, windows, metrics, curve, curveSource, maxDrawdownMicro, breakdown,
+                 positions, fills, behaviour, methodology]
+      properties:
+        anonWallet: {type: string}
+        window: {type: string, enum: [7d, 30d, 90d, all]}
+        windows: {type: array, items: {type: string}}
+        metrics:
+          type: object
+          additionalProperties: {$ref: "#/components/schemas/TraderMetric"}
+        curve:
+          type: array
+          items: {$ref: "#/components/schemas/CurvePoint"}
+        curveWindow: {type: string}
+        curveSource: {type: string, enum: [rollup, sampled]}
+        maxDrawdownMicro: {type: integer, minimum: 0}
+        breakdown:
+          type: array
+          description: category shares in bps, with a denominator of the sum of |realised| per category so the
+            shares of a mixed win/loss book add to 10000
+          items:
+            type: object
+            required: [category, fills, notionalMicro, realisedMicro, shareBps]
+            properties:
+              category: {type: string}
+              fills: {type: integer}
+              notionalMicro: {type: integer}
+              realisedMicro: {type: integer}
+              shareBps: {type: integer}
+        positions:
+          type: array
+          items: {$ref: "#/components/schemas/Position"}
+        fills:
+          type: array
+          maxItems: 40
+          items: {$ref: "#/components/schemas/TraderFill"}
+        behaviour:
+          type: array
+          description: >-
+            the behaviour labels that ARE publishable, each with its methodology. `insider_suspect` is computed
+            and stored but never published: a false accusation about a named person is not a feature, and the
+            classifier's own false-positive rate is the reason the disclaimer exists.
+          items: {$ref: "#/components/schemas/LabelFact"}
+        methodology:
+          type: object
+          description: the sentence behind every number, shipped with the numbers it explains rather than behind
+            a link a user has to go and find
+          additionalProperties: true
+
+    TraderFill:
+      allOf:
+        - $ref: "#/components/schemas/TerminalFill"
+        - type: object
+          required: [resolved, realisedMicro]
+          properties:
+            resolved: {type: boolean, description: "false while the market is open; realised is then 0 and not a guess"}
+            winner: {type: ["boolean", "null"]}
+            realisedMicro: {type: integer}
+
+    Position:
+      type: object
+      required: [size, avgEntry, mark, unrealisedMicro, costBasisMicro, valueMicro, endsInMs]
+      properties:
+        marketId: {type: string}
+        marketSlug: {type: string}
+        question: {type: string}
+        outcome: {type: string}
+        tokenId: {type: string}
+        size: {type: string, pattern: '^[0-9]+(\.[0-9]{1,6})?$'}
+        avgEntry: {$ref: "#/components/schemas/Price"}
+        mark:
+          type: string
+          description: >-
+            the last fill WE have seen, as a price string; empty when we have none. Empty and "0" are different
+            claims: empty is about our data, 0 is about the market.
+        markSource: {type: string, enum: [last_fill, unknown]}
+        costBasisMicro: {type: integer}
+        valueMicro: {type: integer}
+        unrealisedMicro: {type: integer}
+        unrealisedBps: {type: integer}
+        onTick: {type: boolean, description: "false when the mark is off the market's tick - a stale book's mark"}
+        endsInMs: {type: integer, description: "negative once the market has ended"}
+        shareOfPortfolioBps: {type: integer}
+
+    SlippageFacts:
+      type: object
+      description: >-
+        what this SOURCE's copies actually cost, measured on our own attempts: our fill price against theirs, in
+        bps. Shown in the UI BEFORE the confirm, and the default is "skip instead of chase" - a copier who chases
+        turns a good source's record into a bad copier's result.
+      required: [samples, medianSlippageBps, skipRateBps, default, warning]
+      properties:
+        samples: {type: integer}
+        medianSlippageBps: {type: integer}
+        p90SlippageBps: {type: integer}
+        worstSlippageBps: {type: integer}
+        copied: {type: integer}
+        skipped: {type: integer}
+        skipRateBps: {type: integer}
+        medianFillMicro: {type: integer}
+        default: {type: string, description: "the policy default, stated rather than implied"}
+        warning: {type: string, description: "the sentence the confirm dialog renders"}
+
+    SourceStats:
+      type: object
+      required: [windows, ranking]
+      properties:
+        windows:
+          type: array
+          description: >-
+            the source's OWN record, including the windows where it lost money. A copy screen that shows only
+            winners is the feature working as a trap.
+          items:
+            type: object
+            required: [windowDays, closedTrades, realisedMicro, netAfterFeesMicro, maxDrawdownMicro, insufficientSample]
+            properties:
+              windowDays: {type: integer}
+              closedTrades: {type: integer}
+              realisedMicro: {type: integer}
+              feesMicro: {type: integer}
+              netAfterFeesMicro: {type: integer}
+              maxDrawdownMicro: {type: integer, minimum: 0}
+              longestLosingStreak: {type: integer}
+              avgLatencyMs: {type: integer}
+              winRateBps: {type: ["integer", "null"]}
+              insufficientSample: {type: boolean}
+              sampleNote: {type: string}
+              riskAdjustedBps:
+                type: integer
+                description: >-
+                  net return per unit of drawdown, in bps - the ranking this list is sorted by. Raw PnL is
+                  deliberately not the sort: $50k with a $40k drawdown and $50k with a $4k drawdown are not the
+                  same product, and ordering by the first sells the second as a surprise.
+              riskAdjustedNote: {type: string}
+        ranking: {type: string, description: "the sentence that says HOW the list is sorted, in the payload"}
+
+    CopyConfig:
+      type: object
+      required: [configId, sourceAnon, mode, enabled, dryRun]
+      properties:
+        configId: {type: string}
+        sourceAnon: {type: string}
+        mode: {type: string, enum: [cap, ratio]}
+        ratioBps: {type: ["integer", "null"]}
+        maxOrderMicro: {type: integer}
+        maxDailyMicro: {type: integer}
+        enabled: {type: boolean}
+        createdMs: {type: integer}
+        pausedReason: {type: ["string", "null"]}
+        dryRun:
+          type: boolean
+          description: >-
+            true until the guards call has both an acknowledgement and dry-run history. A config with no guard
+            row is DRY-RUN by construction - the default is safe because the alternative default is a config
+            that starts trading the moment it is read.
+        guardsFromRow: {type: boolean}
+        skipIfMovedCents: {type: integer}
+        doNotEnterWithinHours: {type: integer}
+        categoryFilter: {type: string}
+        minPriceMicro: {type: ["integer", "null"]}
+        maxPriceMicro: {type: ["integer", "null"]}
+        takeProfitMicro: {type: ["integer", "null"]}
+        stopLossMicro: {type: ["integer", "null"]}
+        warning: {$ref: "#/components/schemas/SlippageFacts"}
+        sourceStats: {$ref: "#/components/schemas/SourceStats"}
+
+    CopyEvent:
+      type: object
+      description: >-
+        one row of the monitor. `dryRun: true` means the engine WOULD have done this; the two lists are separate
+        because a merged one is how a simulation gets read as a trade.
+      required: [action, atMs, dryRun]
+      properties:
+        action: {type: string}
+        reason: {type: string, description: "why it was skipped/refused, in the engine's own words"}
+        deviationBps: {type: integer}
+        atMs: {type: integer}
+        intentId:
+          type: string
+          description: 'empty on a skip and on a dry run: an event with no intent never reached the venue'
+        marketId: {type: string}
+        shares: {type: string}
+        price: {$ref: "#/components/schemas/Price"}
+        sourcePrice: {$ref: "#/components/schemas/Price"}
+        dryRun: {type: boolean}
+
+    Portfolio:
+      type: object
+      required: [positions, negRiskGroups, orders, unknownLifecycle, pnlCurve, totals, benchmark, csv, emptyState]
+      properties:
+        positions:
+          type: array
+          items: {$ref: "#/components/schemas/Position"}
+        negRiskGroups:
+          type: array
+          description: >-
+            event-level exposure for negRisk events: exactly one outcome pays, so the ceiling is the best leg and
+            NOT the sum of the legs' quoted values, which is a number that cannot happen
+          items:
+            type: object
+            required: [eventId, legs, valueMicro, costBasisMicro, maxPayoutMicro]
+            properties:
+              eventId: {type: string}
+              eventTitle: {type: string}
+              legs: {type: integer}
+              valueMicro: {type: integer}
+              costBasisMicro: {type: integer}
+              maxPayoutMicro: {type: integer}
+              unrealisedMicro: {type: integer}
+        orders:
+          type: array
+          items:
+            type: object
+            required: [intentId, state, createdAt]
+            properties:
+              intentId: {type: string}
+              marketId: {type: string}
+              state: {type: string}
+              reason: {type: ["string", "null"]}
+              shares: {type: string}
+              price: {$ref: "#/components/schemas/Price"}
+              createdMs: {type: integer}
+              notionalMicro: {type: integer}
+              unknownLifecycle: {type: boolean}
+        unknownLifecycle:
+          type: array
+          description: >-
+            rows the venue reported in a state we do not model. Returned, never filtered: a table that hides them
+            claims every order resolved.
+          items:
+            type: object
+            required: [intentId, state, showAsWorking, atMs]
+            properties:
+              venueOrderId: {type: string}
+              intentId: {type: string}
+              state: {type: string}
+              reason: {type: string}
+              showAsWorking: {type: boolean}
+              atMs: {type: integer}
+              unknownLifecycle: {type: boolean}
+        pnlCurve:
+          type: array
+          items: {$ref: "#/components/schemas/CurvePoint"}
+        maxDrawdownMicro: {type: integer, minimum: 0}
+        totals:
+          type: object
+          required: [valueMicro, cashMicro, equityMicro, unrealisedMicro, costBasisMicro]
+          properties:
+            valueMicro: {type: integer}
+            cashMicro: {type: integer}
+            equityMicro: {type: integer}
+            unrealisedMicro: {type: integer}
+            costBasisMicro: {type: integer}
+        benchmark:
+          type: object
+          description: >-
+            holding pUSD, named and valued in the payload rather than drawn as an unnamed second line: a
+            benchmark a user cannot identify is decoration
+          required: [kind, valueMicro, rateBps, note]
+          properties:
+            kind: {type: string}
+            valueMicro: {type: integer}
+            rateBps: {type: integer}
+            note: {type: string}
+        csv:
+          type: object
+          description: >-
+            the column list, so the export a user downloads is the export they were shown. The rows are produced
+            by the client from the same payload: an export endpoint that re-queries is an export that can
+            disagree with the screen.
+          required: [columns, note]
+          properties:
+            columns: {type: array, items: {type: string}}
+            note: {type: string}
+        emptyState: {type: string, description: "where to send a user with no positions (the markets page)"}
+
+    WhaleView:
+      type: object
+      required: [viewId, name, filters, severity, scope, createdMs, notifies]
+      properties:
+        viewId: {type: string}
+        name: {type: string}
+        filters: {type: object, additionalProperties: true}
+        channel: {type: ["string", "null"], enum: [telegram, email, webhook, null]}
+        severity: {type: string, enum: [info, notice, urgent]}
+        scope: {type: string, enum: [global, market]}
+        marketId: {type: ["string", "null"]}
+        ruleId: {type: ["string", "null"]}
+        createdMs: {type: integer}
+        notifies:
+          type: boolean
+          description: 'false for a view bound to no rule, or to a rule with no target: an alert with no target is a notification about nothing'
+        firesPerWindow: {type: ["integer", "null"]}
+        ruleWindowMs: {type: ["integer", "null"]}
+        ruleEnabled: {type: ["boolean", "null"]}
+
     Price:
       description: |
         price in (0,1) USDC as a dot-decimal string with at most 6 decimals. Strings are not a stylistic
@@ -1791,7 +2889,7 @@ components:
               enum: [RISK_HALT, MARKET_NOT_ACCEPTING, NO_ORDER_BOOK, STALE_QUOTE, BAD_SIDE, UNKNOWN_TICK,
                      OFF_TICK, BAD_MARKET_META, BELOW_MIN_SIZE, ZERO_SIZE, BAD_AMOUNT, OVER_ORDER_CAP,
                      PRICE_FAR_FROM_MID, TOO_MANY_OPEN, DAILY_CAP, IDEM_CONFLICT, IDEM_IN_PROGRESS,
-                     IDEM_KEY_REQUIRED, RISK_UNAVAILABLE, SIGNER_UNAVAILABLE, BAD_REASON, NOT_FOUND,
+                     IDEM_KEY_REQUIRED, RISK_UNAVAILABLE, SIGNER_UNAVAILABLE, BAD_REASON, NOT_FOUND, REFUSED,
                      VALIDATION, INTERNAL, UNAUTHENTICATED, SESSION_STALE, SESSION_REVOKED, SESSION_MISMATCH, ADMIN_REQUIRED, LOGIN_FAILED, ACCOUNT_LOCKED, TOTP_REQUIRED, TOTP_INVALID, TOTP_LOCKED, ADDRESS_COOLDOWN, ADDRESS_LIMIT, REMOVE_DURING_COOLDOWN, NO_SUCH_RESOURCE, REFRESH_UNKNOWN, REFRESH_REUSED, REFRESH_EXPIRED, TELEGRAM_REPLAY, TELEGRAM_INVALID, SECURITY_ENV_MISSING, KEYSTORE_TAMPER, BREAK_GLASS_DENIED, AUTHZ_UNDECLARED]
             message: {type: string, description: "user-safe by construction"}
             retryable: {type: boolean}
