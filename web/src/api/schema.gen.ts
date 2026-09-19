@@ -1316,6 +1316,58 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/leaderboard/me": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Your own standing on every board
+         * @description One read for the whole self-rank panel: the account's standing on each of the six boards — nine answers,
+         *     because the category board is four boards — with the gap to the place above, the flag that says whether the
+         *     row is off the first page, and what is holding an unranked wallet back. USER-scoped: it is built from the
+         *     wallets this account proved it controls.
+         */
+        get: operations["getLeaderboardMe"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/leaderboard/identity": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * What this account is published as
+         * @description The listing state, the claimed handle, and both halves of the promise served as data: what listing CHANGES
+         *     and what it does not. It does not change a rank, cannot remove a wallet from a board and cannot add one, and
+         *     that is the half a user would otherwise assume wrongly.
+         */
+        get: operations["getLeaderboardIdentity"];
+        put?: never;
+        /**
+         * Opt in to being listed under a handle, or go back to private (idempotent per key)
+         * @description Private is the default and the absence of a row. Listing attaches the account's handle to its board rows and
+         *     is refused without a usable one; a handle that is taken is a 409; changing an existing handle is refused
+         *     rather than applied. Every decision is written to the append-only audit log, because "when did they agree
+         *     to this" is a question with a right answer.
+         */
+        post: operations["postLeaderboardIdentity"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/leaderboard/recompute": {
         parameters: {
             query?: never;
@@ -1982,7 +2034,7 @@ export interface components {
             /** @description no `detail` field, ever: that is where a Python message would leak. Logs carry the code and the request id instead. */
             error: {
                 /** @enum {string} */
-                code: "RISK_HALT" | "MARKET_NOT_ACCEPTING" | "NO_ORDER_BOOK" | "STALE_QUOTE" | "BAD_SIDE" | "UNKNOWN_TICK" | "OFF_TICK" | "BAD_MARKET_META" | "BELOW_MIN_SIZE" | "ZERO_SIZE" | "BAD_AMOUNT" | "OVER_ORDER_CAP" | "PRICE_FAR_FROM_MID" | "TOO_MANY_OPEN" | "DAILY_CAP" | "IDEM_CONFLICT" | "IDEM_IN_PROGRESS" | "IDEM_KEY_REQUIRED" | "RISK_UNAVAILABLE" | "SIGNER_UNAVAILABLE" | "BAD_REASON" | "NOT_FOUND" | "REFUSED" | "HALTED" | "RULE_CAP" | "DRY_RUN_REQUIRED" | "PLAN_REQUIRED" | "VALIDATION" | "INTERNAL" | "UNAUTHENTICATED" | "SESSION_STALE" | "SESSION_REVOKED" | "SESSION_MISMATCH" | "ADMIN_REQUIRED" | "LOGIN_FAILED" | "ACCOUNT_LOCKED" | "TOTP_REQUIRED" | "TOTP_INVALID" | "TOTP_LOCKED" | "ADDRESS_COOLDOWN" | "ADDRESS_LIMIT" | "REMOVE_DURING_COOLDOWN" | "NO_SUCH_RESOURCE" | "REFRESH_UNKNOWN" | "REFRESH_REUSED" | "REFRESH_EXPIRED" | "TELEGRAM_REPLAY" | "TELEGRAM_INVALID" | "SECURITY_ENV_MISSING" | "KEYSTORE_TAMPER" | "BREAK_GLASS_DENIED" | "AUTHZ_UNDECLARED" | "BAD_FIELD" | "QUOTA_EXCEEDED" | "RADAR_SCOPE";
+                code: "RISK_HALT" | "MARKET_NOT_ACCEPTING" | "NO_ORDER_BOOK" | "STALE_QUOTE" | "BAD_SIDE" | "UNKNOWN_TICK" | "OFF_TICK" | "BAD_MARKET_META" | "BELOW_MIN_SIZE" | "ZERO_SIZE" | "BAD_AMOUNT" | "OVER_ORDER_CAP" | "PRICE_FAR_FROM_MID" | "TOO_MANY_OPEN" | "DAILY_CAP" | "IDEM_CONFLICT" | "IDEM_IN_PROGRESS" | "IDEM_KEY_REQUIRED" | "RISK_UNAVAILABLE" | "SIGNER_UNAVAILABLE" | "BAD_REASON" | "NOT_FOUND" | "REFUSED" | "HALTED" | "RULE_CAP" | "DRY_RUN_REQUIRED" | "PLAN_REQUIRED" | "VALIDATION" | "INTERNAL" | "UNAUTHENTICATED" | "SESSION_STALE" | "SESSION_REVOKED" | "SESSION_MISMATCH" | "ADMIN_REQUIRED" | "LOGIN_FAILED" | "ACCOUNT_LOCKED" | "TOTP_REQUIRED" | "TOTP_INVALID" | "TOTP_LOCKED" | "ADDRESS_COOLDOWN" | "ADDRESS_LIMIT" | "REMOVE_DURING_COOLDOWN" | "NO_SUCH_RESOURCE" | "REFRESH_UNKNOWN" | "REFRESH_REUSED" | "REFRESH_EXPIRED" | "TELEGRAM_REPLAY" | "TELEGRAM_INVALID" | "SECURITY_ENV_MISSING" | "KEYSTORE_TAMPER" | "BREAK_GLASS_DENIED" | "AUTHZ_UNDECLARED" | "BAD_FIELD" | "QUOTA_EXCEEDED" | "RADAR_SCOPE" | "HANDLE_TAKEN";
                 /** @description user-safe by construction */
                 message: string;
                 retryable: boolean;
@@ -2768,6 +2820,7 @@ export interface components {
         };
         LeaderboardFollowRow: {
             anon: string;
+            handle?: string | null;
             label: string;
             followedMs: number;
             /** @enum {string} */
@@ -2797,6 +2850,101 @@ export interface components {
                 unranked: number;
                 absent: number;
             };
+            note: string;
+        };
+        LeaderboardIdentityState: {
+            /** @enum {string} */
+            state: "private" | "listed";
+            handle: string;
+            listedMs: number | null;
+            updatedMs: number | null;
+            /** @description false when no row exists: private by default, not by a decision */
+            decided: boolean;
+            note: string;
+        };
+        LeaderboardSelfBoard: {
+            board: string;
+            category?: string | null;
+            anon: string;
+            label: string;
+            window: string;
+            /** @enum {string} */
+            state: "ranked" | "unranked" | "unknown";
+            rank: number | null;
+            rankedTotal: number;
+            rankBadge?: components["schemas"]["LeaderboardRankBadge"];
+            percentileBps?: number | null;
+            orderField: string;
+            /** @enum {string} */
+            orderUnits: "bps" | "micro" | "count";
+            /** @description the page the pin compares the rank against */
+            pageSize: number;
+            /** @description true when the row is not on page 1, i.e. when the screen pins it */
+            offPage: boolean;
+            rankedAhead?: number | null;
+            rankedBehind?: number | null;
+            rankedOnPage?: number | null;
+            /** @description the engine's gap object: delta and toPass in this board's field */
+            gap?: Record<string, never> | null;
+            /** @description the same row shape the board serves */
+            row?: Record<string, never> | null;
+            /** @description the refusal, with the numbers that produced it */
+            unranked?: Record<string, never> | null;
+            reasons: string[];
+            note?: string;
+        };
+        LeaderboardSelfWallet: {
+            anon: string;
+            claimedMs?: number;
+            boards: components["schemas"]["LeaderboardSelfBoard"][];
+            ranked: number;
+            unranked: number;
+            /** @description the wallet's best place across boards, with the label it is on */
+            best?: Record<string, never> | null;
+            /** @description what to do about being unranked, in numbers */
+            nextSteps: string[];
+            note: string;
+        };
+        LeaderboardSelf: {
+            identity: components["schemas"]["LeaderboardIdentityState"];
+            wallets: components["schemas"]["LeaderboardSelfWallet"][];
+            walletCount: number;
+            /**
+             * @description the pin: the wallet's row on the default board, plus its best place anywhere and the steps if it is not
+             *     ranked. `pin` is the entry the sticky strip draws, and it is the DEFAULT board's row rather than the
+             *     wallet's best one, because the strip sits under the board the reader is looking at
+             */
+            primary?: Record<string, never> | null;
+            pageSize: number;
+            links: {
+                identity?: string;
+                methodology?: string;
+            };
+            note: string;
+        };
+        LeaderboardIdentity: {
+            identity: components["schemas"]["LeaderboardIdentityState"];
+            handle: {
+                claimed: string;
+                /** @description the handle that is on the board right now; empty when private */
+                published: string;
+                rules: string;
+                reserved?: string[];
+            };
+            wallets: Record<string, never>[];
+            changes: string[];
+            doesNotChange: string[];
+            nudge: string;
+            note: string;
+        };
+        LeaderboardIdentitySet: {
+            identity: components["schemas"]["LeaderboardIdentityState"];
+            /** @enum {string} */
+            previous: "private" | "listed";
+            /** @description {pseudonym: handle} for the wallets this account controls */
+            publishedAs: Record<string, never>;
+            changes: string[];
+            doesNotChange: string[];
             note: string;
         };
         LeaderboardFollow: {
@@ -5576,6 +5724,93 @@ export interface operations {
             400: components["responses"]["Validation"];
             401: components["responses"]["Denied"];
             404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Denied"];
+            500: components["responses"]["Internal"];
+        };
+    };
+    getLeaderboardMe: {
+        parameters: {
+            query?: {
+                window?: "24h" | "7d" | "30d" | "90d" | "all";
+                days?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description the standing on every board, the pin, and the account's publication state */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Stamped"] & components["schemas"]["LeaderboardSelf"];
+                };
+            };
+            401: components["responses"]["Denied"];
+            422: components["responses"]["Denied"];
+            500: components["responses"]["Internal"];
+        };
+    };
+    getLeaderboardIdentity: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description the publication state and the rule it follows */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Stamped"] & components["schemas"]["LeaderboardIdentity"];
+                };
+            };
+            401: components["responses"]["Denied"];
+            500: components["responses"]["Internal"];
+        };
+    };
+    postLeaderboardIdentity: {
+        parameters: {
+            query?: never;
+            header?: {
+                /**
+                 * @description 8-128 chars of [A-Za-z0-9_-]. Required on every mutating endpoint; the 400 for its absence is part
+                 *     of the contract so a client cannot "just try without it" once and conclude it is optional.
+                 */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @enum {string} */
+                    state: "private" | "listed";
+                    handle?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description the state that is now stored */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LeaderboardIdentitySet"];
+                };
+            };
+            400: components["responses"]["Validation"];
+            401: components["responses"]["Denied"];
             409: components["responses"]["Conflict"];
             422: components["responses"]["Denied"];
             500: components["responses"]["Internal"];

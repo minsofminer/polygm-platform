@@ -48,6 +48,19 @@ describe("mutations", () => {
     expect(calls[1]!.headers.get("idempotency-key")).toBe(key);
   });
 
+  it("generates a key the API accepts, whatever the scope looks like", () => {
+    // The server's own rule (`_IDEM_RE` in services/api/app.py): 8-128 chars of [A-Za-z0-9_-]. A colon is
+    // rejected, and this client used to join the scope and the random half with one — so every mutating request
+    // that did not pass its own key was refused by a 422 about the header rather than doing what it was asked.
+    const shape = /^[A-Za-z0-9_-]{8,128}$/;
+    for (const scope of ["order", "leaderboardFollow", "order:0xabc:BUY:25", "a".repeat(200)]) {
+      const key = newIdempotencyKey(scope);
+      expect(key).toMatch(shape);
+      expect(key.length).toBeLessThanOrEqual(128);
+      expect(key).not.toContain(":");
+    }
+  });
+
   it("never retries an order after a timeout, because a second POST is a second order", async () => {
     let n = 0;
     vi.stubGlobal("fetch", vi.fn(async () => {

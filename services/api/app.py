@@ -108,6 +108,10 @@ CODES = {
     "RULE_CAP": ("this account already holds as many automation rules as it may", 409, False),
     "DRY_RUN_REQUIRED": ("this rule has no completed dry run, so it cannot be armed", 409, False),
     "PLAN_REQUIRED": ("the plan on this account does not include that", 402, True),
+    # P11-D4. The one refusal a user acts on by choosing another NAME rather than by changing a plan or a
+    # history: a handle becomes a public URL (/trader/<handle>), and an account that could take a second one
+    # after being caught would get a second first impression. Its own code so the sentence may name the clash.
+    "HANDLE_TAKEN": ("that public handle is already claimed; pick another", 409, False),
     # P07. Each of these is a *user-safe* sentence: the detail a client needs is here, and the detail an
     # attacker would like is in the log line, behind the request id.
     "UNAUTHENTICATED": ("a session is required", 401, False),
@@ -253,7 +257,7 @@ _PUBLIC_DETAIL_CODES = frozenset({"REFUSED", "QUOTA_EXCEEDED", "RADAR_SCOPE",
                                 # P10-D8/D9: the four refusals above are sentences written for the user
                                 # (which plan, which limit, which next step) and contain nothing from the
                                 # request, so they are safe to say out loud.
-                                "HALTED", "RULE_CAP", "DRY_RUN_REQUIRED", "PLAN_REQUIRED"})
+                                "HALTED", "RULE_CAP", "DRY_RUN_REQUIRED", "PLAN_REQUIRED", "HANDLE_TAKEN"})
 
 
 def err(code: str, request_id: str, *, detail: str | None = None, where: list[str] | None = None,
@@ -5063,7 +5067,8 @@ _LB_MONEY_STRINGS = (("realisedMicro", "realised"), ("trimmedMicro", "trimmed"),
                      ("improvementMicro", "improvement"), ("weekMicro", "week"), ("priorWeekMicro", "priorWeek"))
 
 
-def _lb_row_out(row: dict, *, total: int, labels: dict | None = None) -> dict:
+def _lb_row_out(row: dict, *, total: int, labels: dict | None = None,
+                handles: dict[str, str] | None = None) -> dict:
     """One row on the wire: `anon` instead of `wallet`, the display strings beside the micro integers.
 
     Both, not one: the integers are what the ranking is defined against and rounding them to cents would move a
@@ -5078,6 +5083,10 @@ def _lb_row_out(row: dict, *, total: int, labels: dict | None = None) -> dict:
     out["rankBadge"] = {"rank": _tm._int(out.get("rank")), "rankedTotal": _tm._int(total),
                         "text": "#%d" % _tm._int(out.get("rank"))}
     out["classifications"] = list((labels or {}).get(anon, []))
+    # D4. `handle` is the account that opted in, and None for everybody else - including every account that has
+    # never opened the setting. The pseudonym is unchanged either way: this one field is the whole difference
+    # between appearing on the board and appearing as somebody, which is why a private wallet is not a hidden one.
+    out["handle"] = (handles or {}).get(anon) or None
     return out
 
 
@@ -5131,6 +5140,14 @@ LEADERBOARD_FOLLOW_RESPONSES = {400: {"description": "no Idempotency-Key"},
                                 404: {"description": "no wallet with that pseudonym has been seen"},
                                 409: {"description": "the Idempotency-Key was reused with a different body"},
                                 422: {"description": "a missing anon, a malformed key, or an unknown state"}}
+LEADERBOARD_ME_RESPONSES = {401: {"description": "a session is required"},
+                            422: {"description": "a window no board reads"}}
+LEADERBOARD_IDENTITY_RESPONSES = {401: {"description": "a session is required"}}
+LEADERBOARD_IDENTITY_SET_RESPONSES = {400: {"description": "no Idempotency-Key"},
+                                      401: {"description": "a session is required"},
+                                      409: {"description": "the Idempotency-Key was reused with a different body, "
+                                                           "or the handle is taken"},
+                                      422: {"description": "an unknown state, or a listing without a usable handle"}}
 LEADERBOARD_RECOMPUTE_RESPONSES = {400: {"description": "no Idempotency-Key"},
                                    401: {"description": "a session is required"},
                                    409: {"description": "the Idempotency-Key was reused with a different body"},
@@ -5183,7 +5200,8 @@ def get_leaderboard(request: Request,
     excluded = _lb_excluded(decisions=decisions, board_id=str(board))
     labels = _labels_by_wallet()
     total = _tm._int(out["rankedTotal"])
-    rows = [_lb_row_out(r, total=total, labels=labels) for r in out["rows"]]
+    handles = _lb_published_handles()
+    rows = [_lb_row_out(r, total=total, labels=labels, handles=handles) for r in out["rows"]]
     # NOT `_anon(u["wallet"])`: the engine's rows already carry pseudonyms (that is the point of pseudonymising
     # the evidence before ranking), and hashing a pseudonym again produced a second, wrong identity — a refusal
     # that could not be matched to the row it refuses, with a name nothing else in the product would ever print.
@@ -5446,6 +5464,7 @@ def _lb_standing(*, anon: str, board_id: str, window: str, at_ms: int, category:
     rows = out["rows"]
     index = next((i for i, r in enumerate(rows) if str(r["wallet"]) == str(anon)), None)
     field, units = _LB_ORDER_FIELD.get(str(board_id), ("scoreBps", "bps"))
+    handles = _lb_published_handles()
     payload: dict = {
         "board": out["board"], "label": out["label"], "window": out["window"], "category": out.get("category"),
         "formula": out["formula"], "gate": out["gate"], "tieBreaks": out["tieBreaks"], "sampleGate": _lb_boards.MIN_RESOLVED,
@@ -5488,9 +5507,9 @@ def _lb_standing(*, anon: str, board_id: str, window: str, at_ms: int, category:
         "state": str(row["state"]), "rank": _tm._int(row["rank"]),
         "rankBadge": {"rank": _tm._int(row["rank"]), "rankedTotal": total, "text": "#%d" % _tm._int(row["rank"])},
         "percentileBps": _tm._int((_tm._int(row["rank"]) * 10_000 + max(1, total) - 1) // max(1, total)),
-        "row": _lb_row_out(row, total=total, labels=labels),
-        "above": (None if above is None else _lb_row_out(above, total=total, labels=labels)),
-        "below": (None if below is None else _lb_row_out(below, total=total, labels=labels)),
+        "row": _lb_row_out(row, total=total, labels=labels, handles=handles),
+        "above": (None if above is None else _lb_row_out(above, total=total, labels=labels, handles=handles)),
+        "below": (None if below is None else _lb_row_out(below, total=total, labels=labels, handles=handles)),
         "gap": gap,
         "reasons": [],
         "note": ("rank %d of %d on %s, and both neighbours are served with it: a rank with no context is a "
@@ -5900,9 +5919,388 @@ for _t in (TAPE_FILLS_RESPONSES, FACETS_RESPONSES, WHALES_RESPONSES, TRADER_RESP
            ALERT_DELIVERIES_RESPONSES, ALERT_SETTINGS_RESPONSES,
            LEADERBOARD_RESPONSES, LEADERBOARD_METHODOLOGY_RESPONSES, LEADERBOARD_SNAPSHOT_RESPONSES,
            LEADERBOARD_RUN_RESPONSES, LEADERBOARD_RECOMPUTE_RESPONSES, LEADERBOARD_RANK_RESPONSES,
+           LEADERBOARD_ME_RESPONSES, LEADERBOARD_IDENTITY_RESPONSES, LEADERBOARD_IDENTITY_SET_RESPONSES,
            LEADERBOARD_COMPARE_RESPONSES, LEADERBOARD_FOLLOWS_RESPONSES, LEADERBOARD_FOLLOW_RESPONSES):
     _t.update(_INTERNAL)                       # every route can 500 through the app-wide handler
 del _t
+# ------------------------------------------------------------------ P11 D4 · self-rank and the identity you appear under
+# The retention hook, and the phase's privacy question, in three routes:
+#
+#   * `GET  /v1/leaderboard/me`         — where THIS account stands on EVERY board, with the gap to the place
+#                                        above and the flag the screen uses to pin the row when it is off page.
+#   * `GET  /v1/leaderboard/identity`   — what the account is published as, and exactly what changing it does.
+#   * `POST /v1/leaderboard/identity`   — opt in to being listed (handle attached to the board rows) or back out.
+#
+# **The setting governs identity, not inclusion.** Every eligible wallet is ranked — that is D1's integrity rule
+# and the kit's "no ranking that hides a blown-up account" — so the opt-in cannot be a way off the board, and a
+# private account is not invisible: its row is published under the pseudonym exactly as every row was before this
+# table existed. What `listed` adds is the LINK: the row carries the account's handle, and the handle is the
+# public name a copier can look up. That is also the answer to "what is shown for a private wallet that appears
+# in someone else's data": the pseudonym, the statistics, the classifications, and no field anywhere that ties it
+# to an account. `tests/test_leaderboard_api.py` asserts that by grepping every public payload for the private
+# account's handle.
+#
+# **The unranked state is a to-do list, not a shrug.** A wallet under the sample gate or the turnover floor is
+# told the two numbers that refused it and how far each has to move (`_lb_next_steps`), because "why am I not on
+# it" is the question every leaderboard gets and a user who is 8 settled markets away should be able to see that.
+
+#: The number of rows a board serves by default, which is the page the pin compares a rank against. It is the
+#: default of `/v1/leaderboard`'s own `limit` (declared there), and `offPage` means "your row is not on page 1".
+_LB_PAGE_SIZE = 50
+
+#: A public handle: lower-case, starts with a letter or digit, 3-24 characters, no spaces. Reserved words are
+#: refused because a handle becomes a URL (`/trader/<handle>`, D6) and `admin` as a trader name is a phishing page.
+_LB_HANDLE_RX = re.compile(r"^[a-z0-9][a-z0-9_]{2,23}$")
+_LB_HANDLE_RESERVED = frozenset({
+    "admin", "administrator", "api", "auth", "copy", "help", "leaderboard", "login", "logout", "me", "openout",
+    "polygm", "root", "settings", "signin", "signup", "support", "system", "tape", "trader", "wallet", "www", "you",
+})
+
+#: What listing does and does not do, served rather than written into a screen, because both halves are promises.
+_LB_LISTING_CHANGES = [
+    "your handle is attached to your rows on every board, so a trader who wants to follow you can find you",
+    "there is one handle per traded wallet: /trader/<handle> resolves to the same wallet as its pseudonym",
+    "your account is not attached to your fills, your positions or anybody else's activity",
+]
+_LB_LISTING_DOES_NOT = [
+    "it does not change your rank, your score or the sample gate — the board ranks wallets, not accounts",
+    "it does not put you on a board you are not eligible for, and it cannot take you off one you are",
+    "it does not publish your address, your balance or anything you have not already traded in public",
+]
+
+
+def _lb_identity(uid: str) -> dict:
+    """The account's listing state, defaulting to PRIVATE by the absence of a row.
+
+    Read as a fact about the account and never as a filter on a board: the board's rows are the same rows either
+    way, and only the `handle` field changes.
+    """
+    row = _db.execute("SELECT state, handle, listed_ms, updated_ms FROM leaderboard_identity WHERE user_id=?",
+                      (str(uid),)).fetchone()
+    if row is None:
+        return {"state": "private", "handle": "", "listedMs": None, "updatedMs": None, "decided": False,
+                "note": ("private by default: nothing about this account is published on the leaderboard until "
+                         "you say so, and the absence of a decision is not a decision")}
+    state = str(row[0])
+    return {"state": state, "handle": str(row[1] or ""),
+            "listedMs": (None if row[2] is None else _tm._int(row[2])),
+            "updatedMs": _tm._int(row[3]), "decided": True,
+            "note": ("listed: your handle is attached to your board rows" if state == "listed" else
+                     "private: your rows are published under your pseudonym, with nothing that links them here")}
+
+
+def _lb_published_handles() -> dict[str, str]:
+    """{pseudonym: handle} for accounts that opted in, and only those.
+
+    One query, joined on the wallet identities the account has claimed. A handle is attached to the pseudonym of
+    every wallet the account controls, which is the honest reading of "appear on the leaderboard": if two wallets
+    belong to one account, saying so is the point of the opt-in.
+    """
+    rows = _db.execute("SELECT i.user_id, i.value FROM leaderboard_identity l "
+                       " JOIN user_identities i ON i.user_id = l.user_id "
+                       " WHERE l.state='listed' AND i.kind='wallet' AND i.state<>'revoked'").fetchall()
+    out: dict[str, str] = {}
+    for uid, address in rows:
+        ident = _db.execute("SELECT handle FROM leaderboard_identity WHERE user_id=?", (str(uid),)).fetchone()
+        handle = str(ident[0] or "") if ident else ""
+        if handle:
+            out[_anon(str(address))] = handle
+    return out
+
+
+def _lb_wallets_for(uid: str) -> list[dict]:
+    """The wallets this account has claimed, oldest first — the identities a self-rank can be about.
+
+    `user_identities` is the one place a wallet belongs to an account (P07), so this is a read of that table and
+    not a second registry. A rejected proof is not a claim: only claimed or verified rows count.
+    """
+    rows = _db.execute("SELECT value, claimed_ms FROM user_identities WHERE user_id=? AND kind='wallet'"
+                       " AND state<>'revoked' ORDER BY claimed_ms ASC, value ASC", (str(uid),)).fetchall()
+    return [{"address": str(v), "anon": _anon(str(v)), "claimedMs": _tm._int(c)} for (v, c) in rows]
+
+
+def _lb_handle_claimed(uid: str) -> str:
+    row = _db.execute("SELECT value FROM user_identities WHERE user_id=? AND kind='handle' AND state<>'revoked'",
+                      (str(uid),)).fetchone()
+    return str(row[0]) if row else ""
+
+
+def _lb_next_steps(entry: dict) -> list[str]:
+    """What to DO about being unranked, in the board's own numbers. Empty when the wallet is ranked."""
+    if entry.get("state") == "unknown" and entry.get("category"):
+        # The category board is four boards (D2 §2.12), and a wallet that is not a specialist in one of them is
+        # not refused by a number - it is refused by a DEFINITION. Saying which one is the difference between a
+        # user closing the tab and a user understanding that the board is about their own specialism.
+        return ["the %s board only admits specialists: at least half of a wallet's resolved markets have to be in "
+                "%s, and this account's are elsewhere" % (entry["category"], entry["category"])]
+    if entry.get("state") != "unranked":
+        return []
+    steps: list[str] = []
+    held = entry.get("unranked") or {}
+    gate = _tm._int(held.get("sampleGate") or _lb_boards.MIN_RESOLVED) or _lb_boards.MIN_RESOLVED
+    settled = _tm._int(held.get("settledMarkets"))
+    if settled < gate:
+        steps.append("%d more settled market%s: the board needs %d settled results before it will rank a wallet, "
+                     "because a win rate over four markets is a story about four markets"
+                     % (gate - settled, "" if gate - settled == 1 else "s", gate))
+    floor = _tm._int(_lb_boards.MIN_VERIFIED_VOLUME_MICRO)
+    volume = _tm._int(held.get("verifiedVolumeMicro"))
+    if volume < floor:
+        steps.append("%s more verified turnover: %s is the floor, and it is measured on matched orders rather "
+                     "than on deposits" % (fmt_usdc(floor - volume), fmt_usdc(floor)))
+    reasons = " ".join(str(r) for r in (held.get("reasons") or []))
+    if "mechanically" in reasons.lower() or "wash" in reasons.lower():
+        steps.append("the fills this wallet is ranked on were removed as wash trading: two sides of the same "
+                     "market within minutes and inside the spread. Real fills are what the board ranks")
+    if not steps:
+        steps.append("this wallet is refused for a reason the board states above; the same rule applies to every "
+                     "wallet and none of them is hidden")
+    return steps
+
+
+def _lb_self_entry(finding: dict, *, anon: str, at_ms: int, page: int) -> dict:
+    """One board's answer for one wallet: the rank, the gap, and whether the screen has to pin it.
+
+    `offPage` is the whole reason this exists as a server field: the strip at the bottom of the leaderboard is
+    drawn when the reader's own row is not in the page in front of them, and a client that decided that itself
+    would have to know the page size, the board's size and the board's ordering rule.
+    """
+    board_id = str(finding["board"])
+    field, units = _LB_ORDER_FIELD.get(board_id, ("scoreBps", "bps"))
+    rank = finding.get("rank")
+    total = _tm._int(finding.get("rankedTotal"))
+    category = finding.get("category") or ""
+    entry = {"board": board_id, "category": (category or None), "anon": str(anon),
+             # The category board's spec label is "Category specialists" and it is the same string for all four
+             # categories; a panel that listed four rows under one name is a panel nobody can read.
+             "label": ("%s specialists" % category) if category else (finding.get("label") or board_id),
+             "window": finding.get("window"),
+             "state": finding.get("state"), "rank": (None if rank is None else _tm._int(rank)),
+             "rankedTotal": total, "rankBadge": finding.get("rankBadge"),
+             "percentileBps": finding.get("percentileBps"), "orderField": field, "orderUnits": units,
+             "pageSize": int(page),
+             "offPage": (rank is None or _tm._int(rank) > int(page)),
+             "rankedAhead": (None if rank is None else _tm._int(rank) - 1),
+             "rankedBehind": (None if rank is None else max(0, total - _tm._int(rank))),
+             "rankedOnPage": (None if rank is None else (_tm._int(rank) - 1) // max(1, int(page)) + 1),
+             "gap": finding.get("gap"), "row": finding.get("row"), "reasons": list(finding.get("reasons") or [])}
+    if finding.get("state") == "unranked":
+        entry["unranked"] = finding.get("unranked")
+    if entry["state"] == "ranked":
+        entry["note"] = ("rank %d of %d on %s; %s"
+                         % (_tm._int(rank), total, str(entry["label"]).lower(),
+                            "on page %d of the board" % entry["rankedOnPage"] if not entry["offPage"] else
+                            "not on the first %d rows, which is why the screen pins it" % int(page)))
+    return entry
+
+
+def _lb_self_wallet(wallet: dict, *, at_ms: int, window: str, days: int, page: int) -> dict:
+    """Every board's answer for one wallet, plus the sentence a person reads first."""
+    boards: list[dict] = []
+    steps: list[str] = []
+    # The category board is four boards wearing one name (D2 §2.12), so "your rank on every board" means nine
+    # answers, not six. Answering five of them and calling the sixth "not applicable" would be the exact
+    # ambiguity the board was built to avoid: a specialist wants to know which specialism it is about.
+    for spec in _lb_boards.BOARDS:
+        board_id = str(spec["id"])
+        categories = list(_lb_boards.CATEGORIES) if board_id == "category" else [""]
+        for category in categories:
+            try:
+                finding = _lb_standing(anon=str(wallet["anon"]), board_id=board_id, window=str(window or ""),
+                                       at_ms=at_ms, category=str(category), days=int(days))
+            except ValueError as exc:                                   # a window the board does not read
+                raise ValueError(str(exc))
+            finding["board"] = board_id
+            finding["category"] = category
+            entry = _lb_self_entry(finding, anon=str(wallet["anon"]), at_ms=at_ms, page=page)
+            boards.append(entry)
+            steps.extend(_lb_next_steps({"state": entry["state"], "category": category,
+                                         "unranked": dict(entry.get("unranked") or {},
+                                                          sampleGate=_tm._int(finding.get("sampleGate")))}
+                                        if entry["state"] in ("unranked", "unknown") else {"state": entry["state"]}))
+    ranked = [b for b in boards if b["state"] == "ranked"]
+    best = min(ranked, key=lambda b: (_tm._int(b["rank"]), str(b["board"]))) if ranked else None
+    return {"anon": str(wallet["anon"]), "claimedMs": _tm._int(wallet.get("claimedMs")), "boards": boards,
+            "ranked": len(ranked), "unranked": sum(1 for b in boards if b["state"] == "unranked"),
+            "best": (None if best is None else {"board": best["board"], "label": best["label"],
+                                                "rank": best["rank"], "rankedTotal": best["rankedTotal"],
+                                                "rankBadge": best["rankBadge"], "offPage": best["offPage"]}),
+            "nextSteps": steps[:3],
+            "note": ("your standing on every board; a board that refuses the wallet says which number refused it"
+                     if ranked else "this wallet is not ranked on any board yet — the steps below are the numbers "
+                                    "that are holding it back")}
+
+
+@app.get("/v1/leaderboard/me", responses=LEADERBOARD_ME_RESPONSES)
+def get_leaderboard_me(request: Request,
+                       window: str | None = Query(default=None, pattern="^(24h|7d|30d|90d|all)$"),
+                       days: int = Query(default=30, ge=1, le=90)):
+    """The account's own standing on every board: the pin, the gap, and what is holding it back.
+
+    One request rather than six `/rank` calls, for the same reason `/compare` is one request: six reads of six
+    boards at six instants is a panel whose own rows disagree, and the reader's own row is the one place a
+    disagreement is not a curiosity but a bug report.
+    """
+    rid = request.state.request_id
+    uid, _row, e = _principal(request)
+    if e:
+        return e
+    at = _now_ms()
+    wallets = _lb_wallets_for(str(uid))
+    identity = _lb_identity(str(uid))
+    identity = dict(identity, handle=(identity["handle"] or _lb_handle_claimed(str(uid))))
+    entries: list[dict] = []
+    try:
+        for w in wallets:
+            entries.append(_lb_self_wallet(w, at_ms=at, window=str(window or ""), days=int(days),
+                                           page=_LB_PAGE_SIZE))
+    except ValueError as exc:
+        return err("VALIDATION", rid, detail=str(exc), where=["window"])
+    # The pin shows the DEFAULT board's row, because that is the board the screen opens on: "your best rank
+    # anywhere" would pin a number from a board the reader is not looking at, and two boards' ranks are not
+    # comparable (rank 4 of 11 is not better than rank 5 of 64). `best` is served beside it because the panel
+    # header wants both answers, and the difference between the two is something a user should be able to see.
+    default_board = next((str(b["id"]) for b in _lb_boards.BOARDS if b.get("isDefault")), "risk_adjusted")
+    ranked = [e for e in entries if e["best"]]
+    primary = (min(ranked, key=lambda e: (_tm._int(e["best"]["rank"]), e["anon"])) if ranked
+               else (entries[0] if entries else None))
+    return _stamped({
+        "identity": identity, "wallets": entries, "walletCount": len(entries),
+        "primary": (None if primary is None else
+                    {"anon": primary["anon"], "best": primary["best"], "nextSteps": primary["nextSteps"],
+                     "defaultBoard": default_board,
+                     # The row the sticky strip draws: this wallet on the board the screen opens on. Not the
+                     # wallet's best board - a strip that says "#4" while the page in front of the reader is the
+                     # risk-adjusted board is a strip that contradicts the page it is pinned to.
+                     "pin": next((e for e in primary["boards"]
+                                  if e["board"] == default_board and not e["category"]), None)}),
+        "pageSize": _LB_PAGE_SIZE,
+        "links": {"identity": "/v1/leaderboard/identity", "methodology": "/v1/leaderboard/methodology"},
+        "note": ("a wallet that is not linked to this account cannot be ranked for it: linking is what makes a "
+                 "standing possible, and the wallet has to be one you proved you control"
+                 if not entries else
+                 "this is your own standing; it is served to your session and appears on no public board"),
+    }, ttl_ms=2_000, stale_ms=flags().stale_ms_tape, as_of_ms=at)
+
+
+@app.get("/v1/leaderboard/identity", responses=LEADERBOARD_IDENTITY_RESPONSES)
+def get_leaderboard_identity(request: Request):
+    """What this account is published as, and exactly what the setting does and does not do.
+
+    Both halves are served. A privacy control that only lists what it grants is a control that hides the rest, and
+    here the rest includes the one thing a user will assume wrongly: that staying private takes them off the
+    board. It does not, and cannot — the board ranks wallets, and every eligible wallet is on it.
+    """
+    uid, _row, e = _principal(request)
+    if e:
+        return e
+    identity = _lb_identity(str(uid))
+    claimed = _lb_handle_claimed(str(uid))
+    at = _now_ms()
+    return _stamped({
+        "identity": dict(identity, handle=(identity["handle"] or claimed)),
+        "handle": {"claimed": claimed, "published": (claimed if identity["state"] == "listed" else ""),
+                   "rules": "3-24 characters, lower-case letters, digits and underscore; it becomes /trader/<handle>",
+                   "reserved": sorted(_LB_HANDLE_RESERVED)},
+        "wallets": _lb_wallets_for(str(uid)),
+        "changes": list(_LB_LISTING_CHANGES), "doesNotChange": list(_LB_LISTING_DOES_NOT),
+        "nudge": ("being on the board under your handle is how a trader attracts copiers; staying private keeps "
+                  "your row — it just keeps it anonymous"),
+        "note": ("private by default. Your wallet is ranked either way; the setting decides whether anybody can "
+                 "tell that the row is yours"),
+    }, ttl_ms=0, stale_ms=0, as_of_ms=at)
+
+
+@app.post("/v1/leaderboard/identity", status_code=200, responses=LEADERBOARD_IDENTITY_SET_RESPONSES,
+          openapi_extra=_body_schema(("state",), {
+              "state": {"type": "string", "enum": ["private", "listed"],
+                        "description": "listed attaches your handle to your board rows; private removes the link"},
+              "handle": {"type": "string", "minLength": 3, "maxLength": 24,
+                         "description": "required the first time you opt in, if no handle is claimed yet"}}))
+def post_leaderboard_identity(request: Request, body: dict = Body(...),
+                              idempotency_key: str | None = Header(default=None, alias="Idempotency-Key")):
+    """Opt in to being listed, or back out. Idempotent per key, and never anonymous.
+
+    The refusal cases are the interesting ones: opting in without a handle is a 422 that names the field (we will
+    not invent a public name for somebody), a handle that is taken or reserved is a 409, and a request to CHANGE an
+    existing handle is refused rather than quietly applied — renaming is a decision about identity, and smuggling
+    it through a privacy toggle is how a copy-farming account gets a second first impression.
+    """
+    rid = request.state.request_id
+    bad_key = _idem_shape(idempotency_key)
+    if bad_key is not None:
+        return bad_key
+    bad = _check_body(body, ("state",), rid, allowed=("state", "handle"))
+    if bad is not None:
+        return bad
+    bad = _check_props(body, {"state": {"type": "string", "enum": ["private", "listed"]},
+                              "handle": {"type": "string", "minLength": 3, "maxLength": 24}}, rid)
+    if bad is not None:
+        return bad
+    uid, _row, e = _principal(request)
+    if e:
+        return e
+    return _idem_run(str(uid), str(idempotency_key), body, rid, lambda: _lb_identity_work(rid, uid, body))
+
+
+def _lb_identity_work(rid: str, uid: str, body: dict):
+    wanted = str(body.get("state"))
+    wanted_handle = str(body.get("handle") or "").strip().lower()
+    at = _now_ms()
+    claimed = _lb_handle_claimed(str(uid))
+    if wanted == "listed":
+        if wanted_handle and claimed and wanted_handle != claimed:
+            return err("VALIDATION", rid,
+                       detail="this account already trades under the handle %r; changing a handle is not part of "
+                              "the listing toggle" % claimed, where=["handle"])
+        handle = wanted_handle or claimed
+        if not handle:
+            return err("VALIDATION", rid,
+                       detail="listing needs a handle: send one with the opt-in, or claim one first",
+                       where=["handle"])
+        if not _LB_HANDLE_RX.fullmatch(handle) or handle in _LB_HANDLE_RESERVED:
+            return err("VALIDATION", rid,
+                       detail="a handle is 3-24 characters of lower-case letters, digits and underscore, and "
+                              "cannot be a word this product needs for itself",
+                       where=["handle"])
+        taken = _db.execute("SELECT user_id FROM user_identities WHERE kind='handle' AND value=?", (handle,)).fetchone()
+        if taken is not None and str(taken[0]) != str(uid):
+                return err("HANDLE_TAKEN", rid, detail="that public handle is already claimed; pick another",
+                       where=["handle"])
+        if not claimed:
+            _db.execute("INSERT INTO user_identities (kind, value, user_id, state, claimed_ms, verified_ms,"
+                        " proof_kind, revoked_ms) VALUES ('handle',?,?,'claimed',?,NULL,'',NULL)",
+                        (handle, str(uid), at))
+    handle = (wanted_handle or claimed) if wanted == "listed" else claimed
+    state = "listed" if wanted == "listed" else "private"
+    listed_ms = at if state == "listed" else None
+    # Read BEFORE the write: an audit row that says `previous` by re-reading the table it just changed would
+    # always report a change from the new state, which is a record of nothing.
+    previous = _lb_identity(str(uid))["state"]
+    _db.execute("INSERT INTO leaderboard_identity (user_id, state, handle, listed_ms, updated_ms)"
+                " VALUES (?,?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET state=excluded.state,"
+                " handle=excluded.handle, listed_ms=excluded.listed_ms, updated_ms=excluded.updated_ms",
+                (str(uid), state, handle or "", listed_ms, at))
+    # The consent record. `audit_log` is append-only in both dialects, so "when did they agree to this" is
+    # answerable after the fact and cannot be edited by the code that is being asked.
+    _db.execute("INSERT INTO audit_log (at_ms, actor_type, actor_id, action, target_table, target_id,"
+                " request_id, detail_json) VALUES (?,?,?,?,?,?,?,?)",
+                (at, "user", str(uid), "leaderboard.identity", "leaderboard_identity", str(uid), str(rid),
+                 json.dumps({"state": state, "handle": handle, "previous": previous}, sort_keys=True)))
+    _db.commit()
+    identity = _lb_identity(str(uid))
+    published = _lb_published_handles()
+    anons = [w["anon"] for w in _lb_wallets_for(str(uid))]
+    return _stamped({
+        "identity": identity, "previous": previous,
+        "publishedAs": {a: published.get(a, "") for a in anons},
+        "changes": list(_LB_LISTING_CHANGES), "doesNotChange": list(_LB_LISTING_DOES_NOT),
+        "note": ("you are listed: your rows carry the handle %r wherever they appear" % identity["handle"]
+                 if state == "listed" else
+                 "you are private again: your rows keep their rank and lose every link to this account"),
+    }, ttl_ms=0, stale_ms=0, as_of_ms=at)
+
+
 # P11 D2. Six public reads and one user mutation. The reads are PUBLIC because the entire point of a leaderboard
 # is that a stranger can look at it (D6 renders three of them server-side for exactly that reason): they publish
 # pseudonyms, and a pseudonym is what this product is allowed to publish. The recompute is USER — deterministic,
@@ -5922,6 +6320,13 @@ _levels_p11 = {
     "GET /v1/leaderboard/follows": (_authz.USER, ""),
     "POST /v1/leaderboard/follows": (_authz.USER, ""),
     "POST /v1/leaderboard/recompute": (_authz.USER, ""),
+    # D4. The self-rank is the only board read that is USER: it is about the account that is asking, it is built
+    # from the wallets that account proved it controls, and there is no version of it a stranger may see. The two
+    # identity routes are that account's own publication state - reading it is what makes the toggle honest, and
+    # writing it is a consent record.
+    "GET /v1/leaderboard/me": (_authz.USER, ""),
+    "GET /v1/leaderboard/identity": (_authz.USER, ""),
+    "POST /v1/leaderboard/identity": (_authz.USER, ""),
 }
 _authz.LEVELS_TABLE.update(_levels_p10)
 _authz.LEVELS_TABLE.update(_levels_p11)

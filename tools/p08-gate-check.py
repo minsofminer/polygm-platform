@@ -29,6 +29,7 @@ import os
 import re
 import shutil
 import subprocess
+import string
 import sys
 import threading
 import time
@@ -1175,6 +1176,60 @@ def c13_the_frame_itsself_holds_its_budgets(ctx) -> tuple:
                "" if not problems else " | " + " | ".join(problems[:4])))
 
 
+# --------------------------------------------------------- c16 the key a client sends is the key we validate
+def idem_key_findings(repo: Path) -> list:
+    """One rule stated in two files and *produced* in a third, and nothing that makes them agree.
+
+    The `Idempotency-Key` shape is declared in `contracts/openapi.yaml`, enforced by `_IDEM_RE` in the API, and
+    manufactured by `newIdempotencyKey` in `web/src/api/client.ts`. The client joined its scope and its random half
+    with a colon for the whole of P08–P10, so every mutation that did not pass a key of its own was refused with a
+    422 about a header the client had just generated itself. No screen showed it: the screens that were exercised
+    pass their own key, and a missing header is caught by the API, not by the UI. This check reads the rule from
+    the two files that state it and the producer from the third, and refuses a producer that cannot satisfy it.
+    """
+    problems = []
+    want = "^[A-Za-z0-9_-]{8,128}$"
+    contract = read(repo / "contracts" / "openapi.yaml")
+    if ("pattern: '%s'" % want) not in contract:
+        problems.append("the contract no longer declares the Idempotency-Key pattern %s" % want)
+    api = read(repo / "services" / "api" / "app.py")
+    m = re.search(r"_IDEM_RE\s*=\s*re\.compile\(r\"([^\"]+)\"\)", api)
+    if not m:
+        problems.append("_IDEM_RE is gone from services/api/app.py: the key is validated somewhere else now")
+    elif m.group(1) != want:
+        problems.append("the API validates %s while the contract declares %s" % (m.group(1), want))
+
+    allowed = set(string.ascii_letters + string.digits + "_-")
+    # Comments out first: the first run of this check failed on the function's own docstring, which quotes the
+    # shape it has to satisfy (a backticked rule contains a colon and braces). A scan that reads prose as code is
+    # a scan that reports the documentation as the bug.
+    client = strip_comments(read(repo / "web" / "src" / "api" / "client.ts"))
+    body = client.split("export function newIdempotencyKey", 1)[-1].split("\nexport ", 1)[0]
+    if not body.strip():
+        problems.append("newIdempotencyKey is gone: something else generates the keys now, and it is not checked")
+    else:
+        for lit in re.findall(r"`([^`]*)`", body):
+            # What the template injects literally, with the `${…}` substitutions taken out: the literal is the
+            # separator and any fixed decoration, and it is the only part this function can be wrong about.
+            literal = re.sub(r"\$\{[^}]*\}", "", lit)
+            injected = sorted({c for c in literal if c not in allowed})
+            if injected:
+                problems.append("a key template injects %r, which the key rule does not allow" % "".join(injected))
+        if not re.search(r"slice\(0,\s*\d+\)|substring\(", body):
+            problems.append("the client no longer clamps the scope, so a long scope can exceed the 128-char limit")
+    test = read(repo / "web" / "src" / "api" / "client.test.ts")
+    if want not in test:
+        problems.append("web/src/api/client.test.ts does not assert the shape the server enforces")
+    return problems
+
+
+def c16_the_client_and_the_contract_agree_on_the_idempotency_key(ctx) -> tuple:
+    problems = idem_key_findings(ROOT)
+    return ("c16", not problems,
+            "one shape (`^[A-Za-z0-9_-]{8,128}$`) in the contract, in `_IDEM_RE` and in the client's producer%s"
+            % ("" if not problems else " | " + " | ".join(problems[:3])))
+
+
 # --------------------------------------------------------------------------------------- c14 boundaries
 def boundary_findings(web: Path) -> list:
     problems = []
@@ -1266,6 +1321,39 @@ def self_test() -> int:
     def canary(fn):
         cases.append(fn)
         return fn
+
+    @canary
+    def c16_idem(name=TMP / "p08-self-c16"):
+        """A client that joins its scope and its random half with a colon: the shipped bug, in a fixture."""
+        root = name / "repo"
+        shutil.rmtree(name, ignore_errors=True)
+        fixture(root, "contracts/openapi.yaml", "        pattern: '^[A-Za-z0-9_-]{8,128}$'\n")
+        fixture(root, "services/api/app.py", '_IDEM_RE = re.compile(r"^[A-Za-z0-9_-]{8,128}$")\n')
+        fixture(root, "web/src/api/client.test.ts", 'expect(key).toMatch(/^[A-Za-z0-9_-]{8,128}$/);\n')
+        fixture(root, "web/src/api/client.ts",
+                'export function newIdempotencyKey(scope: string): string {\n'
+                '  const bytes = new Uint8Array(8);\n'
+                '  return `${scope}:${rand}`;\n'
+                '}\nexport const other = 1;\n')
+        bad = idem_key_findings(root_path := root)
+        # The same fixture with the clamp and the hyphen separator: the scan must walk past a good client.
+        fixture(root, "web/src/api/client.ts",
+                'export function newIdempotencyKey(scope: string): string {\n'
+                '  const flat = scope.replace(/[^A-Za-z0-9_-]+/g, "-").slice(0, 111);\n'
+                '  return `${flat}-${rand}`;\n'
+                '}\nexport const other = 1;\n')
+        # …and the clean one carries a docstring that quotes the rule, which is exactly how the real client is
+        # written: the comment must not be read as a template.
+        good = idem_key_findings(root_path)
+        fixture(root, "web/src/api/client.ts",
+                '/** Keys look like `abc-123`: 8-128 chars of `[A-Za-z0-9_-]`. */\n'
+                'export function newIdempotencyKey(scope: string): string {\n'
+                '  const flat = scope.replace(/[^A-Za-z0-9_-]+/g, "-").slice(0, 111);\n'
+                '  return `${flat}-${rand}`;\n'
+                '}\nexport const other = 1;\n')
+        documented = idem_key_findings(root_path)
+        return (len(bad) == 2 and not good and not documented,
+                {"planted": bad, "clean": good, "documented": documented})
 
     @canary
     def c4_money(name=TMP / "p08-self-c4"):
@@ -1421,7 +1509,8 @@ CHECKS = [c1_the_route_ledger_and_the_contract_and_the_launch_list_agree,
           c12_an_unbuilt_capability_is_visible_on_screen,
           c13_the_frame_itsself_holds_its_budgets,
           c14_every_route_has_a_boundary_and_every_widget_has_one_of_its_own,
-          c15_the_test_suite_is_green_and_big_enough_to_mean_it]
+          c15_the_test_suite_is_green_and_big_enough_to_mean_it,
+          c16_the_client_and_the_contract_agree_on_the_idempotency_key]
 
 
 def context() -> dict:

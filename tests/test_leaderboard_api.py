@@ -668,6 +668,298 @@ class TestFollows(LeaderboardBase):
         self.unfollow(anon, "note-2")
 
 
+class TestSelfRankAndIdentity(LeaderboardBase):
+    """D4: the account's own standing, and the identity it is published under.
+
+    Four rules, and each one is a promise the product makes out loud:
+
+      1. **Every board, one read.** Nine answers, because the category board is four boards (§2.12), and the
+         pinned row is the DEFAULT board's - a strip that pinned a rank from a board the reader is not looking
+         at would contradict the page it is attached to.
+      2. **Unranked is a to-do list.** The refusal already carries the numbers; D4 adds what to do about them.
+      3. **Private by default, and private is not invisible.** The board ranks the wallet either way; what the
+         opt-in adds is the LINK between the row and the account. The test that matters greps every public
+         payload for a private account's handle and finds nothing.
+      4. **A handle is once.** Listing claims one, a taken one is a 409, and a rename is refused rather than
+         applied - renaming is an identity decision, not a privacy toggle.
+    """
+
+    #: The accounts this class touches. It resets them before every test rather than trusting that the previous
+    #: one left nothing behind: a "private by default" test that ran after a listing test would otherwise pass
+    #: because of the ORDER of the methods, which is the one property unittest does not promise.
+    USERS = ("u-demo", "u-other", "u-plain")
+
+    def setUp(self):
+        super().setUp()
+        for uid in self.USERS:
+            self.app._db.execute("DELETE FROM leaderboard_identity WHERE user_id=?", (uid,))
+            self.app._db.execute("DELETE FROM user_identities WHERE user_id=?", (uid,))
+        self.app._db.commit()
+
+    def add_user(self, uid: str) -> str:
+        self.app._db.execute("INSERT OR IGNORE INTO users (id, created_ms, tier) VALUES (?,?, 'free')",
+                             (uid, 1))
+        self.app._db.commit()
+        return uid
+
+    def link_wallet(self, uid: str, wallet: str) -> str:
+        """Claim a wallet for an account the way P07 does: a row in `user_identities`. Idempotent, because two
+        tests in one class legitimately link the same seeded wallet to the same account."""
+        self.add_user(uid)
+        self.app._db.execute("INSERT OR IGNORE INTO user_identities (kind, value, user_id, state, claimed_ms,"
+                             " verified_ms, proof_kind, revoked_ms)"
+                             " VALUES ('wallet',?,?,'verified',?,?, 'fixture', NULL)", (wallet, uid, 1, 1))
+        self.app._db.commit()
+        return self.app._anon(wallet)
+
+    def headers(self, uid: str = "u-demo") -> dict:
+        return {"X-User-Id": uid}
+
+    def me(self, uid: str = "u-demo", **params) -> dict:
+        r = self.client.get("/v1/leaderboard/me", params=params, headers=self.headers(uid))
+        self.assertEqual(r.status_code, 200, "%s -> %d %s" % ("/me", r.status_code, r.text[:400]))
+        return r.json()
+
+    def identity(self, uid: str = "u-demo", **params) -> dict:
+        r = self.client.get("/v1/leaderboard/identity", headers=self.headers(uid), params=params)
+        self.assertEqual(r.status_code, 200, r.text[:300])
+        return r.json()
+
+    def set_identity(self, body: dict, key: str, uid: str = "u-demo"):
+        return self.client.post("/v1/leaderboard/identity", json=body,
+                                headers={**self.headers(uid), "Idempotency-Key": "d4-key-" + key})
+
+    def identity_of(self, body: dict, key: str, uid: str = "u-demo") -> dict:
+        r = self.set_identity(body, key, uid)
+        self.assertEqual(r.status_code, 200, "%s -> %d %s" % (body, r.status_code, r.text[:400]))
+        return r.json()
+
+    def wallet_at_rank(self, rank: int, board: str = "risk_adjusted") -> str:
+        """The ADDRESS of the wallet sitting at `rank` on `board`.
+
+        The D4 tests link a known wallet to a fixture account, and the wallet has to be one the board actually
+        ranks: `seed_leaderboard` writes sixty wallets, most of which are below the gate, so "the first seeded
+        wallet" is an unranked one and every assertion built on it would fail for a reason that has nothing to do
+        with D4.
+        """
+        rows = self.rows_by_rank(board)
+        self.assertIn(rank, rows, "the fixture has to have a rank %d on %s" % (rank, board))
+        return self.wallet_of(rows[rank]["anon"])
+
+    def board_row(self, anon: str, board: str = "risk_adjusted") -> dict:
+        for row in self.board(board, limit=200)["rows"]:
+            if row["anon"] == anon:
+                return row
+        raise AssertionError("no row for %s on %s" % (anon, board))
+
+    # ---- 1. every board, one read ---------------------------------------------------------------------------
+    def test_the_self_rank_covers_every_board_and_every_category(self):
+        anon = self.link_wallet("u-demo", self.wallet_at_rank(20))
+        me = self.me()
+        self.assertEqual(me["identity"]["state"], "private")
+        self.assertEqual(me["walletCount"], 1)
+        entry = me["wallets"][0]
+        self.assertEqual(entry["anon"], anon)
+        ids = [b["board"] for b in entry["boards"]]
+        self.assertEqual(sorted(set(ids)), sorted(self.app._lb_boards.BOARD_IDS))
+        self.assertEqual(len(entry["boards"]), len(self.app._lb_boards.BOARD_IDS) + 3,
+                         "the category board is four boards, so every board means every category too")
+        cats = sorted(b["category"] for b in entry["boards"] if b["category"])
+        self.assertEqual(cats, sorted(self.app._lb_boards.CATEGORIES))
+        for b in entry["boards"]:
+            self.assertIn(b["state"], ("ranked", "unranked", "unknown"))
+            self.assertEqual(b["pageSize"], 50)
+            if b["state"] == "ranked":
+                self.assertEqual(b["rankBadge"]["text"], "#%d" % b["rank"])
+                self.assertEqual(b["rankedAhead"], b["rank"] - 1)
+                self.assertEqual(b["rankedBehind"], b["rankedTotal"] - b["rank"])
+                self.assertIsInstance(b["offPage"], bool)
+            else:
+                self.assertTrue(b["offPage"], "a wallet with no rank is never on the page")
+
+    def test_the_pin_is_the_default_board_and_says_whether_the_row_is_off_page(self):
+        deep = self.link_wallet("u-demo", self.wallet_at_rank(55))
+        me = self.me()
+        primary = me["primary"]
+        self.assertEqual(primary["defaultBoard"], "risk_adjusted")
+        pin = primary["pin"]
+        self.assertIsNotNone(pin, "the pin is the row the sticky strip draws")
+        self.assertEqual(pin["board"], "risk_adjusted")
+        self.assertIsNone(pin["category"])
+        if pin["state"] == "ranked" and pin["rank"] > pin["pageSize"]:
+            self.assertTrue(pin["offPage"])
+            self.assertGreaterEqual(pin["rankedOnPage"], 2)
+        else:
+            self.assertFalse(pin["offPage"])
+        self.assertEqual(pin["anon"], deep)
+        # The page the row would be on is arithmetic on the server, not a guess by the screen.
+        for b in me["wallets"][0]["boards"]:
+            if b["state"] == "ranked":
+                self.assertEqual(b["rankedOnPage"], (b["rank"] - 1) // b["pageSize"] + 1)
+
+    def test_an_account_with_no_linked_wallet_is_told_what_linking_does(self):
+        self.add_user("u-plain")
+        me = self.me("u-plain")
+        self.assertEqual(me["walletCount"], 0)
+        self.assertEqual(me["wallets"], [])
+        self.assertIsNone(me["primary"])
+        self.assertIn("linking", me["note"])
+
+    # ---- 2. unranked is a to-do list ------------------------------------------------------------------------
+    def test_unranked_says_which_number_refused_it_and_how_far_it_has_to_move(self):
+        thin = self.link_wallet("u-demo", self.wallet_of_unranked("needs 20"))
+        me = self.me()
+        entry = next(b for b in me["wallets"][0]["boards"]
+                     if b["board"] == "risk_adjusted" and not b["category"])
+        self.assertEqual(entry["state"], "unranked")
+        self.assertIsNone(entry["rank"])
+        self.assertTrue(entry["reasons"], "a refusal is a sentence, not a blank")
+        steps = me["wallets"][0]["nextSteps"]
+        self.assertTrue(steps, "an unranked wallet is told what to do next")
+        self.assertTrue(any("settled market" in s for s in steps), steps)
+        self.assertEqual(me["wallets"][0]["anon"], thin)
+        # Its BEST row is served too, and for this wallet that is whatever board does not enforce the gate it
+        # fails: the point is that the refusal is per board, and the panel shows both facts at once.
+        self.assertIsNone(me["primary"]["pin"]["rank"])
+
+    def test_the_gap_is_the_board_field_and_toPass_is_strictly_above(self):
+        anon = self.link_wallet("u-demo", self.wallet_at_rank(11))
+        me = self.me()
+        entry = next(b for b in me["wallets"][0]["boards"] if b["board"] == "risk_adjusted" and not b["category"])
+        if entry["state"] != "ranked" or not entry["gap"]:
+            self.skipTest("this fixture wallet is not ranked behind anybody")
+        gap = entry["gap"]
+        self.assertEqual(entry["orderField"], "scoreBps")
+        self.assertEqual(entry["orderUnits"], "bps")
+        self.assertEqual(gap["rankAbove"], entry["rank"] - 1)
+        self.assertEqual(gap["delta"], gap["valueAbove"] - gap["value"])
+        self.assertEqual(gap["toPass"], gap["valueAbove"] + 1, "a tie does not pass")
+        self.assertEqual(gap["anonAbove"], self.board_row(gap["anonAbove"])["anon"],
+                         "the wallet above is named by pseudonym, like every other row")
+
+    # ---- 3. private by default ------------------------------------------------------------------------------
+    def test_identity_is_private_until_it_is_asked_for(self):
+        anon = self.link_wallet("u-demo", self.wallet_at_rank(20))
+        ident = self.identity()
+        self.assertEqual(ident["identity"]["state"], "private")
+        self.assertFalse(ident["identity"]["decided"], "no row is the absence of a decision")
+        self.assertEqual(ident["handle"]["published"], "")
+        self.assertTrue(ident["changes"] and ident["doesNotChange"])
+        self.assertIn("copiers", ident["nudge"])
+        self.assertIsNone(self.board_row(anon)["handle"], "a private account publishes no handle")
+        self.assertIn("ranked either way", ident["note"])
+
+    def test_listing_attaches_the_handle_to_the_board_and_to_the_standing(self):
+        anon = self.link_wallet("u-demo", self.wallet_at_rank(20))
+        out = self.identity_of({"state": "listed", "handle": "Tape_Watcher"}, "list-1")
+        self.assertEqual(out["identity"]["state"], "listed")
+        self.assertEqual(out["identity"]["handle"], "tape_watcher", "handles are lower-cased, like addresses")
+        self.assertEqual(out["publishedAs"][anon], "tape_watcher")
+        self.assertEqual(self.board_row(anon)["handle"], "tape_watcher")
+        rank = self.get("/v1/leaderboard/rank", anon=anon)
+        self.assertEqual(rank["row"]["handle"], "tape_watcher")
+        # and nobody else's row gained one: one account, one published handle in the whole board
+        published = [r["anon"] for r in self.board(limit=200)["rows"] if r["handle"]]
+        self.assertEqual(published, [anon])
+
+    def test_going_private_removes_every_link_and_keeps_the_rank(self):
+        anon = self.link_wallet("u-demo", self.wallet_at_rank(20))
+        before = self.board_row(anon)["rank"]
+        self.identity_of({"state": "listed", "handle": "tape_watcher"}, "list-2")
+        out = self.identity_of({"state": "private"}, "unlist-1")
+        self.assertEqual(out["identity"]["state"], "private")
+        self.assertEqual(out["identity"]["handle"], "tape_watcher", "the handle is kept, the link is not")
+        after = self.board_row(anon)
+        self.assertIsNone(after["handle"])
+        self.assertEqual(after["rank"], before, "the setting cannot move a rank")
+        self.assertEqual(self.board_row(anon)["rank"], before)
+
+    def test_a_private_handle_never_appears_in_a_public_payload(self):
+        """The phase's D4 privacy line, as a grep: the handle is not published, and the positive control proves
+        the grep would have found it if it were."""
+        anon = self.link_wallet("u-demo", self.wallet_at_rank(20))
+        self.identity_of({"state": "listed", "handle": "briefly_public"}, "list-3")
+        self.identity_of({"state": "private"}, "unlist-2")
+        payloads = self.payloads() + [self.get("/v1/leaderboard/rank", anon=anon)]
+        for payload in payloads:
+            self.assertNotIn("briefly_public", json.dumps(payload),
+                             "a private account's handle is in a public payload")
+        self.identity_of({"state": "listed", "handle": "briefly_public"}, "list-4")
+        self.assertIn("briefly_public", json.dumps(self.get("/v1/leaderboard", limit=200)),
+                      "the scan would not have found a handle that IS published, so it proves nothing")
+
+    # ---- 4. a handle is once --------------------------------------------------------------------------------
+    def test_a_listing_without_a_handle_is_refused_by_field_name(self):
+        self.link_wallet("u-demo", self.wallet_at_rank(20))
+        r = self.set_identity({"state": "listed"}, "no-handle")
+        self.assertEqual(r.status_code, 422)
+        self.assertEqual(r.json()["error"]["code"], "VALIDATION")
+        self.assertIn("handle", r.json()["error"]["message"])
+        self.assertEqual(self.identity()["identity"]["state"], "private", "a refused opt-in changes nothing")
+
+    def test_a_malformed_or_reserved_handle_is_refused(self):
+        self.link_wallet("u-demo", self.wallet_at_rank(20))
+        for bad in ("ab", "Tape Watcher", "admin", "with-a-dash", "t" * 25):
+            r = self.set_identity({"state": "listed", "handle": bad}, "bad-handle")
+            self.assertEqual(r.status_code, 422, "%r was accepted as a handle" % bad)
+            self.assertEqual(self.identity()["identity"]["state"], "private")
+
+    def test_a_taken_handle_is_refused_and_the_owner_keeps_it(self):
+        self.link_wallet("u-demo", self.wallet_at_rank(20))
+        self.identity_of({"state": "listed", "handle": "tape_watcher"}, "owner")
+        self.link_wallet("u-other", self.wallet_at_rank(21))
+        r = self.set_identity({"state": "listed", "handle": "tape_watcher"}, "thief", uid="u-other")
+        self.assertEqual(r.status_code, 409)
+        self.assertEqual(r.json()["error"]["code"], "HANDLE_TAKEN")
+        self.assertIn("pick another", r.json()["error"]["message"])
+        self.assertEqual(self.identity()["identity"]["state"], "listed")
+        self.assertEqual(self.identity("u-other")["identity"]["state"], "private")
+
+    def test_changing_an_existing_handle_is_refused_rather_than_applied(self):
+        self.link_wallet("u-demo", self.wallet_at_rank(20))
+        self.identity_of({"state": "listed", "handle": "first_name"}, "one")
+        r = self.set_identity({"state": "listed", "handle": "second_name"}, "two")
+        self.assertEqual(r.status_code, 422)
+        self.assertEqual(self.identity()["identity"]["handle"], "first_name")
+        # but opting out and back in with the same handle is fine: that is the same identity, re-published
+        self.identity_of({"state": "private"}, "three")
+        out = self.identity_of({"state": "listed", "handle": "first_name"}, "four")
+        self.assertEqual(out["identity"]["state"], "listed")
+
+    def test_the_consent_is_recorded_in_the_append_only_audit_log(self):
+        self.link_wallet("u-demo", self.wallet_at_rank(20))
+        self.identity_of({"state": "listed", "handle": "tape_watcher"}, "audit-1")
+        self.identity_of({"state": "private"}, "audit-2")
+        rows = self.app._db.execute("SELECT detail_json FROM audit_log WHERE action='leaderboard.identity'"
+                                    " ORDER BY at_ms ASC, id ASC").fetchall()
+        self.assertGreaterEqual(len(rows), 2)
+        first, second = json.loads(rows[0][0]), json.loads(rows[-1][0])
+        self.assertEqual(first["state"], "listed")
+        self.assertEqual(second["state"], "private")
+        self.assertEqual(second["previous"], "listed", "the record says what it changed from")
+
+    def test_a_replay_returns_the_stored_body_and_a_different_body_is_a_conflict(self):
+        self.link_wallet("u-demo", self.wallet_at_rank(20))
+        first = self.identity_of({"state": "listed", "handle": "replay_handle"}, "replay")
+        replay = self.identity_of({"state": "listed", "handle": "replay_handle"}, "replay")
+        self.assertEqual(replay, first, "the same key with the same body returns what it stored")
+        r = self.set_identity({"state": "private"}, "replay")
+        self.assertEqual(r.status_code, 409)
+        self.assertEqual(r.json()["error"]["code"], "IDEM_CONFLICT")
+
+    def test_every_identity_write_needs_a_key_and_a_session(self):
+        self.link_wallet("u-demo", self.wallet_at_rank(20))
+        r = self.client.post("/v1/leaderboard/identity", json={"state": "private"}, headers=self.headers())
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(r.json()["error"]["code"], "IDEM_KEY_REQUIRED")
+        for method, url in (("get", "/v1/leaderboard/me"), ("get", "/v1/leaderboard/identity")):
+            r = getattr(self.client, method)(url)
+            self.assertEqual(r.status_code, 401, "%s %s answered an anonymous caller" % (method.upper(), url))
+        r = self.client.post("/v1/leaderboard/identity", json={"state": "private"},
+                             headers={"Idempotency-Key": "d4-anon-1"})
+        self.assertEqual(r.status_code, 401)
+
+
 class TestThePhaseGate(LeaderboardBase):
     """The kit's acceptance sentence, end to end: show me the pair, then explain it."""
 

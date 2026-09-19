@@ -24,6 +24,7 @@ export const ROUTE_NOTES: Readonly<Partial<Record<RouteKey, string>>> = {
   copyConfigs: "each config with the pre-confirm slippage warning and the source's own losing windows",
   createCopyConfig: "always a dry run: the schema has no field that turns copying live",
   copyGuards: "going live needs BOTH an acknowledged slippage warning and dry-run history (409 REFUSED otherwise)",
+  leaderboardIdentitySet: "the listing toggle writes a consent record",
   leaderboardFollows: "a follow is a watch, not a copy config",
   leaderboardFollow: "keyed by pseudonym: an address is not followable",
   copySources: "D7's discovery list, ranked risk-adjusted by default; each row carries its drawdown and its gate",

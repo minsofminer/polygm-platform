@@ -3019,6 +3019,96 @@ paths:
         "422": {$ref: "#/components/responses/Denied"}
         "500": {$ref: "#/components/responses/Internal"}
 
+  /v1/leaderboard/me:
+    get:
+      tags: [leaderboard]
+      operationId: getLeaderboardMe
+      x-auth: user
+      x-rate-class: authed-read
+      x-cache: no-store
+      summary: Your own standing on every board
+      description: |-
+        One read for the whole self-rank panel: the account's standing on each of the six boards — nine answers,
+        because the category board is four boards — with the gap to the place above, the flag that says whether the
+        row is off the first page, and what is holding an unranked wallet back. USER-scoped: it is built from the
+        wallets this account proved it controls.
+      parameters:
+        - name: window
+          in: query
+          schema: {type: string, enum: [24h, 7d, 30d, 90d, all]}
+        - {name: days, in: query, schema: {type: integer, minimum: 1, maximum: 90, default: 30}}
+      responses:
+        "200":
+          description: the standing on every board, the pin, and the account's publication state
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Stamped"
+                  - $ref: "#/components/schemas/LeaderboardSelf"
+        "401": {$ref: "#/components/responses/Denied"}
+        "422": {$ref: "#/components/responses/Denied"}
+        "500": {$ref: "#/components/responses/Internal"}
+
+  /v1/leaderboard/identity:
+    get:
+      tags: [leaderboard]
+      operationId: getLeaderboardIdentity
+      x-auth: user
+      x-rate-class: authed-read
+      x-cache: no-store
+      summary: What this account is published as
+      description: |-
+        The listing state, the claimed handle, and both halves of the promise served as data: what listing CHANGES
+        and what it does not. It does not change a rank, cannot remove a wallet from a board and cannot add one, and
+        that is the half a user would otherwise assume wrongly.
+      responses:
+        "200":
+          description: the publication state and the rule it follows
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Stamped"
+                  - $ref: "#/components/schemas/LeaderboardIdentity"
+        "401": {$ref: "#/components/responses/Denied"}
+        "500": {$ref: "#/components/responses/Internal"}
+    post:
+      tags: [leaderboard]
+      operationId: postLeaderboardIdentity
+      summary: Opt in to being listed under a handle, or go back to private (idempotent per key)
+      x-auth: user
+      x-rate-class: mutation
+      x-cache: no-store
+      description: |-
+        Private is the default and the absence of a row. Listing attaches the account's handle to its board rows and
+        is refused without a usable one; a handle that is taken is a 409; changing an existing handle is refused
+        rather than applied. Every decision is written to the append-only audit log, because "when did they agree
+        to this" is a question with a right answer.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [state]
+              properties:
+                state: {type: string, enum: [private, listed]}
+                handle: {type: string, minLength: 3, maxLength: 24}
+      responses:
+        "200":
+          description: the state that is now stored
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/LeaderboardIdentitySet"}
+        "400": {$ref: "#/components/responses/Validation"}
+        "401": {$ref: "#/components/responses/Denied"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/Denied"}
+        "500": {$ref: "#/components/responses/Internal"}
+
   /v1/leaderboard/recompute:
     post:
       tags: [leaderboard]
@@ -3997,7 +4087,7 @@ components:
                      PRICE_FAR_FROM_MID, TOO_MANY_OPEN, DAILY_CAP, IDEM_CONFLICT, IDEM_IN_PROGRESS,
                      IDEM_KEY_REQUIRED, RISK_UNAVAILABLE, SIGNER_UNAVAILABLE, BAD_REASON, NOT_FOUND, REFUSED,
                      HALTED, RULE_CAP, DRY_RUN_REQUIRED, PLAN_REQUIRED,
-                     VALIDATION, INTERNAL, UNAUTHENTICATED, SESSION_STALE, SESSION_REVOKED, SESSION_MISMATCH, ADMIN_REQUIRED, LOGIN_FAILED, ACCOUNT_LOCKED, TOTP_REQUIRED, TOTP_INVALID, TOTP_LOCKED, ADDRESS_COOLDOWN, ADDRESS_LIMIT, REMOVE_DURING_COOLDOWN, NO_SUCH_RESOURCE, REFRESH_UNKNOWN, REFRESH_REUSED, REFRESH_EXPIRED, TELEGRAM_REPLAY, TELEGRAM_INVALID, SECURITY_ENV_MISSING, KEYSTORE_TAMPER, BREAK_GLASS_DENIED, AUTHZ_UNDECLARED, BAD_FIELD, QUOTA_EXCEEDED, RADAR_SCOPE]
+                     VALIDATION, INTERNAL, UNAUTHENTICATED, SESSION_STALE, SESSION_REVOKED, SESSION_MISMATCH, ADMIN_REQUIRED, LOGIN_FAILED, ACCOUNT_LOCKED, TOTP_REQUIRED, TOTP_INVALID, TOTP_LOCKED, ADDRESS_COOLDOWN, ADDRESS_LIMIT, REMOVE_DURING_COOLDOWN, NO_SUCH_RESOURCE, REFRESH_UNKNOWN, REFRESH_REUSED, REFRESH_EXPIRED, TELEGRAM_REPLAY, TELEGRAM_INVALID, SECURITY_ENV_MISSING, KEYSTORE_TAMPER, BREAK_GLASS_DENIED, AUTHZ_UNDECLARED, BAD_FIELD, QUOTA_EXCEEDED, RADAR_SCOPE, HANDLE_TAKEN]
             message: {type: string, description: "user-safe by construction"}
             retryable: {type: boolean}
             requestId: {type: string}
@@ -4918,6 +5008,9 @@ components:
                  maxDrawdownMicro, drawdown, winRateBps, insufficientSample, sampleNote, reasons, classifications]
       properties:
         anon: {type: string}
+        # D4: the account that opted in to being listed, or null. The pseudonym is unchanged either way - this
+        # field is the whole difference between appearing on the board and appearing as somebody.
+        handle: {type: [string, "null"]}
         label: {type: string}
         followedMs: {type: integer}
         state: {type: string, enum: [ranked, unranked, absent]}
@@ -4951,6 +5044,109 @@ components:
             ranked: {type: integer, minimum: 0}
             unranked: {type: integer, minimum: 0}
             absent: {type: integer, minimum: 0}
+        note: {type: string}
+
+    LeaderboardIdentityState:
+      type: object
+      required: [state, handle, listedMs, updatedMs, decided, note]
+      properties:
+        state: {type: string, enum: [private, listed]}
+        handle: {type: string}
+        listedMs: {type: [integer, "null"]}
+        updatedMs: {type: [integer, "null"]}
+        decided: {type: boolean, description: "false when no row exists: private by default, not by a decision"}
+        note: {type: string}
+
+    LeaderboardSelfBoard:
+      type: object
+      required: [board, anon, label, window, state, rank, rankedTotal, pageSize, offPage, orderField,
+                 orderUnits, reasons]
+      properties:
+        board: {type: string}
+        category: {type: [string, "null"]}
+        anon: {type: string}
+        label: {type: string}
+        window: {type: string}
+        state: {type: string, enum: [ranked, unranked, unknown]}
+        rank: {type: [integer, "null"]}
+        rankedTotal: {type: integer, minimum: 0}
+        rankBadge: {$ref: "#/components/schemas/LeaderboardRankBadge"}
+        percentileBps: {type: [integer, "null"]}
+        orderField: {type: string}
+        orderUnits: {type: string, enum: [bps, micro, count]}
+        pageSize: {type: integer, minimum: 1, description: "the page the pin compares the rank against"}
+        offPage: {type: boolean, description: "true when the row is not on page 1, i.e. when the screen pins it"}
+        rankedAhead: {type: [integer, "null"]}
+        rankedBehind: {type: [integer, "null"]}
+        rankedOnPage: {type: [integer, "null"]}
+        gap: {type: [object, "null"], description: "the engine's gap object: delta and toPass in this board's field"}
+        row: {type: [object, "null"], description: "the same row shape the board serves"}
+        unranked: {type: [object, "null"], description: "the refusal, with the numbers that produced it"}
+        reasons: {type: array, items: {type: string}}
+        note: {type: string}
+
+    LeaderboardSelfWallet:
+      type: object
+      required: [anon, boards, ranked, unranked, nextSteps, note]
+      properties:
+        anon: {type: string}
+        claimedMs: {type: integer}
+        boards: {type: array, items: {$ref: "#/components/schemas/LeaderboardSelfBoard"}}
+        ranked: {type: integer, minimum: 0}
+        unranked: {type: integer, minimum: 0}
+        best: {type: [object, "null"], description: "the wallet's best place across boards, with the label it is on"}
+        nextSteps: {type: array, items: {type: string}, description: "what to do about being unranked, in numbers"}
+        note: {type: string}
+
+    LeaderboardSelf:
+      type: object
+      required: [identity, wallets, walletCount, pageSize, links, note]
+      properties:
+        identity: {$ref: "#/components/schemas/LeaderboardIdentityState"}
+        wallets: {type: array, items: {$ref: "#/components/schemas/LeaderboardSelfWallet"}}
+        walletCount: {type: integer, minimum: 0}
+        primary:
+          type: [object, "null"]
+          description: |-
+            the pin: the wallet's row on the default board, plus its best place anywhere and the steps if it is not
+            ranked. `pin` is the entry the sticky strip draws, and it is the DEFAULT board's row rather than the
+            wallet's best one, because the strip sits under the board the reader is looking at
+        pageSize: {type: integer, minimum: 1}
+        links:
+          type: object
+          properties:
+            identity: {type: string}
+            methodology: {type: string}
+        note: {type: string}
+
+    LeaderboardIdentity:
+      type: object
+      required: [identity, handle, wallets, changes, doesNotChange, nudge, note]
+      properties:
+        identity: {$ref: "#/components/schemas/LeaderboardIdentityState"}
+        handle:
+          type: object
+          required: [claimed, published, rules]
+          properties:
+            claimed: {type: string}
+            published: {type: string, description: "the handle that is on the board right now; empty when private"}
+            rules: {type: string}
+            reserved: {type: array, items: {type: string}}
+        wallets: {type: array, items: {type: object}}
+        changes: {type: array, items: {type: string}}
+        doesNotChange: {type: array, items: {type: string}}
+        nudge: {type: string}
+        note: {type: string}
+
+    LeaderboardIdentitySet:
+      type: object
+      required: [identity, previous, publishedAs, changes, doesNotChange, note]
+      properties:
+        identity: {$ref: "#/components/schemas/LeaderboardIdentityState"}
+        previous: {type: string, enum: [private, listed]}
+        publishedAs: {type: object, description: "{pseudonym: handle} for the wallets this account controls"}
+        changes: {type: array, items: {type: string}}
+        doesNotChange: {type: array, items: {type: string}}
         note: {type: string}
 
     LeaderboardFollow:

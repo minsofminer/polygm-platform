@@ -87,6 +87,117 @@ const follows = {
   note: "a follow is a watch, not a copy: it changes nothing about what gets traded",
 };
 
+
+// D4 fixtures: the panel now carries the reader's own standing. The board row here is deliberately OFF the page
+// (`offPage: true`, `rankedOnPage: null`), because that is the state the pin exists for.
+const selfBoard = {
+  board: "risk_adjusted",
+  category: null,
+  anon: "w_4ba30c8b77",
+  label: "Risk-adjusted PnL",
+  window: "30d",
+  state: "ranked",
+  rank: 87,
+  rankedTotal: 412,
+  rankBadge: { rank: 87, rankedTotal: 412, text: "#87" },
+  percentileBps: 7888,
+  orderField: "scoreBps",
+  orderUnits: "bps",
+  pageSize: 50,
+  offPage: true,
+  rankedAhead: 86,
+  rankedBehind: 325,
+  rankedOnPage: null,
+  gap: {
+    rankAbove: 86,
+    anonAbove: "w_11aa22bb33",
+    field: "scoreBps",
+    units: "bps",
+    value: 4100,
+    valueAbove: 4350,
+    delta: 250,
+    toPass: 4351,
+    note: "",
+  },
+  row: { scoreBps: 4100 },
+  reasons: [],
+  note: "",
+};
+
+const selfRank = {
+  ...stamp,
+  identity: { state: "private", decided: false, handle: "", since: null, note: "" },
+  wallets: [
+    {
+      anon: "w_4ba30c8b77",
+      boards: [selfBoard],
+      ranked: 1,
+      unranked: 0,
+      best: { board: "risk_adjusted", label: "Risk-adjusted PnL", rank: 87, rankedTotal: 412, rankBadge: { text: "#87" } },
+      nextSteps: [],
+      note: "",
+    },
+  ],
+  walletCount: 1,
+  primary: {
+    anon: "w_4ba30c8b77",
+    defaultBoard: "risk_adjusted",
+    pin: selfBoard,
+    best: null,
+    nextSteps: [],
+  },
+  pageSize: 50,
+  links: {},
+  note: "",
+};
+
+/** The same wallet when it is under the gate: D4's panel then carries the to-do list, not a badge. */
+const selfRankUnranked = {
+  ...selfRank,
+  wallets: [
+    {
+      ...selfRank.wallets[0],
+      boards: [
+        {
+          ...selfBoard,
+          state: "unranked",
+          rank: null,
+          rankBadge: null,
+          gap: null,
+          rankedOnPage: null,
+          rankedAhead: 0,
+          rankedBehind: 0,
+          row: null,
+          unranked: {
+            reasons: ["9 settled markets; this board needs 20", "$0 of $500 verified turnover"],
+            settledMarkets: 9,
+            verifiedVolumeMicro: 0,
+            note: "",
+          },
+          reasons: ["9 settled markets; this board needs 20"],
+        },
+      ],
+      ranked: 0,
+      unranked: 1,
+      best: null,
+      nextSteps: ["settle 11 more markets to reach the 20 this board needs"],
+      note: "",
+    },
+  ],
+  primary: { anon: "w_4ba30c8b77", defaultBoard: "risk_adjusted", pin: null, best: null, nextSteps: [] },
+};
+
+const identityView = {
+  ...stamp,
+  identity: { state: "private", decided: false, handle: "", since: null, note: "" },
+  handle: { claimed: "", published: "", rules: "3-24 characters, a-z, 0-9 and _", reserved: ["polygm", "admin"] },
+  wallets: [],
+  changes: ["your rows would carry the handle"],
+  doesNotChange: ["your rows stay on the board", "your rank is the same number"],
+  nudge: "listing is how another trader finds you; it is off until you turn it on",
+  note: "",
+};
+
 function stub(body: Record<string, unknown> = {}) {
   vi.stubGlobal(
     "fetch",
@@ -95,6 +206,8 @@ function stub(body: Record<string, unknown> = {}) {
       const json = (payload: unknown) =>
         new Response(JSON.stringify(payload), { status: 200, headers: { "content-type": "application/json" } });
       if (href.includes("/v1/leaderboard/rank")) return json({ ...standing, ...(body.standing ?? {}) });
+      if (href.includes("/v1/leaderboard/me")) return json({ ...selfRank, ...(body.selfRank ?? {}) });
+      if (href.includes("/v1/leaderboard/identity")) return json({ ...identityView, ...(body.identityView ?? {}) });
       if (href.includes("/v1/leaderboard/compare")) {
         return json({
           ...stamp,
@@ -162,10 +275,24 @@ describe("the rating panel", () => {
         percentileBps: null,
         reasons: ["9 settled markets; this board needs 20"],
       },
+      selfRank: selfRankUnranked,
     });
     render(<BoardPanel focus="w_a945dde868" />);
     expect(await screen.findByText(/9 settled markets; this board needs 20/)).toBeTruthy();
     expect(screen.queryByText("#47 of 64")).toBeNull();
+  });
+
+  it("pins the reader's own row when it is off the page, and says why it is there", async () => {
+    stub();
+    render(<BoardPanel focus="w_a945dde868" />);
+    // Queried by its sentence, not by `role="status"`: the page has several status nodes (freshness markers among
+    // them), and the assertion is about the strip.
+    const strip = (await screen.findByText(/not on the first 50 rows/)).closest(".pgm-selfrank__pin");
+    expect(strip).not.toBeNull();
+    expect(strip!.textContent).toContain("Pinned:");
+    expect(strip!.textContent).toContain("#87 of 412");
+    // The gap that would move the row, in the board's own field — the whole point of pinning it.
+    expect(strip!.textContent).toContain("250 bps behind w_11aa22bb33");
   });
 
   it("offers the comparison only once two wallets are picked", async () => {

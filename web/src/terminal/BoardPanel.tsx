@@ -19,6 +19,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { t } from "@/i18n/terminal";
 import { request } from "@/api/client";
 import { freshnessOf, type Stamp } from "@/api/envelope";
+import { SelfRank } from "./SelfRank";
 import { Number } from "@/num/Number";
 import { StaleIndicator } from "@/num/StaleIndicator";
 import { Button } from "@/ui/Button";
@@ -201,6 +202,11 @@ export function BoardPanel({ focus = "" }: { focus?: string }) {
         </div>
         <StaleIndicator freshness={fresh} ageMs={stamp ? Math.max(0, now - stamp.asOf) : null} />
       </header>
+
+      {/* D4 · the reader's own standing, on the board selected above. Inside the panel rather than beside it: the
+          strip is pinned to the board the controls say, and two components holding two copies of "which board is
+          on screen" is how the strip ends up describing a board the table is not showing. */}
+      <SelfRank board={board} />
 
       {err ? (
         <p className="refusal" role="note">

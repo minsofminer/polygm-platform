@@ -38,13 +38,24 @@ export const MUTATING = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 const RETRYABLE_STATUS = new Set([502, 503, 504]);
 const BACKOFF_MS = [120, 400, 1200];
 
-/** A key is opaque to the server and must be stable per intent. 16 hex chars is plenty; the P06 store
- *  hashes it anyway. */
+/**
+ * A key is opaque to the server and must be stable per intent. 16 hex chars is plenty; the P06 store hashes it.
+ *
+ * The separator is a HYPHEN, and that is not a style choice: the API validates `Idempotency-Key` against
+ * `^[A-Za-z0-9_-]{8,128}$` (`_IDEM_RE`), so the `scope:random` form this function shipped with was refused by
+ * every mutating route with a 422 about the key — the client and the contract disagreed, and nothing caught it
+ * because every screen that had been exercised passed its own key. `client.test.ts` now asserts the shape the
+ * server enforces, and `tools/p08-gate-check.py` c13 asserts it against the server's own regex.
+ */
 export function newIdempotencyKey(scope: string): string {
   const bytes = new Uint8Array(8);
   globalThis.crypto.getRandomValues(bytes);
   const rand = Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
-  return `${scope}:${rand}`;
+  // The scope is caller-supplied (`order:0xabc:BUY:25`), so its own separators are normalised too, and the whole
+  // key is clamped to the server's 128: a key the server refuses is a button that does nothing, and a 200-char
+  // scope is an order ticket's parameters, not a mistake.
+  const flat = scope.replace(/[^A-Za-z0-9_-]+/g, "-").slice(0, 111);
+  return `${flat}-${rand}`;
 }
 
 export function urlFor(decl: { method: string; path: string }, opts: RequestOptions): string {

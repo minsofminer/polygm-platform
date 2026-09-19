@@ -125,6 +125,23 @@ export const ROUTES = {
   // deliberately one line each: this ledger is loaded by EVERY route, so its copy is on every route's budget.
   leaderboardRank: { method: "GET", path: "/v1/leaderboard/rank", built: true, whileMissing: "refuses", owner: "P11" },
   leaderboardCompare: { method: "GET", path: "/v1/leaderboard/compare", built: true, whileMissing: "refuses", owner: "P11" },
+  // D4: the account's own standing on every board, and the identity its rows are published under. All three
+  // USER-scoped, and all three one line for the same reason the D3 rows are: this ledger is on every route.
+  leaderboardMe: { method: "GET", path: "/v1/leaderboard/me", built: true, whileMissing: "refuses", owner: "P11" },
+  leaderboardIdentity: {
+    method: "GET",
+    path: "/v1/leaderboard/identity",
+    built: true,
+    whileMissing: "refuses",
+    owner: "P11",
+  },
+  leaderboardIdentitySet: {
+    method: "POST",
+    path: "/v1/leaderboard/identity",
+    built: true,
+    whileMissing: "refuses",
+    owner: "P11",
+  },
   leaderboardFollows: {
     method: "GET",
     path: "/v1/leaderboard/follows",

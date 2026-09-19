@@ -49,12 +49,17 @@ P11_PATHS = ("/v1/leaderboard", "/v1/leaderboard/boards", "/v1/leaderboard/metho
              "/v1/leaderboard/snapshots", "/v1/leaderboard/runs", "/v1/leaderboard/recompute",
              # D3. The standing and the comparison are public reads; the follow list is the account's own and the
              # follow itself is the one write a user makes about other people.
-             "/v1/leaderboard/rank", "/v1/leaderboard/compare", "/v1/leaderboard/follows")
+             "/v1/leaderboard/rank", "/v1/leaderboard/compare", "/v1/leaderboard/follows",
+             # D4. The self-rank and the account's own publication state: three USER operations, because there is
+             # no version of "where do I stand" that a stranger may read.
+             "/v1/leaderboard/me", "/v1/leaderboard/identity")
 #: The whole point of a leaderboard is that a stranger can read it, so six of the seven are public — and the
 #: seventh is a user mutation, which the gate also walks (a cadence nobody can exercise is untested).
 PUBLIC_OPS = tuple("GET %s" % p for p in P11_PATHS
-                   if p not in ("/v1/leaderboard/recompute", "/v1/leaderboard/follows"))
-USER_OPS = ("POST /v1/leaderboard/recompute", "GET /v1/leaderboard/follows", "POST /v1/leaderboard/follows")
+                   if p not in ("/v1/leaderboard/recompute", "/v1/leaderboard/follows",
+                                "/v1/leaderboard/me", "/v1/leaderboard/identity"))
+USER_OPS = ("POST /v1/leaderboard/recompute", "GET /v1/leaderboard/follows", "POST /v1/leaderboard/follows",
+            "GET /v1/leaderboard/me", "GET /v1/leaderboard/identity", "POST /v1/leaderboard/identity")
 
 BOARDS = ("risk_adjusted", "win_rate", "volume", "rising", "category", "copied")
 ACTIVITY_WINDOWS = ("24h", "7d", "30d")
@@ -152,18 +157,58 @@ class Probe:
     def rows(self, sql: str, args: tuple = ()) -> list:
         return self.app()._db.execute(sql, args).fetchall()
 
+    def exec(self, sql: str, args: tuple = ()) -> None:
+        """A write, for the gate's fixture only: linking a wallet to the probe's account the way P07 records one,
+        and the second account D4's collision check needs. The API itself is probed through its routes."""
+        self.app()._db.execute(sql, args)
+        self.app()._db.commit()
+
+    def link(self, uid: str, wallet: str) -> str:
+        """Claim `wallet` for `uid`, and return the pseudonym — the identity every board read is keyed by."""
+        app = self.app()
+        self.exec("INSERT OR IGNORE INTO users (id, created_ms, tier) VALUES (?,?, 'free')", (str(uid), 1))
+        self.exec("DELETE FROM user_identities WHERE kind='wallet' AND user_id=?", (str(uid),))
+        self.exec("INSERT INTO user_identities (kind, value, user_id, state, claimed_ms, verified_ms,"
+                  " proof_kind, revoked_ms) VALUES ('wallet',?,?,'verified',?,?, 'gate', NULL)",
+                  (str(wallet), str(uid), 1, 1))
+        return app._anon(str(wallet))
+
+    def wallet_of_unranked(self) -> str:
+        """One refused wallet's ADDRESS: the fixture's own, since `seed_leaderboard` is what put it there."""
+        app = self.app()
+        unranked = self.board(board="risk_adjusted").get("unranked") or []
+        for u in unranked:
+            w = app._wallet_for_anon(u["anon"])
+            if w:
+                return w
+        return ""
+
     def board(self, board: str = "risk_adjusted", **params) -> dict:
         code, out = self.get("/v1/leaderboard", board=board, limit=200, **params)
         return out if code == 200 else {}
 
+    def public_payloads(self) -> list[tuple[str, dict]]:
+        """What an ANONYMOUS caller can read, as `(label, body)`.
+
+        This is the set the privacy scanner gets: a handle that has not been published must appear here nowhere, and
+        the account's own view of its own setting is not a public payload. The distinction is the whole D4 rule -
+        "kept, not published" - so it is a named method rather than a subset built inside a check.
+        """
+        return [(label, body) for label, body in self.payloads()
+                if label not in ("/v1/leaderboard/me", "/v1/leaderboard/identity")]
+
     def payloads(self) -> list[tuple[str, dict]]:
-        """Every public leaderboard payload, as `(label, body)` — the input to the scanner checks."""
+        """Every leaderboard payload the probe can read, `(label, body)` — the input to the scanner checks."""
         out = [("/v1/leaderboard/boards", self.get("/v1/leaderboard/boards")[1]),
                ("/v1/leaderboard/methodology", self.get("/v1/leaderboard/methodology")[1]),
                ("/v1/leaderboard/runs", self.get("/v1/leaderboard/runs")[1])]
         for board in BOARDS:
             extra = {"category": "Politics"} if board == "category" else {}
             out.append(("board:%s" % board, self.board(board, **extra)))
+        # D4: the account's own panel is a payload like any other for the scanners. It is USER-scoped, and the one
+        # thing it must never do is carry an address or a handle that has not been published.
+        out.append(("/v1/leaderboard/me", self.get_user("/v1/leaderboard/me")[1]))
+        out.append(("/v1/leaderboard/identity", self.get_user("/v1/leaderboard/identity")[1]))
         return out
 
 
@@ -436,7 +481,7 @@ def c1_contract(_p: Probe) -> tuple[str, bool, str]:
     ok = not findings
     return ("seven leaderboard paths: contracted, mapped, and auth-declared", ok,
             "%d paths; %s; contract 53 paths; check-openapi %s"
-            % (len(P11_PATHS), "7/7 mapped" if not unmapped else "%d unmapped" % len(unmapped),
+            % (len(P11_PATHS), "all mapped" if not unmapped else "%d unmapped" % len(unmapped),
                (tail or ["(skipped)"])[0] if code == 0 else "FAILED: %s" % findings[:1]))
 
 
@@ -925,9 +970,195 @@ def c16_comparison_and_follows(p: Probe) -> tuple[str, bool, str]:
                       "; %d findings%s" % (len(findings), "; " + "; ".join(findings[:3])) if findings else ""))
 
 
+# ------------------------------------------------------------------ D4 scanners: the self-rank and the published identity
+def self_rank_findings(me: dict, boards: tuple, categories: tuple, page: int = 50) -> list[str]:
+    """The self-rank panel, re-derived: every board, the pin on the default board, and an honest off-page flag.
+
+    Four plantings this catches — a panel that answers five of the six boards and calls the sixth "not applicable";
+    an `offPage` that disagrees with the rank and the page size (the field the sticky strip is drawn from, so a
+    wrong one pins the wrong row); a badge that is not the rank; and a ranked row with no gap to the place above,
+    which is the number the whole panel exists to show.
+    """
+    f: list[str] = []
+    wallets = me.get("wallets") or []
+    if not wallets:
+        return ["no wallet in the self-rank: an unlinked account must still be a described state, not an empty one"]
+    for entry in wallets:
+        rows = entry.get("boards") or []
+        ids = sorted({b.get("board") for b in rows})
+        if ids != sorted(boards):
+            f.append("boards covered are %s, not %s" % (ids, sorted(boards)))
+        cats = sorted({b.get("category") for b in rows if b.get("category")})
+        if cats != sorted(categories):
+            f.append("the category board is four boards; got %s" % (cats or "none"))
+        for b in rows:
+            if int(b.get("pageSize") or 0) != page:
+                f.append("%s: pageSize is %s, not %d" % (b.get("board"), b.get("pageSize"), page))
+            if b.get("state") == "ranked":
+                rank = int(b["rank"])
+                if (b.get("rankBadge") or {}).get("text") != "#%d" % rank:
+                    f.append("%s: badge %r is not the rank %d" % (b.get("board"), (b.get("rankBadge") or {}).get("text"), rank))
+                if bool(b.get("offPage")) != (rank > page):
+                    f.append("%s: offPage=%s at rank %d of a %d-row page" % (b.get("board"), b.get("offPage"), rank, page))
+                if b.get("gap") is None and rank > 1:
+                    f.append("%s: rank %d has no gap to the place above" % (b.get("board"), rank))
+            elif b.get("offPage") is not True:
+                f.append("%s: a wallet with no rank claims to be on the page" % b.get("board"))
+    pin = ((me.get("primary") or {}).get("pin")) if me.get("primary") else None
+    if me.get("walletCount") and me.get("primary"):
+        if not pin:
+            f.append("the pin is missing: the strip has nothing to draw")
+        else:
+            if pin.get("board") != me["primary"].get("defaultBoard"):
+                f.append("the pin is %s, not the default board %s" % (pin.get("board"), me["primary"].get("defaultBoard")))
+            if pin.get("category"):
+                f.append("the pin is a category board: the strip would show a specialism the reader is not on")
+    return f
+
+
+def privacy_findings(payloads: list[tuple], handle: str, *, listed: bool) -> list[str]:
+    """A private account's handle appears nowhere; a listed account's handle is on its rows and nowhere else.
+
+    The interesting half is what stays: the wallet is on the board either way. A setting that removed a row would
+    be a way out of a ranking, which is the one thing D1's integrity rules do not allow, so this scanner checks
+    both directions — the handle is gone when it should be, and the ROW is not.
+    """
+    f: list[str] = []
+    published = [label for label, body in payloads if handle and handle in json.dumps(body)]
+    if listed and not published:
+        f.append("a listed handle (%r) is in no public payload" % handle)
+    if not listed and published:
+        f.append("a private handle (%r) is in %s" % (handle, ", ".join(published[:3])))
+    return f
+
+
+def c17_self_rank_every_board(p: Probe) -> tuple[str, bool, str]:
+    """D4: the account's own standing on every board, with the pin the sticky strip draws.
+
+    The probe links a real seeded wallet to the fixture account the way P07 does — a row in `user_identities` — and
+    then walks the panel: nine answers, the default board pinned, the gap in the board's own field, and an
+    unranked wallet told which number refused it and what to do about it.
+    """
+    app = p.app()
+    rows = p.board(board="risk_adjusted").get("rows") or []
+    if len(rows) < 12:
+        return ("the self-rank answers every board, with the pin on the default one", False, "no board to rank on")
+    wallet = app._wallet_for_anon(rows[11]["anon"])
+    p.link("u-demo", wallet)
+    findings: list[str] = []
+    code, me = p.get_user("/v1/leaderboard/me")
+    if code != 200:
+        return ("the self-rank answers every board, with the pin on the default one", False,
+                "/me answered %d" % code)
+    findings += self_rank_findings(me, BOARDS, ("Politics", "Sports", "Crypto", "Finance"))
+    if me.get("walletCount") != 1:
+        findings.append("walletCount is %s for one linked wallet" % me.get("walletCount"))
+    if me.get("identity", {}).get("state") != "private":
+        findings.append("a fresh account is not private by default: %s" % me.get("identity"))
+    # the pin's rank has to be the rank the BOARD gives that wallet, not a second opinion
+    pin = (me.get("primary") or {}).get("pin") or {}
+    board_rank = next((r["rank"] for r in rows if r["anon"] == rows[11]["anon"]), None)
+    if pin.get("rank") != board_rank:
+        findings.append("the pin says rank %s and the board says %s" % (pin.get("rank"), board_rank))
+    if pin.get("gap") is not None and pin["gap"]["toPass"] <= pin["gap"]["valueAbove"]:
+        findings.append("toPass is not strictly above the wallet ahead: %s" % pin["gap"])
+    # and an unranked wallet gets a to-do list rather than a shrug
+    thin = p.wallet_of_unranked()
+    if thin:
+        p.link("u-demo", thin)
+        code2, me2 = p.get_user("/v1/leaderboard/me")
+        steps = (me2.get("wallets") or [{}])[0].get("nextSteps") or []
+        if code2 != 200 or not steps:
+            findings.append("an unranked wallet got no next steps")
+        elif not any("settled market" in s or "turnover" in s for s in steps):
+            findings.append("the next steps do not name a number: %s" % steps[:1])
+    if p.get("/v1/leaderboard/me")[0] != 401:
+        findings.append("/me answered an anonymous caller")
+    ok = not findings
+    detail = "9 board answers; pin rank %s of %s, offPage %s" % (pin.get("rank"), pin.get("rankedTotal"), pin.get("offPage"))
+    return ("the self-rank answers every board, with the pin on the default one", ok,
+            detail + ("; %d findings%s" % (len(findings), "; " + "; ".join(findings[:3])) if findings else ""))
+
+
+def c18_identity_never_leaks(p: Probe) -> tuple[str, bool, str]:
+    """D4: private by default, listed on request, and never a link where there is no opt-in.
+
+    The phase's privacy line, walked: a fresh account publishes no handle anywhere, opting in attaches exactly one
+    handle to its rows, a second account cannot take that handle, and going back to private removes the link
+    WITHOUT removing the row — the board ranks wallets, and no setting may change that.
+    """
+    app = p.app()
+    rows = p.board(board="risk_adjusted").get("rows") or []
+    if not rows:
+        return ("private by default, listed on request, and the row survives either way", False, "no board")
+    wallet = app._wallet_for_anon(rows[10]["anon"])
+    anon = rows[10]["anon"]
+    p.link("u-demo", wallet)
+    p.exec("INSERT OR IGNORE INTO users (id, created_ms, tier) VALUES ('u-gate-2', 1, 'free')")
+    findings: list[str] = []
+
+    # 1. nothing is published before the opt-in
+    before = p.public_payloads() + [("/v1/leaderboard/rank", p.get("/v1/leaderboard/rank", anon=anon)[1])]
+    findings += privacy_findings(before, "gate_handle", listed=False)
+    row_before = next((r for r in rows if r["anon"] == anon), None)
+    if row_before is None or row_before.get("handle") is not None:
+        findings.append("a private wallet's row is missing or already carries a handle")
+
+    # 2. the opt-in attaches the handle to that wallet's rows, and only those
+    code, listed = p.post_key("/v1/leaderboard/identity", {"state": "listed", "handle": "Gate_Handle"})
+    if code != 200:
+        findings.append("the opt-in answered %d" % code)
+    else:
+        if listed.get("identity", {}).get("handle") != "gate_handle":
+            findings.append("the handle was not normalised: %s" % listed.get("identity"))
+        findings += privacy_findings(p.public_payloads(), "gate_handle", listed=True)
+        carrying = [r["anon"] for r in (p.board(board="risk_adjusted").get("rows") or []) if r.get("handle")]
+        if carrying != [anon]:
+            findings.append("the handle is on %s, not just on the account's own row" % (carrying or "nothing"))
+        if (p.get("/v1/leaderboard/rank", anon=anon)[1].get("row") or {}).get("handle") != "gate_handle":
+            findings.append("the standing row did not gain the handle")
+
+    # 3. a second account cannot take it, and its own state does not change
+    taken = p.post("/v1/leaderboard/identity", {"state": "listed", "handle": "gate_handle"},
+                   headers={"X-User-Id": "u-gate-2"})
+    if taken[0] != 409 or taken[1].get("error", {}).get("code") != "HANDLE_TAKEN":
+        findings.append("a second account claiming the handle got %s %s" % (taken[0], taken[1].get("error")))
+    second = p.client().get("/v1/leaderboard/identity", headers={"X-User-Id": "u-gate-2"}).json()
+    if second.get("identity", {}).get("state") != "private":
+        findings.append("the failed claim left the second account listed")
+
+    # 4. going private removes the link and keeps the ranking
+    back = p.post_key("/v1/leaderboard/identity", {"state": "private"})
+    if back[0] != 200 or back[1].get("identity", {}).get("state") != "private":
+        findings.append("going private answered %s" % (back[0],))
+    after = p.board(board="risk_adjusted").get("rows") or []
+    row_after = next((r for r in after if r["anon"] == anon), None)
+    if row_after is None:
+        findings.append("the wallet left the board when it went private")
+    elif row_after.get("handle") is not None or row_after.get("rank") != row_before.get("rank"):
+        findings.append("going private changed the row: %s" % {k: row_after.get(k) for k in ("handle", "rank")})
+    findings += privacy_findings(p.public_payloads(), "gate_handle", listed=False)
+    # The account's own two payloads still carry the handle, and that is the rule rather than a leak: opting out
+    # removes the LINK and keeps the name, so opting back in republishes the same identity. Asserted here so a
+    # future "delete the handle on opt-out" change has to argue with the gate.
+    own = [p.get_user("/v1/leaderboard/identity")[1], p.get_user("/v1/leaderboard/me")[1]]
+    if not any("gate_handle" in json.dumps(body) for body in own):
+        findings.append("going private forgot the handle entirely: the owner can no longer see what is retained")
+
+    # 5. the consent is on the record, in the append-only log
+    audit = p.rows("SELECT detail_json FROM audit_log WHERE action='leaderboard.identity' ORDER BY at_ms DESC")
+    if len(audit) < 2:
+        findings.append("the consent is not in the audit log (%d rows)" % len(audit))
+    ok = not findings
+    return ("private by default, listed on request, and the row survives either way", ok,
+            "handle published on 1 of %d rows, then removed; %d findings%s"
+            % (len(rows), len(findings), "; " + "; ".join(findings[:3]) if findings else ""))
+
+
 CHECKS = (c1_contract, c2_no_addresses, c3_gate_pair, c4_win_rate_gate, c5_refusals, c6_no_hidden_losses,
           c7_integers_only, c8_freshness, c9_read_plans, c10_history, c11_exclusions, c12_population,
-          c13_published, c14_board_orders, c15_wallet_standing, c16_comparison_and_follows)
+          c13_published, c14_board_orders, c15_wallet_standing, c16_comparison_and_follows,
+          c17_self_rank_every_board, c18_identity_never_leaks)
 
 
 # --------------------------------------------------------------------------------------------------- self-test
@@ -1058,6 +1289,56 @@ def self_test() -> int:
         return (not follow_findings(good, listing, "w_2") and len(follow_findings(silent, listing, "w_2")) == 1
                 and len(follow_findings(good, address, "w_2")) == 1
                 and len(follow_findings(good, reasonless, "w_2")) == 1), follow_findings(silent, listing, "w_2")
+
+    @canary
+    def self_rank():
+        """Four plantings: a panel missing the category board's four answers, an `offPage` that disagrees with the
+        page size, a badge that is not the rank, and a pin on a category board."""
+        good = {"wallets": [{"anon": "w_1", "boards": [
+            {"board": "risk_adjusted", "category": None, "state": "ranked", "rank": 12, "rankedTotal": 64,
+             "rankBadge": {"text": "#12"}, "pageSize": 50, "offPage": False,
+             "gap": {"toPass": 5, "valueAbove": 4, "value": 1}},
+            {"board": "category", "category": "Politics", "state": "ranked", "rank": 3, "rankedTotal": 11,
+             "rankBadge": {"text": "#3"}, "pageSize": 50, "offPage": False, "gap": {"toPass": 9, "valueAbove": 8, "value": 1}},
+            {"board": "category", "category": "Sports", "state": "unranked", "rank": None, "rankBadge": None,
+             "pageSize": 50, "offPage": True},
+            {"board": "category", "category": "Crypto", "state": "unranked", "rank": None, "rankBadge": None,
+             "pageSize": 50, "offPage": True},
+            {"board": "category", "category": "Finance", "state": "unranked", "rank": None, "rankBadge": None,
+             "pageSize": 50, "offPage": True}]}],
+            "walletCount": 1,
+            "primary": {"defaultBoard": "risk_adjusted", "pin": {"board": "risk_adjusted", "category": None,
+                                                                 "state": "ranked", "rank": 12, "pageSize": 50,
+                                                                 "offPage": False, "rankBadge": {"text": "#12"},
+                                                                 "gap": {"toPass": 5, "valueAbove": 4, "value": 1}}}}
+        boards = ("risk_adjusted", "category")
+        cats = ("Politics", "Sports", "Crypto", "Finance")
+        missing_board = json.loads(json.dumps(good))
+        missing_board["wallets"][0]["boards"] = [b for b in missing_board["wallets"][0]["boards"]
+                                                if b["category"] != "Finance"]
+        wrong_page = json.loads(json.dumps(good))
+        wrong_page["wallets"][0]["boards"][0]["rank"] = 70
+        wrong_page["primary"]["pin"]["rank"] = 70
+        bad_badge = json.loads(json.dumps(good))
+        bad_badge["wallets"][0]["boards"][0]["rankBadge"]["text"] = "#1"
+        cat_pin = json.loads(json.dumps(good))
+        cat_pin["primary"]["pin"]["board"] = "category"
+        for case in (good,):
+            assert not self_rank_findings(case, boards, cats), self_rank_findings(case, boards, cats)
+        got = [len(self_rank_findings(x, boards, cats))
+               for x in (missing_board, wrong_page, bad_badge, cat_pin)]
+        return all(n >= 1 for n in got), got
+
+    @canary
+    def identity_privacy():
+        """The privacy scanner fires in both directions: a private handle that is published, and a listed handle
+        that is not."""
+        payloads = [("board:risk_adjusted", {"rows": [{"anon": "w_1", "handle": "gate_handle"}]})]
+        quiet = [("board:risk_adjusted", {"rows": [{"anon": "w_1", "handle": None}]})]
+        return (not privacy_findings(quiet, "gate_handle", listed=False)
+                and len(privacy_findings(payloads, "gate_handle", listed=False)) == 1
+                and not privacy_findings(payloads, "gate_handle", listed=True)
+                and len(privacy_findings(quiet, "gate_handle", listed=True)) == 1), "both directions"
 
     @canary
     def p10_scanners_still_work():

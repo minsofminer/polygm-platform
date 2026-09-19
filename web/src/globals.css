@@ -1051,6 +1051,140 @@ body {
   color: var(--pgm-action-sell);
 }
 
+/*
+ * The rating board and the self-rank strip (P11 D3/D4).
+ *
+ * `pgm-board` shipped in D3 with classes and no rules: the panel rendered on browser defaults, which is the one
+ * way a panel can be "done" and still look broken. The rules live here now, and the one that carries a decision
+ * is `.pgm-selfrank__pin` — the strip is `position: sticky` at the bottom of the panel, because "pinned when the
+ * row is off the page" means pinned while the reader scrolls the board, not merely present in the markup.
+ */
+.pgm-board,
+.pgm-selfrank {
+  display: grid;
+  gap: var(--pgm-space-1);
+  min-width: 0;
+}
+
+.pgm-board__head,
+.pgm-selfrank__head {
+  display: flex;
+  gap: var(--pgm-space-1);
+  align-items: baseline;
+  flex-wrap: wrap;
+}
+
+.pgm-board__note,
+.pgm-selfrank__head p,
+.pgm-board__formula,
+.pgm-board__gate,
+.pgm-board__history,
+.pgm-selfrank__identity,
+.pgm-selfrank__steps,
+.pgm-selfrank__identity-control p,
+.pgm-selfrank__changes,
+.pgm-selfrank__nochange {
+  color: var(--pgm-text-muted);
+  font-size: var(--pgm-font-compact);
+}
+
+.pgm-board__picks {
+  display: flex;
+  gap: var(--pgm-space-1);
+  flex-wrap: wrap;
+  align-items: flex-end;
+}
+
+.pgm-board__picks label,
+.pgm-selfrank__identity-control label {
+  display: grid;
+  gap: var(--pgm-space-off-1);
+  font-size: var(--pgm-font-compact);
+}
+
+.pgm-board__standing,
+.pgm-selfrank__identity-control {
+  display: grid;
+  gap: var(--pgm-space-off-1);
+  background: var(--pgm-bg-inset);
+  border: var(--pgm-border-w-hair) solid var(--pgm-border-default);
+  border-radius: var(--pgm-radius-sm);
+  padding: var(--pgm-space-1);
+  min-width: 0;
+}
+
+.pgm-board__badge {
+  font-family: var(--pgm-font-dense);
+  font-size: var(--pgm-font-comfortable);
+}
+
+.pgm-board__refusal,
+.pgm-selfrank .refusal {
+  color: var(--pgm-alert-watch);
+}
+
+.pgm-board__spark {
+  color: var(--pgm-text-muted);
+  max-width: 100%;
+}
+
+.pgm-selfrank__boards {
+  border-collapse: collapse;
+  width: 100%;
+}
+
+.pgm-selfrank__boards caption {
+  color: var(--pgm-text-muted);
+  font-size: var(--pgm-font-compact);
+  text-align: left;
+}
+
+.pgm-selfrank__boards th,
+.pgm-selfrank__boards td {
+  border-bottom: var(--pgm-border-w-hair) solid var(--pgm-border-default);
+  padding: var(--pgm-pad-cell-x-compact);
+  text-align: left;
+  font-size: var(--pgm-font-compact);
+}
+
+.pgm-selfrank__boards td {
+  font-family: var(--pgm-font-dense);   /* the placing and the gap are numbers, in the dense face */
+}
+
+.pgm-selfrank__boards tr[data-pinned="true"] th {
+  border-left: var(--pgm-border-w-heavy) solid var(--pgm-alert-watch);
+}
+
+.pgm-selfrank__pin {
+  position: sticky;
+  inset-block-end: 0;
+  /* The design system's ladder has no rung for "raised inside a panel", and inventing one here would put a
+     z-index outside the source of dimensions (which is what c5 exists to prevent). The strip is a sticky
+     surface above scrolled content, which is what this rung is for; it and the topbar cannot overlap, because the
+     strip sticks to the bottom of its container and the topbar to the top of the viewport. */
+  z-index: var(--pgm-z-sticky_header);
+  display: flex;
+  gap: var(--pgm-space-1);
+  align-items: baseline;
+  flex-wrap: wrap;
+  background: var(--pgm-bg-elevated);
+  border: var(--pgm-border-w-hair) solid var(--pgm-border-default);
+  border-radius: var(--pgm-radius-sm);
+  box-shadow: var(--pgm-shadow-2);
+  padding: var(--pgm-space-1);
+  font-size: var(--pgm-font-compact);
+  min-height: var(--pgm-min-touch-target);   /* the strip is a control-shaped surface, so it holds the target */
+}
+
+.pgm-selfrank__pin-gap {
+  color: var(--pgm-text-muted);
+}
+
+.pgm-selfrank__buttons {
+  display: flex;
+  gap: var(--pgm-space-1);
+}
+
 .pgm-dossier__methodology,
 .pgm-dossier__disclaimers {
   color: var(--pgm-text-muted);

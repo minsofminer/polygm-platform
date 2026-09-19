@@ -1,12 +1,13 @@
 # P11 — Leaderboard, Rankings & Referrals
 
-Status: **D1, D2 and D3 built**, verified by `tools/p11-gate-check.py` at **16/16** (10 scanners canaried,
-`docs/verification/P11-gate.txt`) with the whole backend suite at **911 tests OK**, the web suite at **366 tests
-OK** and `check-openapi` at 431/0. D1 is the specification, the integrity rules and the ranking engine; D2 is the
-rankings API, the population the boards are demonstrated on, and the read path they are ranked from; D3 is the
-standing a wallet can see — its rank, its gap to the place above, its sparkline and the board it can put two
-other wallets beside. D4–D7 are next: self-rank and privacy, referrals, the public SSR pages, and the
-anti-gaming dashboard. This file is written as the phase is built.
+Status: **D1, D2, D3 and D4 built**, verified by `tools/p11-gate-check.py` at **18/18** (12 scanners
+canaried, `docs/verification/P11-gate.txt`) with the whole backend suite at **927 tests OK**, the web suite at
+**384 tests in 42 files OK** and `check-openapi` at 450/0. D1 is the specification, the integrity rules and the
+ranking engine; D2 is the rankings API, the population the boards are demonstrated on, and the read path they are
+ranked from; D3 is the standing a wallet can see — its rank, its gap to the place above, its sparkline and the
+board it can put two other wallets beside; D4 is the reader's own row on all nine boards, pinned when it is off
+the page, with the listing control that decides whether that row is tied to an account. D5–D7 are next:
+referrals, the public SSR pages, and the anti-gaming dashboard. This file is written as the phase is built.
 
 The phase's acceptance sentence, from the kit, is the thing everything below is arranged around:
 
@@ -26,7 +27,7 @@ better rank — is the one a user reports as a bug.
 | D1 | leaderboard specification: six boards, formula per board, eligibility gate, windows, tie-breaks, recompute cadence; integrity rules (wash, copy farms, provisional, blown-up, lucky-gambler share, disputed markets) | **built** — `packages/polygm_core/leaderboard/{boards,integrity,rank}.py`, 20 unit tests; `0013_leaderboard.sql` + its SQLite twin |
 | D2 | the rankings API: boards, rows with components, unranked-with-reasons, methodology, snapshots, the worker's recompute | **built** — `GET /v1/leaderboard{,/boards,/methodology,/why,/snapshots,/runs}` + `POST /v1/leaderboard/recompute`; `leaderboard/source.py`; `services/api/seed_leaderboard.py`; 20 + 28 tests |
 | D3 | profile integration: rank badge, 30-day rank sparkline, "why this rank", follow/copy from the row, compare up to 3 | **built** — `GET /v1/leaderboard/{rank,compare,follows}` + `POST /v1/leaderboard/follows`; `0014_follows.sql` + its SQLite twin; `web/src/terminal/{board.ts,BoardPanel.tsx}` on `/leaderboard`; 49 API tests + 18 + 7 + 2 web tests |
-| D4 | self-rank: your own position on every board, pinned when off-page, the unranked state, private-by-default with an opt-in | not started |
+| D4 | self-rank: your own position on every board, pinned when off-page, the unranked state, private-by-default with an opt-in | **built** — `GET /v1/leaderboard/me` + `GET|POST /v1/leaderboard/identity`; `0015_leaderboard_identity.sql` + its SQLite twin; `web/src/terminal/{selfRank.ts,SelfRank.tsx}` mounted in `BoardPanel` and rendered on `/leaderboard`; 16 API tests + 10 + 6 + 1 web tests |
 | D5 | referrals: link + short code, the reward model and its argument, Sybil defence (first matched order over a notional threshold, device/IP/funding dedupe, velocity limits, review queue, clawback, hard self-referral block), the referrer dashboard, payout terms | not started |
 | D6 | public SSR pages: `/trader/<handle>`, `/market/<slug>`, `/leaderboard/<board>` with OG images, structured data, rate limiting | not started |
 | D7 | anti-gaming dashboard: fast climbers, correlated clusters, synthetic referral chains, unusual builder-code attribution; exclude and flag in one click | not started |
@@ -276,42 +277,134 @@ field reappears on a `RouteDecl`. Coverage is deliberately not checked — the l
 `docs/P08-frontend-shell.md` §4 already explains every unbuilt route, and a second list that must agree with the
 first is a second list that can disagree.
 
+### 2.18 The setting decides identity, not inclusion — and the screen says so
+
+The kit asks for "appear on public leaderboards, or stay private", and the two halves of that sentence cannot
+both be taken literally: §2.3 already refuses to drop a blown-up account from a board, and a board that omits
+whoever asked not to be listed is a board that reports a flattering field. D4 takes the half that survives
+contact with the integrity rules and states the other half on screen:
+
+* **Inclusion is not optional.** Every wallet over the gate is ranked on every board it qualifies for, and
+  `GET /v1/leaderboard/me` answers for a private account exactly as it does for a listed one. A ranking nobody
+  can leave is the only kind whose worst rows mean anything.
+* **Identity is optional, and defaults to off.** `identity.state` is `private` until the account records a
+  decision, and "private" means precisely what the kit's other sentence requires: the row is a **pseudonym with
+  no linkage to the account** — nothing in any public payload connects `w_…` to `u-…`, no dossier resolves, and
+  the account cannot be found by name.
+* **The screen says the true half out loud.** `identityDetail()` renders "your rows are on the board under your
+  pseudonym: private removes the link to this account, not the row", and `identityText()` labels the default
+  "private (by default)" rather than "hidden". A control that leaves the user believing the opposite of what it
+  does is the failure mode this subsection exists to prevent.
+
+The consent record is written as an append-only row (`audit_log`, action `leaderboard.identity`) carrying the
+previous state, so "I never agreed to that" has an answer that is not a shrug.
+
+### 2.19 A private wallet is still pseudonymised in everybody else's data
+
+The privacy scanner (`privacy_findings`) walks **every public payload** the gate can produce — boards, rows,
+`/why`, `/rank`, comparisons, follows, dossiers — and fails the run if a handle that has been withdrawn appears
+in any of them. It is canaried in both directions: a planted handle in a board row fails the run, and the same
+board with the handle absent passes it.
+
+Two consequences were forced by writing it, and both are the interesting part:
+
+* **The scanner must not read the account's own payloads.** On opt-out the handle is removed from every published
+  row and *kept* on the account's own `/me` and `/identity` ("kept, not published"): a user who turns listing off
+  and then sees the handle gone from their own settings would reasonably conclude the rename never happened. The
+  first run of c18 failed on exactly this, which is what a scanner is for; the check now scans
+  `Probe.public_payloads()` and additionally asserts the retention, so a later "delete it on opt-out" change has
+  to argue with the gate rather than pass it.
+* **Opt-out keeps the row.** c18 asserts the rank is still served after the handle goes, because that is the
+  promise §2.18 makes in copy.
+
+### 2.20 "Pinned when off the page" is arithmetic the server does, not a scroll listener
+
+`pin.offPage` is `rank is None or rank > pageSize`, `rankedOnPage` is `(rank - 1) // pageSize + 1`, and the strip
+renders only when `offPage` is true — the reader's own row is the one row that is always either on the current
+page or in the strip, never both and never neither. Doing that arithmetic on the client would mean the client
+deciding what page size the server used, and the first time the two disagreed the strip would pin a row that is
+visible three lines below it.
+
+The pin is matched to the board **exactly**, with no fallback: `pinFor` returning the default board's entry for
+an unknown board is how a strip shows a risk-adjusted rank under a win-rate selector. The category board is the
+ambiguous case (four boards wearing one name), and with no category chosen the panel pins nothing and the
+account's own table — which lists all four — is the answer.
+
+### 2.21 Unranked is a to-do list, and the numbers in it are the API's
+
+`nextSteps` arrives from the API naming the numbers that refused the wallet ("settle 11 more markets to reach the
+20 this board needs", "$190 of $500 verified turnover"), and the panel renders them in order. A client that
+composed those sentences would be a second implementation of the gate, and the first time the gate moved the
+to-do list would send users to a number that no longer exists. A wallet with no linked wallet at all gets the one
+instruction that makes a standing possible, and it comes from the same list.
+
+### 2.22 The idempotency key the client generated was one the API refused
+
+`newIdempotencyKey()` joined its scope and its random half with a **colon**, and `_IDEM_RE` in the API accepts
+`[A-Za-z0-9_-]{8,128}`. Every mutating request that did not pass a key of its own was therefore refused with a
+422 about a header the client had just made up. No screen showed it — the screens that were exercised pass their
+own key, and a *missing* header is caught by the API — and it surfaced only because D4 added a mutation whose key
+nobody passes.
+
+Three things hold it now: the shape is asserted in `web/src/api/client.test.ts` against the server's own regex,
+`tools/p08-gate-check.py` gained **c16** (the contract's `pattern`, the API's `_IDEM_RE` and the client's producer
+must be the same rule, and the producer must clamp a long scope), and c16 has a canary that plants the colon-joined
+key. The scope is normalised and clamped to 111 characters, because an order ticket's scope is its parameters and
+`order:0xabc:BUY:25` is a legitimate thing to pass.
+
+### 2.23 The board panel had classes and no rules
+
+D3 shipped `BoardPanel` with `pgm-board__*` class names and no stylesheet behind them: it rendered on browser
+defaults, which is the one way a panel can be finished and still look broken. D4 added the rules for both the
+board and the strip — the pinned strip is `position: sticky` at the bottom of the panel, because "pinned when the
+row is off the page" means pinned *while the reader scrolls*, not merely present in the markup — and the strip's
+`z-index` uses the design system's existing sticky rung rather than a literal, which is what P08's c5 exists to
+prevent.
+
 ## 3. Where the numbers come from
 
 * `tests/test_leaderboard_rank.py` — **20 tests, OK** (`python3 -m unittest discover -s tests -p "test_leaderboard_rank.py"`).
 * `tests/test_leaderboard_source.py` — **20 tests, OK**: the windows, the realised arithmetic (both sides, both
   outcomes, and the unresolved case that is NOT a zero), per-market folding, determinism under a reversed read,
   and the two refusal paths.
-* `tests/test_leaderboard_api.py` — **49 tests, OK**, including the gate's own pair and D3's standing/compare/follow routes. The population it runs on:
+* `tests/test_leaderboard_api.py` — **65 tests, OK**, including the gate's own pair, D3's standing/compare/follow routes and D4's sixteen (`TestSelfRankAndIdentity`): nine board answers per account, the pin and its page arithmetic, the unranked reasons, the gap, private-by-default, listing and renaming, the taken-handle 409, the audit trail, and the idempotency/session enforcement. The population it runs on:
   `services/api/seed_leaderboard.py` writes **60 generated wallets + 5 specimens** — a lucky gambler, a blown-up
   account, a washer, a copy farm, a three-day-old wallet — plus two wallets built to be refused for different
   reasons (9 settled markets; 21 markets of forty cents). Measured on that population: **64 ranked**, 7 unranked,
   **5 blown up**, 1 provisional, 1 disputed result withheld, and the gate pair at ranks 12/47 has **48 versus 26
   settled markets** — the smaller sample ranked *below*, and the sentence explaining it is served by `/why`.
-* `tools/check-openapi.py` — **431 passed, 0 failed** over 57 paths (the contract gained the seven leaderboard
-  paths and 22 components in D2, and D3's four routes with their `x-auth`/`x-rate-class`/`x-cache` extensions on
-  top; `npm run gen:api` regenerates `web/src/api/schema.gen.ts`, and `npm run check:api` fails if it drifts).
-* `tools/p11-gate-check.py` — **16/16 checks, 10/10 scanners canaried**, recorded in `docs/verification/P11-gate.txt`.
+* `tools/check-openapi.py` — **450 passed, 0 failed** (the contract gained the seven leaderboard paths and 22
+  components in D2, D3's four routes, and D4's `me`/`identity` pair with six components and the `HANDLE_TAKEN`
+  code; `npm run gen:api` regenerates `web/src/api/schema.gen.ts` — 5858 lines — and `npm run check:api` fails if
+  it drifts).
+* `tools/p11-gate-check.py` — **18/18 checks, 12/12 scanners canaried**, recorded in `docs/verification/P11-gate.txt`, 16.2 s. c17 walks the self-rank (`/me` = nine board answers, the pin's board and rank agreeing with the board's own row, `private` for a fresh account, the unranked wallet's steps naming a number, 401 without a session); c18 walks the identity (no handle in any public payload before opt-in, the handle on exactly that wallet's row after it, a second account claiming it refused with 409 `HANDLE_TAKEN`, opt-out removing the link but keeping the row and the rank, the owner's own payloads still carrying it, and at least two `leaderboard.identity` audit rows).
   c3 is the phase's own acceptance sentence walked over the API (rank 47 with 26 settled markets above rank 12
   with 48, and `/why` saying so in one sentence), c15 is the standing a wallet can read back (the badge, the
   re-derivable gap, the empty sparkline that says "no history yet"), and c16 is the comparison that must not
   echo an address. The scanners that make it a floor rather than a screenshot are canaried: each one is handed a
   planted violation and fails the run if it walks past it.
-* The whole backend suite: **911 tests, OK** (`python3 -m unittest discover -s tests`, 62.9 s).
-* The web suite: **366 tests in 40 files, OK** (`web/node_modules/.bin/vitest run`), `tsc --noEmit` clean,
-  `i18n-check` ok (857 keys, 814 used), and `npm run build` renders 19 routes including `/leaderboard`.
-* `npm run measure` (P08 c8) — **pass**: `/` 190.0 KB, `/markets` **199.2 KB**, `/tma` and `/profile` 191.9 KB
-  against a 200 KB budget, with route-level splitting still proven; `tools/p08-gate-check.py` is **15/15**.
+* The whole backend suite: **927 tests, OK** (`python3 -m unittest discover -s tests`, 39.9 s).
+* The web suite: **384 tests in 42 files, OK** (`web/node_modules/.bin/vitest run`), `tsc --noEmit` clean,
+  `i18n-check` ok (872 keys, 829 used), and `npm run build` renders 19 routes including `/leaderboard`. D4 adds
+  `selfRank.test.ts` (the rules), `SelfRank.test.tsx` (the panel: the private label, the strip when off-page and
+  its absence when on-page, the consent write with its key, the refusal, the signed-out answer) and one case in
+  `BoardPanel.test.tsx` for the strip inside the panel it belongs to.
+* `npm run measure` (P08 c8) — **pass**: `/` 190.0 KB, `/markets` **199.3 KB**, `/tma` and `/profile` 191.9 KB
+  against a 200 KB budget, with route-level splitting still proven; `tools/p08-gate-check.py` is **16/16**, c16
+  being the new key-shape agreement of §2.22.
 * `tools/p08-gate-check.py` — **15/15**, including the c4 money-layer scan over the new screens (the percentile,
   the best-trade share and the win rate all render through `bpsText`, never `.toFixed`).
 * `db/migrations/0013_leaderboard.sql` + `db/migrations-sqlite/0013_leaderboard.sql` (generated) — the portable
   subset executes: **106 tables, 54 triggers**, with `leaderboard_exclusions` append-only in both.
+* `db/migrations/0015_leaderboard_identity.sql` + its SQLite twin — **107 tables, 54 triggers**, with
+  `leaderboard_identity` (one row per account: the decision, its instant, and the handle it publishes) and
+  `tools/build-sqlite-migrations.py --check` clean.
 * Seeded tape measurement used for the gate's justification: 1,090 fills, median fill $0.02, p90 $137.50
   [measured: `db/seed.sql`].
 
 ## 4. Open, in the order it should be closed
 
-1. **D4–D7** as listed in §1.
+1. **D5–D7** as listed in §1.
 2. **The eligibility floor re-derived on production data** ($500 and its $0.02-median sensitivity are a judgement,
    §2.2), plus a real **category taxonomy**: `seed_leaderboard` invents four strings (Politics/Sports/Crypto/
    Finance) because the venue's own tags are not in our ingest yet, and the category board is only as meaningful
@@ -324,3 +417,11 @@ first is a second list that can disagree.
 4. **The rank-history table is written by the recompute, so a fresh database has an empty sparkline** until
    somebody calls `/recompute` once. D3/D4's screens have to render that state honestly ("no history yet")
    rather than as a flat line at rank 0.
+
+5. ~~`/v1/leaderboard/snapshots` and the `/rank` history were two folds over the same table.~~ **Closed in D4**:
+   `/snapshots` now calls `_lb_history`, the same helper the sparkline reads, so the row shape D3 draws and the
+   row shape the endpoint serves cannot drift. It was one fold written twice, and the second copy is the one that
+   would have been wrong on the day a window was added.
+6. **The pinned strip is not yet measured under the P10 live-load budget** (60 fps with a live tape). The strip
+   is sticky, not animated, and it renders at most one row per board; the D4 claim is that it adds no layout work
+   per tick, and the frame trace that would prove it belongs with P10's harness, which exists (`npm run measure:tape`).

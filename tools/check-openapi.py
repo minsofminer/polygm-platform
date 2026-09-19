@@ -69,6 +69,11 @@ TABLE_FOR_PATH = {
     "/v1/leaderboard/compare": "LEADERBOARD_COMPARE_RESPONSES",
     ("GET", "/v1/leaderboard/follows"): "LEADERBOARD_FOLLOWS_RESPONSES",
     ("POST", "/v1/leaderboard/follows"): "LEADERBOARD_FOLLOW_RESPONSES",
+    # D4: `me` is one read; `/identity` is a read AND a write with different status sets, so each verb names
+    # its own table - the same shape `/follows` needed in D3.
+    "/v1/leaderboard/me": "LEADERBOARD_ME_RESPONSES",
+    ("GET", "/v1/leaderboard/identity"): "LEADERBOARD_IDENTITY_RESPONSES",
+    ("POST", "/v1/leaderboard/identity"): "LEADERBOARD_IDENTITY_SET_RESPONSES",
     "/v1/radar/runs": "RADAR_RESPONSES",
     "/v1/radar/runs/{job_id}": "RADAR_JOB_RESPONSES",
     "/healthz": "HEALTH_RESPONSES",                    # empty on purpose; the comment in app.py says why
