@@ -1,8 +1,10 @@
 # P10 — Frontend: the terminal (tape, dossiers, whales, radar, portfolio, copy, automation, alerts)
 
-Status: **in progress.** D1, D2 and D5's API are built and pushed; D3, D4, D6–D9 are the remaining screens. This
-file is written as the phase is built, so what follows states what exists and what does not, and the "open" list
-at the end is the working list rather than a retrospective.
+Status: **D1–D7 built and pushed; D8 and D9 are P11's subject** (the kit's own order — there is no automation or
+alert endpoint in the P10 contract, and inventing one here would put the rules in the wrong phase). Every screen
+in D1–D7 is reachable: `/terminal`, `/trader/[anon]`, `/whales`, `/radar`, `/portfolio`, `/copy`. This file is
+written as the phase is built, so what follows states what exists and what does not, and the "open" list at the
+end is the working list rather than a retrospective.
 
 The phase's acceptance sentence, from the kit, is the thing everything below is arranged around:
 
@@ -17,13 +19,13 @@ verified one endpoint at a time is a chain nobody has ever walked.
 
 | # | Surface | State |
 |---|---------|-------|
-| D1 | three-column terminal: left rail, centre (chart + Activity/Traders/Holders), right rail, resizable and collapsible, per-user persistence, mobile as tabs | frame built (`web/src/terminal/TerminalLayout.tsx`), panels not all wired |
+| D1 | three-column terminal: left rail, centre (chart + Activity/Traders/Holders), right rail, resizable and collapsible, per-user persistence, mobile as tabs | **built and mounted** (`TerminalLayout.tsx` + `TerminalScreen.tsx`, `/terminal`), 7 watchlist tests |
 | D2 | live tape: filters (absolute **and** market-relative notional), classification badges with their rule, virtualised, coalesced at 20+ fills/s, "paused — N new", click → market, shift-click → watchlist, sound off by default | built (`web/src/terminal/TapePanel.tsx`, `tape.ts`, `useTerminal.ts`), 21 unit tests |
 | D3 | trader dossier: four windows of one metric set, PnL curve with a mandatory drawdown overlay, behaviour labels with methodology + disclaimer, "insufficient sample" instead of a win rate below the gate | **built** (`src/terminal/{dossier.ts,DossierView.tsx}`, `app/trader/[anon]/page.tsx`), 21 unit + 7 render tests |
 | D4 | whale tracker: threshold feed, saved views with channel/severity, per-market and global, severity formula stated, inline alert-rule creation | **built** (`src/terminal/{whales.ts,WhaleTracker.tsx}`, `app/whales/page.tsx`), 17 unit + 4 render tests |
-| D5 | Wallet Radar: ≤10 markets, four rankings, row = wallet + matched markets + bought/sold + realised PnL + win rate + classification, one-click track/follow/copy/open, cost control | **API built and gated** (`packages/polygm_core/radar/rankings.py`, `POST /v1/radar/runs`, `GET /v1/radar/runs/{job_id}`), 25 tests; screen pending |
-| D6 | portfolio: positions with mark and unrealised, negRisk groups, order history with `unknown` rows marked, PnL curve + benchmark, CSV export, empty state | API built and gated (`/v1/me/portfolio`); screen pending |
-| D7 | copy trading: risk-adjusted discovery (and saying so), the config panel, the slip warning **before** confirm, monitor with skip reasons, pause/stop | API built and gated (`/v1/copy/configs*`); screen pending |
+| D5 | Wallet Radar: ≤10 markets, four rankings, row = wallet + matched markets + bought/sold + realised PnL + win rate + classification, one-click track/follow/copy/open, cost control | **built** (`src/terminal/{radar.ts,RadarView.tsx}`, `app/(app)/radar/page.tsx`), 14 unit + 4 render tests, on the gated API (25 API tests) |
+| D6 | portfolio: positions with mark and unrealised, negRisk groups, order history with `unknown` rows marked, PnL curve + benchmark, CSV export, empty state | **built** (`src/terminal/{portfolio.ts,PortfolioView.tsx}`, `app/(app)/portfolio/page.tsx`), 17 unit + 6 render tests |
+| D7 | copy trading: risk-adjusted discovery (and saying so), the config panel, the slip warning **before** confirm, monitor with skip reasons, pause/stop | **built** (`src/terminal/{copy.ts,CopyView.tsx}`, `app/(app)/copy/page.tsx`, `GET /v1/copy/sources` added for the sort D7 demands), 20 unit + 5 render tests |
 | D8 | automation: rule list, visual builder, templates, mandatory dry-run, run history, daily-loss banner | pending (P11's subject in the kit's own order; the API surface is not in the P10 contract) |
 | D9 | alerts: rule list, inline editor, test-fire, delivery history, quiet hours, digest, per-rule cooldown | pending (same as D8) |
 
@@ -117,7 +119,26 @@ pseudonym to copy, states in the same breath that a pseudonym is not resolved to
 explorer link. That is a deviation from the kit's wording, taken deliberately and stated on screen: an explorer
 link here would either 404 or invite a user to look up an address the product deliberately does not hold.
 
-### 2.9 Freshness on every surface, including the ones that are wrong about it
+### 2.9 `params` fills `{placeholders}`; `query` is the query string
+
+`useCopySources` passed its filters as `params` on a route with no `{segment}`, and `urlFor` throws when a param
+has nowhere to go. The throw happened inside a `void load()`, so the rejection vanished: the screen showed an
+empty list and no error — the worst pair of symptoms, because an empty list looks like data. Two fixes, and the
+second is the one to remember: the call site uses `query`, and the hook now catches and reports, because a
+rejected read must reach the screen. Its sibling is the shadowing trap `whales.ts` already documented: `Number`
+in a file that imports the number layer is the component, so `Number.parseInt` is a type error, not a parse.
+
+### 2.10 D7's discovery sort needed an endpoint, so it got one
+
+D7 says the discovery list's default sort must be risk-adjusted and must say so. The radar ranks by activity,
+profit, earliness and overlap; the risk-adjusted figure existed only inside a config's `sourceStats`, which is
+only visible *after* picking a source. The phase's first draft would have shipped a list that could not honour
+its own acceptance sentence. `GET /v1/copy/sources` closes it: rows from `copy_source_stats`, default sort
+`riskAdjusted`, the denominator and the division stated per row, the sample gate on the win rate, and the
+negative window returned as it is. The seed grew two sources so the claim is testable — the gambler has the
+largest net PnL and the worst risk-adjusted number, and `TestDiscovery` asserts it is not rank 1.
+
+### 2.11 Freshness on every surface, including the ones that are wrong about it
 
 `asOf` is the **age of the data** and `staleAfter` is derived from it; a no-store read may legitimately have
 `staleAfter == asOf`, which is why the gate's `c8` fails on `<` rather than `<=` (and on `<=` only when the
@@ -151,7 +172,7 @@ claim than "this is ten seconds old".
 
 * `docs/verification/P10-gate.txt` — the recorded gate run (10/10).
 * `python3 -m unittest discover -s tests` — 771 tests, 25 of them the radar's, 42 the terminal API's.
-* `cd web && npx vitest run` — 215 tests; the terminal owns 70 of them, file by file: `tape.test.ts` 21,
+* `cd web && npx vitest run` — 288 tests (32 files); the terminal owns 70 of them, file by file: `tape.test.ts` 21,
   `dossier.test.ts` 21, `whales.test.ts` 17, `DossierView.test.tsx` 7, `WhaleTracker.test.tsx` 4.
   `npm run i18n:check` — 474 keys, 0 missing, 0 dynamic.
 * `python3 tools/check-openapi.py` — 287 passed, 0 failed, over a 36-path contract.

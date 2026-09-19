@@ -405,6 +405,13 @@ on-chain address instead of offering an explorer link the API's own gate check f
 that the tape had been rendering its own keys — computed `t()` keys are invisible to the build check, so the panel
 now holds a literal copy table and the dictionary gained the 129 entries the terminal asks for.
 
+**Then the rest of the screens.** D6's portfolio (with a curve drawn by the same builder the dossier uses, after
+the gate refused a `.toFixed` in the new path code), D7's copy trading — which needed a new endpoint,
+`GET /v1/copy/sources`, because the phase's own acceptance sentence asks the discovery list to default to a
+risk-adjusted sort that nothing could produce — and D5's Wallet Radar, whose hook existed with no screen calling
+it. D8 and D9 stay in P11: there is no automation or alert endpoint in the P10 contract, and a rule builder over
+an API that does not exist is a mockup, not a feature.
+
 **`[UNVERIFIED]`.** No browser has been in the loop, so the 60 fps-under-live-load requirement, the resize
 persistence and mobile tab parity are claims about code, not measurements; D3, D4, D6, D7 screens are pending
 against APIs that are already gated, and D8/D9 wait on P11's rule engine. The record half of idempotency is open
