@@ -34,6 +34,24 @@ export function cents(value: number): Cents {
 }
 
 /**
+ * Micro-USDC (the API's integer unit for money, 10^6 per dollar) to cents, exactly.
+ *
+ * Money crosses the wire as `*Micro` integers because a JSON number loses the last unit of a large notional;
+ * the terminal therefore converts in ONE place rather than at each of the thirty call sites. The division is
+ * integer division on purpose: `micro / 10_000` would introduce a float on the way to a display value, which is
+ * the thing this file exists to prevent. Everything below a cent is dropped, which for USDC at cent scale is
+ * the same thing `formatCents` does when it rounds.
+ */
+export function microToCents(micro: number): Cents {
+  const v = integerUnits("micro", micro);
+  return cents(Math.trunc(v / 10_000));
+}
+
+export function centsToMicro(value: Cents): number {
+  return cents(value) * 10_000;
+}
+
+/**
  * Parse a decimal *string* — "1.5", "0.001", "-12.75" — into cents. Accepting a string is the point: JSON
  * from the API is parsed as a string, and a JS number has already lost the information about how many
  * decimals the caller meant. Anything past two decimals is a price, not money, and goes through
