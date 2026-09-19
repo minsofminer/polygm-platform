@@ -87,9 +87,30 @@ and each of the two paths that serves both a read and a write has **two** tables
 the key-required answer), an invariant `tools/check-openapi.py` checks per verb. One table per path would have
 forced one of the two verbs to declare a status it never returns.
 
-Still open, and stated rather than assumed: these routes **validate** the key but do not yet **record** it, so a
-replayed key will create a second config rather than returning the first answer. `idem.begin/finish` still
-covers `POST /v1/orders` only. Tracked in §5.
+The second half landed with the same review: the four routes now **record** the key. They run their work under
+`_idem_run(uid, key, body, rid, work)`, which is the module's vocabulary and nothing else — a key reused with a
+different body is `409 IDEM_CONFLICT` rather than a replay of an answer to a question nobody asked; a key whose
+first request is still running is `409 IDEM_IN_PROGRESS` (tested through `Record.busy`, because `state ==
+'in_progress'` is also true of the request that owns the row); and a replay returns the **stored** body verbatim,
+stamp included, so a retry cannot disagree with the answer it is retrying.
+
+Two things that shaped it. A refusal is **not** an outcome: when `work()` returns a `JSONResponse` from
+`err(...)` — the 409 `REFUSED` on guards, the 429 `QUOTA_EXCEEDED` on a scan, the 404 on an unknown source — the
+key is abandoned rather than stored, because a user who fixes the typo must be able to retry with the same key.
+And an exception abandons it too, since an `in_progress` row left behind answers every later attempt
+`IDEM_IN_PROGRESS` forever.
+
+The split between `_idem_shape` and `_idem_run` is deliberate and documented in both docstrings: a malformed key
+is a 4xx *about the request* and never touches the table; a well-formed key is a promise *about the outcome* and
+always does.
+
+Splitting the four handlers to make room for the wrapper is what broke them, and the way it broke them is worth
+recording: each `_*_work` function was inserted **above** its thin handler, so `@app.post` decorated the work
+function and FastAPI read `(rid, uid, body)` as required **query** parameters. Every call 422'd with
+`(query.rid, query.uid, query.work)`, and the only visible symptom was five new tests failing on a validation
+error that named fields no client had ever heard of. The lesson is cheap to state and was expensive to learn: a
+decorator and its handler are one unit, and the way to check is to ask the app which function each route points
+at, before running any test.
 
 ### 2.6 Money never becomes a float, in either direction
 
@@ -171,23 +192,22 @@ claim than "this is ten seconds old".
 ## 4. Where the numbers come from
 
 * `docs/verification/P10-gate.txt` — the recorded gate run (10/10).
-* `python3 -m unittest discover -s tests` — 771 tests, 25 of them the radar's, 42 the terminal API's.
+* `python3 -m unittest discover -s tests` — 783 tests, 25 of them the radar's, 54 the terminal API's (7 of those
+  the discovery endpoint, 5 the idempotency record half).
 * `cd web && npx vitest run` — 288 tests (32 files); the terminal owns 70 of them, file by file: `tape.test.ts` 21,
   `dossier.test.ts` 21, `whales.test.ts` 17, `DossierView.test.tsx` 7, `WhaleTracker.test.tsx` 4.
   `npm run i18n:check` — 474 keys, 0 missing, 0 dynamic.
-* `python3 tools/check-openapi.py` — 287 passed, 0 failed, over a 36-path contract.
+* `python3 tools/check-openapi.py` — 293 passed, 0 failed, over a 37-path contract.
 * Seeded tape (post `make migrate && make seed`): 159 markets, 1,090 fills, four wallets, 133 markets with ≥4
   fills.
 
 ## 5. Open, in the order it should be closed
 
-1. **The record half of idempotency** (§2.5): `idem.begin/finish` on the four P10 mutations, with a test that
-   replays a key and asserts one config exists.
-2. **D6, D7 screens** — the APIs are gated; the screens are the phase's remaining work (`/portfolio` and `/copy`
-   routes exist as shells from P08).
-3. **D8, D9** (automation and alerts) — the kit puts the rule engine in P11's scope; the P10 screens depend on
+1. **D8, D9** (automation and alerts) — the kit puts the rule engine in P11's scope; the P10 screens depend on
    that API, so they land with it rather than against a surface that does not exist.
-4. **A web-side gate check.** `c10` covers the radar's cost control; the D1–D9 components are covered by
-   `vitest` and `npm run build` under `p08`/`p09`. A gate check that reads the terminal's own components (the
-   60 fps claim, the resize persistence, the mobile tab parity) is the next one to add, and until then the
-   60 fps requirement is **`[UNVERIFIED]`** — no browser has been in the loop.
+2. **A web-side gate check.** `c10` covers the radar's cost control; the D1–D7 components are covered by
+   `vitest` and `npm run build`, which is not the same thing as a browser. A gate check that reads the terminal's
+   own components (the 60 fps claim, the resize persistence, the mobile tab parity) is the next one to add, and
+   until then the 60 fps requirement is **`[UNVERIFIED]`** — no browser has been in the loop.
+3. **The bundle hash in `docs/verification/P08-build.txt`** predates D1–D7; it needs one line re-recorded so the
+   P08 record and the shipped web build are the same artifact.

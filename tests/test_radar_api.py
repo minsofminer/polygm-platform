@@ -57,6 +57,12 @@ class RadarTestCase(unittest.TestCase):
         return out
 
     def scan_as(self, markets, uid, **kw):
+        """A scan as somebody else, which now needs the account to EXIST: a P10 write records its key in
+        idempotency_keys, and that table carries an FK to users — so a made-up uid spends the budget fine
+        (audit_log has no such FK) and then dies in the insert. Found by this test turning 500 after the
+        idempotency record half landed, which is the good version of the failure: the alternative is a
+        service that 500s for a real user whose row was deleted."""
+        self.app._db.execute("INSERT OR IGNORE INTO users (id, created_ms) VALUES (?,?)", (uid, self.app._now_ms()))
         return self.client.post("/v1/radar/runs", json={"marketIds": markets, **kw},
                                 headers={"X-User-Id": uid, "Idempotency-Key": "radar-" + uid[-6:] + "-1"})
 

@@ -367,7 +367,6 @@ def _on_crash(request: Request, exc: Exception):
                         headers={"Retry-After": "2"})
 
 
-
 def flags() -> Flags:
     """Every request reads the *store*, never the module-level FLAGS: a pod that cached the boot object at
     import time would never see an emergency flag change, which is the one thing flags are for."""
@@ -2758,7 +2757,6 @@ def get_whales(request: Request,
                     as_of_ms=(max((f["tsMs"] for f, _t, _s in rows), default=None)))
 
 
-
 # ------------------------------------------------------------------------ D3 · the trader's dossier
 WINDOW_DAYS = _tm.WINDOW_DAYS
 
@@ -3219,29 +3217,7 @@ def list_copy_sources(request: Request,
                     ttl_ms=0, stale_ms=0)
 
 
-@app.post("/v1/copy/configs", status_code=200, responses=COPY_CREATE_RESPONSES,
-           openapi_extra=_body_schema(COPY_CREATE_REQUIRED, COPY_CREATE_PROPS))
-def create_copy_config(request: Request, body: dict = Body(...),
-                       idempotency_key: str | None = Header(default=None, alias="Idempotency-Key")):
-    """Create a copy config. It is ALWAYS a dry run — and the response says so, in a field and in a sentence.
-
-    The prompt's rule is that the latency/slippage warning appears in the UI before the confirm. The API's half
-    of that promise is here: the response carries the warning and the source's record, and there is no field in
-    the create schema that turns copying live. Turning it live is a second call with two conditions on it.
-    """
-    rid = request.state.request_id
-    bad_key = _idem_shape(idempotency_key)
-    if bad_key is not None:
-        return bad_key
-    bad = _check_body(body, COPY_CREATE_REQUIRED, rid, allowed=tuple(COPY_CREATE_PROPS))
-    if bad is not None:
-        return bad
-    bad = _check_props(body, COPY_CREATE_PROPS, rid)
-    if bad is not None:
-        return bad
-    uid, _row, e = _principal(request)
-    if e:
-        return e
+def _create_copy_config_work(rid, uid, body):
     anon_id = str(body["sourceAnon"]).strip()
     source_wallet = _wallet_for_anon(anon_id)
     if source_wallet is None:
@@ -3268,30 +3244,34 @@ def create_copy_config(request: Request, body: dict = Body(...),
                     ttl_ms=0, stale_ms=0)
 
 
-@app.post("/v1/copy/configs/guards", status_code=200, responses=COPY_GUARD_RESPONSES,
-           openapi_extra=_body_schema(COPY_GUARD_REQUIRED, COPY_GUARD_PROPS))
-def set_copy_guards(request: Request, body: dict = Body(...),
-                    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key")):
-    """Set a config's guard rails, including turning dry-run OFF — the only path by which live copying begins.
+@app.post("/v1/copy/configs", status_code=200, responses=COPY_CREATE_RESPONSES,
+           openapi_extra=_body_schema(COPY_CREATE_REQUIRED, COPY_CREATE_PROPS))
+def create_copy_config(request: Request, body: dict = Body(...),
+                       idempotency_key: str | None = Header(default=None, alias="Idempotency-Key")):
+    """Create a copy config. It is ALWAYS a dry run — and the response says so, in a field and in a sentence.
 
-    Refused (409 `REFUSED`) unless the caller sends `acknowledgeSlippage: true` AND the config already has
-    dry-run events recorded. The second condition is the interesting one: nobody goes live before the system has
-    shown them, in their own account, what the strategy would have done. A dialog that asks "are you sure?"
-    costs nothing and prevents nothing; a required dry-run history is evidence.
+    The prompt's rule is that the latency/slippage warning appears in the UI before the confirm. The API's half
+    of that promise is here: the response carries the warning and the source's record, and there is no field in
+    the create schema that turns copying live. Turning it live is a second call with two conditions on it.
     """
     rid = request.state.request_id
     bad_key = _idem_shape(idempotency_key)
     if bad_key is not None:
         return bad_key
-    bad = _check_body(body, COPY_GUARD_REQUIRED, rid, allowed=tuple(COPY_GUARD_PROPS))
+    bad = _check_body(body, COPY_CREATE_REQUIRED, rid, allowed=tuple(COPY_CREATE_PROPS))
     if bad is not None:
         return bad
-    bad = _check_props(body, COPY_GUARD_PROPS, rid)
+    bad = _check_props(body, COPY_CREATE_PROPS, rid)
     if bad is not None:
         return bad
     uid, _row, e = _principal(request)
     if e:
         return e
+    return _idem_run(str(uid), str(idempotency_key), body, rid,
+                      lambda: _create_copy_config_work(rid, uid, body))
+
+
+def _set_copy_guards_work(rid, uid, body):
     cid = str(body["configId"])
     row = _config_owned(cid, str(uid))
     if row is None:
@@ -3373,9 +3353,10 @@ def _idem_shape(key: str | None) -> JSONResponse | None:
     of the contract exists to close ("an endpoint that is POST but idempotent by luck is how a retry
     double-spends"), and it was found by writing the radar tests, not by reading the contract.
 
-    What is still NOT here: these routes validate the key but do not yet *record* it, so a replayed key will
-    create a second config rather than returning the first answer. `idem.begin/finish` covers POST /v1/orders
-    only. It is recorded as an open item in docs/P10-frontend-terminal.md rather than left as an assumption.
+    Recording the key is the other half, and it lives in `_idem_run`: these four routes validate the shape here
+    and then run their work under the key, so a retry replays the first answer instead of creating a second
+    config. The split is deliberate — a malformed key is a 4xx about the request and never touches the table,
+    while a good key is a promise about the outcome and always does.
     """
     if not key:
         return err("IDEM_KEY_REQUIRED", "idem")
@@ -3383,6 +3364,77 @@ def _idem_shape(key: str | None) -> JSONResponse | None:
         return None
     return err("VALIDATION", "idem", where=["Idempotency-Key must be 8-128 chars of [A-Za-z0-9_-]"])
 
+
+@app.post("/v1/copy/configs/guards", status_code=200, responses=COPY_GUARD_RESPONSES,
+           openapi_extra=_body_schema(COPY_GUARD_REQUIRED, COPY_GUARD_PROPS))
+def set_copy_guards(request: Request, body: dict = Body(...),
+                    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key")):
+    """Set a config's guard rails, including turning dry-run OFF — the only path by which live copying begins.
+
+    Refused (409 `REFUSED`) unless the caller sends `acknowledgeSlippage: true` AND the config already has
+    dry-run events recorded. The second condition is the interesting one: nobody goes live before the system has
+    shown them, in their own account, what the strategy would have done. A dialog that asks "are you sure?"
+    costs nothing and prevents nothing; a required dry-run history is evidence.
+    """
+    rid = request.state.request_id
+    bad_key = _idem_shape(idempotency_key)
+    if bad_key is not None:
+        return bad_key
+    bad = _check_body(body, COPY_GUARD_REQUIRED, rid, allowed=tuple(COPY_GUARD_PROPS))
+    if bad is not None:
+        return bad
+    bad = _check_props(body, COPY_GUARD_PROPS, rid)
+    if bad is not None:
+        return bad
+    uid, _row, e = _principal(request)
+    if e:
+        return e
+    return _idem_run(str(uid), str(idempotency_key), body, rid,
+                      lambda: _set_copy_guards_work(rid, uid, body))
+
+
+def _idem_run(uid: str, key: str, body: dict, rid: str, work):
+    """Run a mutating P10 handler ONCE per Idempotency-Key.
+
+    Until this existed, the P10 writes validated the key's shape and then ignored it: a client whose request
+    timed out and retried created a second copy config, spent a second radar scan, or saved a second view —
+    which is precisely the failure an Idempotency-Key exists to prevent, and the one a user cannot see, because
+    both answers look successful.
+
+    The three refusals are the module's own, in its own vocabulary:
+
+      * `IDEM_CONFLICT` — the key was used for a DIFFERENT body. Serving the first answer would silently ignore
+        what this request asked for, so it is a 409 naming the reason and not a replay.
+      * `IDEM_IN_PROGRESS` — another request with this key is still running. `busy`, not `state == in_progress`:
+        the request that just inserted the row is also in_progress, and comparing the state alone makes every
+        first request a 409 against itself (a bug this repo has already paid for once, in the order route).
+      * a replay returns the STORED body, byte for byte, including its stamp — the answer the client would have
+        received, not a re-derived one that might disagree with it.
+
+    `work()` returns either a `dict` (success, 200) or a `JSONResponse` from `err(...)` (a refusal). A refusal
+    abandons the key, because a user who fixes the typo must be able to retry: an abandoned key costs one row,
+    a poisoned one costs the user the feature until a janitor sweeps it.
+    """
+    idem = Idem(_db)
+    rec = idem.begin(uid, key, body)
+    if rec.mismatch:
+        return err("IDEM_CONFLICT", rid)
+    if rec.busy:
+        return err("IDEM_IN_PROGRESS", rid)
+    if rec.replay:
+        return JSONResponse(json.loads(rec.response_json), status_code=200)
+    try:
+        out = work()
+    except Exception:
+        # Never leave an in_progress row behind an exception: the client's retry would be answered
+        # IDEM_IN_PROGRESS forever.
+        idem.abandon(uid, key)
+        raise
+    if isinstance(out, JSONResponse):
+        idem.abandon(uid, key)
+        return out
+    idem.finish(uid, key, out)
+    return out
 
 @app.get("/v1/copy/configs/monitor", responses=COPY_MONITOR_RESPONSES)
 def copy_monitor(request: Request, configId: str = Query(min_length=1, max_length=64),
@@ -3428,7 +3480,6 @@ def copy_monitor(request: Request, configId: str = Query(min_length=1, max_lengt
                      "sourceStats": _source_stats(_anon(source)),
                      "skipReasons": sorted({r["reason"] for r in skipped if r["reason"]})},
                     ttl_ms=0, stale_ms=0)
-
 
 
 # ------------------------------------------------------------------------ D6 · the portfolio
@@ -3600,35 +3651,7 @@ def list_whale_views(request: Request,
     return _stamped({"items": items, "count": len(items)}, ttl_ms=0, stale_ms=0)
 
 
-@app.post("/v1/whale-views", status_code=200, responses=WHALE_VIEW_RESPONSES,
-           openapi_extra=_body_schema(WHALE_VIEW_REQUIRED, WHALE_VIEW_PROPS))
-def create_whale_view(request: Request, body: dict = Body(...),
-                      idempotency_key: str | None = Header(default=None, alias="Idempotency-Key")):
-    """D4's saved view, plus the inline alert rule it may create.
-
-    The body follows the contract: `name` is the only required field, the filters are three flat knobs
-    (`minSeverity`, `minNotionalMicro`, `multiple`) and `marketId` decides the scope. A `channel` is what makes
-    a view NOTIFY - and a notifying view with no market is refused with 409 `REFUSED`, because `alert_rules`
-    carries a `rule_has_target` CHECK: a rule with no target matches everything and therefore fires on
-    everything, and the API's job is to say so rather than to invent a wildcard that the database would then
-    reject five layers down.
-
-    Alert-rule creation is inline (`channel` given) because D4 asks for it inline: a form that posts to a second
-    endpoint is a form that loses what the user just typed.
-    """
-    rid = request.state.request_id
-    bad_key = _idem_shape(idempotency_key)
-    if bad_key is not None:
-        return bad_key
-    bad = _check_body(body, WHALE_VIEW_REQUIRED, rid, allowed=tuple(WHALE_VIEW_PROPS))
-    if bad is not None:
-        return bad
-    bad = _check_props(body, WHALE_VIEW_PROPS, rid)
-    if bad is not None:
-        return bad
-    uid, _row, e = _principal(request)
-    if e:
-        return e
+def _create_whale_view_work(rid, uid, body):
     market_id = body.get("marketId")
     if market_id is not None and _db.execute("SELECT 1 FROM markets WHERE id=?",
                                              (str(market_id),)).fetchone() is None:
@@ -3676,6 +3699,39 @@ def create_whale_view(request: Request, body: dict = Body(...),
                      "note": ("a saved view without a channel is a filter you look at; with one it is an alert."
                               " This one is %s." % ("bound to a rule" if rule_id else "a filter only"))},
                     ttl_ms=0, stale_ms=0)
+
+
+@app.post("/v1/whale-views", status_code=200, responses=WHALE_VIEW_RESPONSES,
+           openapi_extra=_body_schema(WHALE_VIEW_REQUIRED, WHALE_VIEW_PROPS))
+def create_whale_view(request: Request, body: dict = Body(...),
+                      idempotency_key: str | None = Header(default=None, alias="Idempotency-Key")):
+    """D4's saved view, plus the inline alert rule it may create.
+
+    The body follows the contract: `name` is the only required field, the filters are three flat knobs
+    (`minSeverity`, `minNotionalMicro`, `multiple`) and `marketId` decides the scope. A `channel` is what makes
+    a view NOTIFY - and a notifying view with no market is refused with 409 `REFUSED`, because `alert_rules`
+    carries a `rule_has_target` CHECK: a rule with no target matches everything and therefore fires on
+    everything, and the API's job is to say so rather than to invent a wildcard that the database would then
+    reject five layers down.
+
+    Alert-rule creation is inline (`channel` given) because D4 asks for it inline: a form that posts to a second
+    endpoint is a form that loses what the user just typed.
+    """
+    rid = request.state.request_id
+    bad_key = _idem_shape(idempotency_key)
+    if bad_key is not None:
+        return bad_key
+    bad = _check_body(body, WHALE_VIEW_REQUIRED, rid, allowed=tuple(WHALE_VIEW_PROPS))
+    if bad is not None:
+        return bad
+    bad = _check_props(body, WHALE_VIEW_PROPS, rid)
+    if bad is not None:
+        return bad
+    uid, _row, e = _principal(request)
+    if e:
+        return e
+    return _idem_run(str(uid), str(idempotency_key), body, rid,
+                      lambda: _create_whale_view_work(rid, uid, body))
 
 
 # ---------------------------------------------------------------- D5 · Wallet Radar
@@ -3830,31 +3886,7 @@ def _radar_payload(uid: str, market_ids: list[str], ranking: str, *, cached: boo
                          % (_radar.CACHE_TTL_MS // 1000, RADAR_ASYNC_AT))}
 
 
-@app.post("/v1/radar/runs", status_code=200, responses=RADAR_RESPONSES,
-          openapi_extra=_body_schema(RADAR_REQUIRED, RADAR_PROPS))
-def create_radar_run(request: Request, body: dict = Body(...),
-                     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key")):
-    """D5: up to ten markets in, four rankings out, with the sample gate on the profit list and the account's
-    scan budget stated in the answer.
-
-    The order of the decisions matters and is the order below: shape, identity, scope, budget, cache, then work.
-    A scan that is refused for budget must not have enqueued a job first, and a cached scan must not spend
-    budget - both of those are refusals a user can see, so both of them are checked before anything else is
-    written.
-    """
-    rid = request.state.request_id
-    bad_key = _idem_shape(idempotency_key)
-    if bad_key is not None:
-        return bad_key
-    bad = _check_body(body, RADAR_REQUIRED, rid, allowed=tuple(RADAR_PROPS))
-    if bad is not None:
-        return bad
-    bad = _check_props(body, RADAR_PROPS, rid)
-    if bad is not None:
-        return bad
-    uid, _row, e = _principal(request)
-    if e:
-        return e
+def _create_radar_run_work(rid, uid, body):
     raw = body.get("marketIds")
     if raw is not None and not isinstance(raw, list):
         return err("RADAR_SCOPE", rid, detail="marketIds must be an array of market ids")
@@ -3890,6 +3922,35 @@ def create_radar_run(request: Request, body: dict = Body(...),
     payload = _radar_payload(uid, market_ids, ranking, cached=False, job_id=None)
     payload["status"] = "done"
     return _stamped(payload, ttl_ms=0, stale_ms=2_000, as_of_ms=_now_ms())
+
+
+@app.post("/v1/radar/runs", status_code=200, responses=RADAR_RESPONSES,
+          openapi_extra=_body_schema(RADAR_REQUIRED, RADAR_PROPS))
+def create_radar_run(request: Request, body: dict = Body(...),
+                     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key")):
+    """D5: up to ten markets in, four rankings out, with the sample gate on the profit list and the account's
+    scan budget stated in the answer.
+
+    The order of the decisions matters and is the order below: shape, identity, scope, budget, cache, then work.
+    A scan that is refused for budget must not have enqueued a job first, and a cached scan must not spend
+    budget - both of those are refusals a user can see, so both of them are checked before anything else is
+    written.
+    """
+    rid = request.state.request_id
+    bad_key = _idem_shape(idempotency_key)
+    if bad_key is not None:
+        return bad_key
+    bad = _check_body(body, RADAR_REQUIRED, rid, allowed=tuple(RADAR_PROPS))
+    if bad is not None:
+        return bad
+    bad = _check_props(body, RADAR_PROPS, rid)
+    if bad is not None:
+        return bad
+    uid, _row, e = _principal(request)
+    if e:
+        return e
+    return _idem_run(str(uid), str(idempotency_key), body, rid,
+                      lambda: _create_radar_run_work(rid, uid, body))
 
 
 @app.get("/v1/radar/runs/{job_id}", responses=RADAR_JOB_RESPONSES)

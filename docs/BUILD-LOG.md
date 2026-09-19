@@ -412,10 +412,31 @@ risk-adjusted sort that nothing could produce — and D5's Wallet Radar, whose h
 it. D8 and D9 stay in P11: there is no automation or alert endpoint in the P10 contract, and a rule builder over
 an API that does not exist is a mockup, not a feature.
 
+**Then the idempotency record half, and the way it broke.** The four P10 mutations validated the
+`Idempotency-Key` and then ignored it, so a client whose request timed out and retried created a second copy
+config, spent a second radar scan, or saved a second view — the failure the header exists to prevent, and the
+one a user cannot see, because both answers look successful. They now run under `_idem_run`: a conflicting body
+is `409 IDEM_CONFLICT`, a key still running is `409 IDEM_IN_PROGRESS` (through `Record.busy`, not
+`state == 'in_progress'`), and a replay returns the **stored** body verbatim. A refusal abandons the key instead
+of storing it — a user who fixes the typo must be able to retry — and an exception abandons it too, because an
+`in_progress` row left behind answers every later attempt `IDEM_IN_PROGRESS` forever.
+
+Splitting the four handlers to make room for the wrapper is where it went wrong, and the shape of the failure is
+the lesson: each `_*_work` function was inserted **above** its thin handler, so `@app.post` decorated the work
+function and FastAPI read `(rid, uid, body)` as required **query** parameters. Every call 422'd naming fields no
+client had ever heard of, four routes silently disappeared, and a decorator strayed onto a helper. The check that
+would have caught it in one second — ask the app which function each route points at, before running any test —
+is now the first thing done after touching a route. A second finding came out of the same change: the radar's
+budget test creates its own account, and the new `idempotency_keys` row hits an FK to `users`, so a made-up uid
+that spent budget fine now 500'd. The test creates the account; a real user always has a row.
+
+**Verified at the idempotency commit.** `python3 -m unittest discover -s tests` **783 tests OK**; `make p10`
+**10/10** re-recorded to `docs/verification/P10-gate.txt`; `check-openapi` **293 passed, 0 failed** over a
+37-path contract.
+
 **`[UNVERIFIED]`.** No browser has been in the loop, so the 60 fps-under-live-load requirement, the resize
-persistence and mobile tab parity are claims about code, not measurements; D3, D4, D6, D7 screens are pending
-against APIs that are already gated, and D8/D9 wait on P11's rule engine. The record half of idempotency is open
-and stated in the doc's §5. No real funds: per `docs/AGENTS-BUILD.md`, money waits for P13 and P14.
+persistence and mobile tab parity are claims about code, not measurements; D8/D9 wait on P11's rule engine. No
+real funds: per `docs/AGENTS-BUILD.md`, money waits for P13 and P14.
 
 ## P07 — the security plane · 2026-09-18
 

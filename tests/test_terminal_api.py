@@ -415,6 +415,87 @@ class TestCopy(TerminalBase):
         self.assertEqual(r.status_code, 404)
 
 
+class TestIdempotency(TerminalBase):
+    """A retry is a retry, not a second purchase.
+
+    Every P10 write validated the key's shape and then ignored it, so a client whose request timed out and
+    retried created a second config. These tests send the SAME key twice and assert the second answer is the
+    first answer — plus the 409 that stops a key being reused for a different body, because serving the first
+    answer to a different question would be worse than the duplicate it replaced.
+    """
+
+    def _two(self, url, body, key):
+        hdrs = {**USER, "Idempotency-Key": key}
+        first = self.client.post(url, json=body, headers=hdrs)
+        second = self.client.post(url, json=body, headers=hdrs)
+        return first, second
+
+    def test_a_replayed_config_creation_returns_the_first_config(self):
+        src = self.get("/v1/copy/sources", windowDays=30)["rows"][0]["anonWallet"]
+        body = {"sourceAnon": src, "maxOrderMicro": 100_000_000, "maxDailyMicro": 400_000_000}
+        first, second = self._two("/v1/copy/configs", body, "tapi-idem-config-1")
+        self.assertEqual(first.status_code, 200, first.text[:200])
+        self.assertEqual(second.status_code, 200, second.text[:200])
+        self.assertEqual(first.json()["configId"], second.json()["configId"])
+        # And the replay did not create a second row under a different id.
+        listed = [c["configId"] for c in self.get("/v1/copy/configs")["items"]]
+        self.assertEqual(listed.count(first.json()["configId"]), 1)
+
+    def test_the_same_key_with_a_different_body_is_a_conflict(self):
+        src = self.get("/v1/copy/sources", windowDays=30)["rows"][0]["anonWallet"]
+        key = "tapi-idem-config-2"
+        hdrs = {**USER, "Idempotency-Key": key}
+        self.client.post("/v1/copy/configs", json={"sourceAnon": src, "maxOrderMicro": 100_000_000,
+                                                   "maxDailyMicro": 400_000_000}, headers=hdrs)
+        again = self.client.post("/v1/copy/configs", json={"sourceAnon": src, "maxOrderMicro": 200_000_000,
+                                                           "maxDailyMicro": 400_000_000}, headers=hdrs)
+        self.assertEqual(again.status_code, 409)
+        self.assertEqual(again.json()["error"]["code"], "IDEM_CONFLICT")
+
+    def test_a_refused_request_does_not_poison_its_key(self):
+        """The typo case: a valid-shape request that the STATE refuses must abandon the key, or the user cannot
+        fix the request and retry."""
+        key = "tapi-idem-config-3"
+        hdrs = {**USER, "Idempotency-Key": key}
+        bad = self.client.post("/v1/copy/configs", json={"sourceAnon": "w_deadbeef00",
+                                                         "maxOrderMicro": 100_000_000,
+                                                         "maxDailyMicro": 400_000_000}, headers=hdrs)
+        self.assertEqual(bad.status_code, 404)
+        src = self.get("/v1/copy/sources", windowDays=30)["rows"][0]["anonWallet"]
+        good = self.client.post("/v1/copy/configs", json={"sourceAnon": src, "maxOrderMicro": 100_000_000,
+                                                          "maxDailyMicro": 400_000_000}, headers=hdrs)
+        self.assertEqual(good.status_code, 200, "the key stayed poisoned after a refusal")
+
+    def test_a_replayed_scan_does_not_spend_a_second_scan(self):
+        # The three busiest markets, read from the tape's own facets rather than from SQL: a test that reaches
+        # into the database is a test that can pass while the API's own read is broken.
+        facets = self.get("/v1/tape/facets", windowMs=86_400_000)
+        markets = [m["marketId"] for m in (facets.get("markets") or [])[:3]]
+        self.assertEqual(len(markets), 3)
+        key = "tapi-idem-radar-1"
+        hdrs = {**USER, "Idempotency-Key": key}
+        body = {"marketIds": markets, "ranking": "active"}
+        first = self.client.post("/v1/radar/runs", json=body, headers=hdrs)
+        self.assertEqual(first.status_code, 200, first.text[:200])
+        used_after_first = first.json()["quota"]["usedToday"]
+        second = self.client.post("/v1/radar/runs", json=body, headers=hdrs)
+        self.assertEqual(second.status_code, 200)
+        # The stored answer, byte for byte: same stamp, same numbers - and no second scan charged.
+        self.assertEqual(first.json()["quota"]["usedToday"], second.json()["quota"]["usedToday"])
+        self.assertEqual(second.json()["quota"]["usedToday"], used_after_first)
+
+    def test_a_replayed_view_is_not_saved_twice(self):
+        key = "tapi-idem-view-1"
+        hdrs = {**USER, "Idempotency-Key": key}
+        body = {"name": "idem view", "minSeverity": "notice"}
+        first = self.client.post("/v1/whale-views", json=body, headers=hdrs)
+        second = self.client.post("/v1/whale-views", json=body, headers=hdrs)
+        self.assertEqual(first.status_code, 200, first.text[:200])
+        self.assertEqual(first.json()["viewId"], second.json()["viewId"])
+        names = [v["name"] for v in self.get("/v1/whale-views")["items"]]
+        self.assertEqual(names.count("idem view"), 1)
+
+
 class TestDiscovery(TerminalBase):
     """D7's discovery list: a sort that is allowed to be wrong about the biggest number.
 

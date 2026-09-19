@@ -1,22 +1,22 @@
 # P10 gate — recorded by tools/p10-gate-check.py
 
-PASS    1702 ms  the contract, the router and the authz table agree on P10's eleven operations
-        check-openapi: 287 passed, 0 failed; paths in the contract 9/9, in TABLE_FOR_PATH 9/9; public 4/4, user 7/7
-PASS     204 ms  no P10 payload carries an address, and every wallet field is a pseudonym
+PASS    1712 ms  the contract, the router and the authz table agree on P10's twelve operations
+        check-openapi: 293 passed, 0 failed; paths in the contract 10/10, in TABLE_FOR_PATH 10/10; public 4/4, user 8/8
+PASS     201 ms  no P10 payload carries an address, and every wallet field is a pseudonym
         9 payloads scanned (all 200); 0 findings
-PASS      50 ms  every win rate is gated, every curve point carries its drawdown, and the method is stated
+PASS      42 ms  every win rate is gated, every curve point carries its drawdown, and the method is stated
         windows: 1 under the gate (7d), 3 over it (30d,90d,all); curve points 26; max drawdown 2400000000; 0 findings
-PASS     107 ms  the whale threshold is relative-with-a-floor, stated on every row, and severity is a ratio
+PASS      99 ms  the whale threshold is relative-with-a-floor, stated on every row, and severity is a ratio
         floor 500000000, window threshold 500000000 (reason absolute_floor); 3 whale rows, severities info,notice,urgent; 0 findings
-PASS      46 ms  a copy config is a dry run by construction, and going live needs an acknowledgement AND history
-        created cfg-aa03b9eb32ce, live-field 422, no-ack 409, ack-only 409, with-history 200; monitor live 12 / wouldDo 5, skip reasons category_filtered,daily_cap_reached,moved_past_limit,resolved_soon; 0 findings
-PASS      41 ms  a notifying view carries a market target and its rule ships with a fire budget
-        scoped rule wr-71469f029c80 (fires 2), global-notify 409, filter-only 200, unknown market 404, 4 views listed; 0 findings
-PASS     102 ms  the money path is integers, the wire's money is decimal strings
+PASS      43 ms  a copy config is a dry run by construction, and going live needs an acknowledgement AND history
+        created cfg-ef0c07318142, live-field 422, no-ack 409, ack-only 409, with-history 200; monitor live 12 / wouldDo 5, skip reasons category_filtered,daily_cap_reached,moved_past_limit,resolved_soon; 0 findings
+PASS      40 ms  a notifying view carries a market target and its rule ships with a fire budget
+        scoped rule wr-1b09d650476a (fires 2), global-notify 409, filter-only 200, unknown market 404, 4 views listed; 0 findings
+PASS     138 ms  the money path is integers, the wire's money is decimal strings
         metrics.py 381 lines scanned; 50 tape rows and 81 positions checked; 0 findings
-PASS     119 ms  every P10 read is stamped with the data's clock, not the answer's
+PASS     113 ms  every P10 read is stamped with the data's clock, not the answer's
         8 reads; 0 findings
-PASS      62 ms  a new user can walk whale -> dossier -> dry-run copy -> slippage, on the API alone
-        facets state the whale rule (threshold 500000000: whale = max(the p99.5 fill of this market's 1065 fills ($150) | the tape filter at that threshold found 3 fill(s); the first is w_5c037b2ab8 at $25000.00 | the win rate is 76.3% over 38 settled markets (gate 20) | the curve carries its drawdown (worst $0.00) | the copy config cfg-bd9668210ec0 exists in dry-run | the slippage risk is stated before the confirm: we have copied this source 0 times, so there is no slippage history to show; that is not t
-PASS      43 ms  a scan is cached, budgeted, refused past the limit, enqueued when large, and keyed
-        two markets -> 4 rankings; quota 1/100 on the trader plan | the same two markets, reversed, came from the cache and spent nothing | twelve markets: 422 with the limit stated (the market selection is outside what a radar scan accepts: r) | eight markets ran as job rr-382a3ff81852 and finished with 4 rankings | a scan with no Idempotency-Key is 400 before anything runs
+PASS      59 ms  a new user can walk whale -> dossier -> dry-run copy -> slippage, on the API alone
+        facets state the whale rule (threshold 500000000: whale = max(the p99.5 fill of this market's 1065 fills ($150) | the tape filter at that threshold found 3 fill(s); the first is w_5c037b2ab8 at $25000.00 | the win rate is 76.3% over 38 settled markets (gate 20) | the curve carries its drawdown (worst $0.00) | the copy config cfg-421e7f741c56 exists in dry-run | the slippage risk is stated before the confirm: we have copied this source 0 times, so there is no slippage history to show; that is not t
+PASS      41 ms  a scan is cached, budgeted, refused past the limit, enqueued when large, and keyed
+        two markets -> 4 rankings; quota 1/100 on the trader plan | the same two markets, reversed, came from the cache and spent nothing | twelve markets: 422 with the limit stated (the market selection is outside what a radar scan accepts: r) | eight markets ran as job rr-25a52b4e0b1c and finished with 4 rankings | a scan with no Idempotency-Key is 400 before anything runs
