@@ -19,8 +19,8 @@ verified one endpoint at a time is a chain nobody has ever walked.
 |---|---------|-------|
 | D1 | three-column terminal: left rail, centre (chart + Activity/Traders/Holders), right rail, resizable and collapsible, per-user persistence, mobile as tabs | frame built (`web/src/terminal/TerminalLayout.tsx`), panels not all wired |
 | D2 | live tape: filters (absolute **and** market-relative notional), classification badges with their rule, virtualised, coalesced at 20+ fills/s, "paused — N new", click → market, shift-click → watchlist, sound off by default | built (`web/src/terminal/TapePanel.tsx`, `tape.ts`, `useTerminal.ts`), 21 unit tests |
-| D3 | trader dossier: four windows of one metric set, PnL curve with a mandatory drawdown overlay, behaviour labels with methodology + disclaimer, "insufficient sample" instead of a win rate below the gate | **built** (`src/terminal/{dossier.ts,DossierView.tsx}`, `app/trader/[anon]/page.tsx`), 26 unit + 7 render tests |
-| D4 | whale tracker: threshold feed, saved views with channel/severity, per-market and global, severity formula stated, inline alert-rule creation | **built** (`src/terminal/{whales.ts,WhaleTracker.tsx}`, `app/whales/page.tsx`), 20 unit + 4 render tests |
+| D3 | trader dossier: four windows of one metric set, PnL curve with a mandatory drawdown overlay, behaviour labels with methodology + disclaimer, "insufficient sample" instead of a win rate below the gate | **built** (`src/terminal/{dossier.ts,DossierView.tsx}`, `app/trader/[anon]/page.tsx`), 21 unit + 7 render tests |
+| D4 | whale tracker: threshold feed, saved views with channel/severity, per-market and global, severity formula stated, inline alert-rule creation | **built** (`src/terminal/{whales.ts,WhaleTracker.tsx}`, `app/whales/page.tsx`), 17 unit + 4 render tests |
 | D5 | Wallet Radar: ≤10 markets, four rankings, row = wallet + matched markets + bought/sold + realised PnL + win rate + classification, one-click track/follow/copy/open, cost control | **API built and gated** (`packages/polygm_core/radar/rankings.py`, `POST /v1/radar/runs`, `GET /v1/radar/runs/{job_id}`), 25 tests; screen pending |
 | D6 | portfolio: positions with mark and unrealised, negRisk groups, order history with `unknown` rows marked, PnL curve + benchmark, CSV export, empty state | API built and gated (`/v1/me/portfolio`); screen pending |
 | D7 | copy trading: risk-adjusted discovery (and saying so), the config panel, the slip warning **before** confirm, monitor with skip reasons, pause/stop | API built and gated (`/v1/copy/configs*`); screen pending |
@@ -151,8 +151,9 @@ claim than "this is ten seconds old".
 
 * `docs/verification/P10-gate.txt` — the recorded gate run (10/10).
 * `python3 -m unittest discover -s tests` — 771 tests, 25 of them the radar's, 42 the terminal API's.
-* `cd web && npx vitest run` — 215 tests; the terminal owns 70 of them (21 tape, 26 dossier, 20 whales, plus 11
-  render tests over the two screens). `npm run i18n:check` — 474 keys, 0 missing, 0 dynamic.
+* `cd web && npx vitest run` — 215 tests; the terminal owns 70 of them, file by file: `tape.test.ts` 21,
+  `dossier.test.ts` 21, `whales.test.ts` 17, `DossierView.test.tsx` 7, `WhaleTracker.test.tsx` 4.
+  `npm run i18n:check` — 474 keys, 0 missing, 0 dynamic.
 * `python3 tools/check-openapi.py` — 287 passed, 0 failed, over a 36-path contract.
 * Seeded tape (post `make migrate && make seed`): 159 markets, 1,090 fills, four wallets, 133 markets with ≥4
   fills.
