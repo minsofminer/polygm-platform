@@ -121,12 +121,15 @@ describe("drawdown beside the equity it belongs to", () => {
 
   it("draws the region from the peak the curve fell from, never from zero", () => {
     const geo = curveGeometry(portfolio().pnlCurve, 100 * MICRO);
-    expect(geo.line.startsWith("M")).toBe(true);
-    expect(geo.drawdown.endsWith("Z")).toBe(true);
-    // Two vertices per point and one close: a polygon that dropped the peak walk would be shorter.
-    expect(geo.drawdown.split("L").length).toBe(portfolio().pnlCurve.length * 2);
-    expect(geo.zeroY).not.toBeNull();
+    // Point strings, the same shape the dossier draws: `x,y x,y …` with the drawdown walking the peaks.
+    expect(geo.pnl.split(" ").length).toBe(portfolio().pnlCurve.length);
+    expect(geo.drawdown.split(" ").length).toBe(portfolio().pnlCurve.length * 2);
+    expect(Number.isFinite(geo.zeroY)).toBe(true);
     expect(geo.benchmarkY).not.toBeNull();
+    // No float ever reaches the path: every coordinate is a whole number of viewBox units.
+    for (const pair of `${geo.pnl} ${geo.drawdown}`.split(" ")) {
+      expect(pair).toMatch(/^-?\d+,-?\d+$/);
+    }
   });
 
   it("declines to draw a benchmark when nothing is deposited", () => {

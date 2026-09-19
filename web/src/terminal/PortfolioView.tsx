@@ -278,10 +278,11 @@ function Curve({ book }: { book: Portfolio }) {
     return <p role="status">{t("terminal.portfolio.curveEmpty")}</p>;
   }
   return (
-    <svg aria-label={t("terminal.portfolio.curveAria")} role="img" viewBox="0 0 640 170">
-      <path className="pgm-chart-drawdown" d={geo.drawdown} />
-      <path className="pgm-chart-line" d={geo.line} />
-      {geo.zeroY !== null ? <line className="pgm-chart-zero" x1="0" x2="640" y1={geo.zeroY} y2={geo.zeroY} /> : null}
+    <svg aria-label={t("terminal.portfolio.curveAria")} role="img" viewBox="0 0 640 170" preserveAspectRatio="none">
+      {/* The shade first, so the cash line reads on top of its own drawdown rather than under it. */}
+      <polygon className="pgm-chart-drawdown" points={geo.drawdown} />
+      <polyline className="pgm-chart-line" points={geo.pnl} />
+      <line className="pgm-chart-zero" x1="0" x2="640" y1={geo.zeroY} y2={geo.zeroY} />
       {geo.benchmarkY !== null ? (
         <line className="pgm-chart-zero" x1="0" x2="640" y1={geo.benchmarkY} y2={geo.benchmarkY} strokeDasharray="6 3" />
       ) : null}

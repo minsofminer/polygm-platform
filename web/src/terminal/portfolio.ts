@@ -20,6 +20,7 @@
  * the file cannot disagree with the screen it was downloaded from.
  */
 import { formatCents, microToCents } from "@/money/cents";
+import { curvePoints as sharedCurvePoints } from "./tape";
 import type { CurvePoint, NegRiskGroup, Portfolio, PortfolioPosition } from "./wire";
 
 export type Tone = "good" | "bad" | "unknown" | null;
@@ -201,48 +202,37 @@ export function csvFilename(nowMs: number): string {
 }
 
 /**
- * The curve's geometry: the cash line, the drawdown region under it, and the benchmark.
+ * The curve's geometry.
  *
- * The drawdown polygon is drawn from the peak the curve was at, not from zero: an area chart from zero would
- * make a 4% drawdown on a $10k curve look like a cliff, and the number the eye reads has to be the number the
- * table states.
+ * The line and the drawdown shade come from the SAME builder the dossier uses (`curvePoints` in `tape.ts`), and
+ * that is a rule rather than a convenience: two screens drawing one shape from two sets of arithmetic is how a
+ * drawdown stops matching its own PnL line. The benchmark is the only line this screen adds, and it is a
+ * horizontal one, so it needs one number rather than a path.
+ *
+ * Nothing here rounds money. A curve's y-coordinate is geometry, and it is computed from the integer micro
+ * values the payload already carries — the money itself is never a float, and the gate (c7) refuses `.toFixed`
+ * anywhere outside `src/money/` for exactly this reason.
  */
 export type CurveGeometry = {
-  line: string;
+  pnl: string;
   drawdown: string;
-  zeroY: number | null;
+  zeroY: number;
   benchmarkY: number | null;
   min: number;
   max: number;
 };
 
 export function curveGeometry(points: CurvePoint[], benchmarkMicro: number | null, width = 640, height = 170): CurveGeometry {
-  const pad = 8;
-  if (points.length === 0) {
-    return { line: "", drawdown: "", zeroY: null, benchmarkY: null, min: 0, max: 0 };
-  }
-  const values = points.map((p) => p.cumMicro);
-  if (benchmarkMicro !== null) values.push(benchmarkMicro);
-  let min = Math.min(...values, 0);
-  let max = Math.max(...values, 0);
-  if (min === max) max = min + 1;
-  const span = max - min;
-  const x = (i: number) => (points.length === 1 ? width / 2 : (i / (points.length - 1)) * width);
-  const y = (micro: number) => height - pad - ((micro - min) / span) * (height - pad * 2);
-  const line = points.map((p, i) => `${i === 0 ? "M" : "L"}${x(i).toFixed(1)},${y(p.cumMicro).toFixed(1)}`).join(" ");
-  // Back along the peaks, right to left: the region between the curve and the high-water mark it fell from.
-  let back = "";
-  for (let i = points.length - 1; i >= 0; i -= 1) {
-    const p = points[i]!;
-    back += ` L${x(i).toFixed(1)},${y(p.peakMicro).toFixed(1)}`;
-  }
+  const shared = sharedCurvePoints(points, width, height);
+  const span = shared.max - shared.min || 1;
+  const yOf = (micro: number) => Math.round(height - ((micro - shared.min) / span) * height);
   return {
-    line,
-    drawdown: `${line} ${back} Z`,
-    zeroY: min <= 0 && max >= 0 ? y(0) : null,
-    benchmarkY: benchmarkMicro === null ? null : y(benchmarkMicro),
-    min,
-    max,
+    pnl: shared.pnl,
+    drawdown: shared.drawdown,
+    zeroY: yOf(0),
+    benchmarkY: benchmarkMicro === null ? null : yOf(benchmarkMicro),
+    min: shared.min,
+    max: shared.max,
   };
 }
 
