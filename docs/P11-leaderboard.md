@@ -1,9 +1,11 @@
 # P11 — Leaderboard, Rankings & Referrals
 
-Status: **D1 and D2 built.** D1 is the specification, the integrity rules and the ranking engine (17 unit tests);
-D2 is the rankings API, the population the boards are demonstrated on, and the read path they are ranked from
-(20 + 28 tests, and `check-openapi` at 405/0). D3–D7 are next: the profile integration, self-rank and privacy,
-referrals, the public SSR pages, and the anti-gaming dashboard. This file is written as the phase is built.
+Status: **D1 and D2 built**, verified by `tools/p11-gate-check.py` at **14/14** (8/8 scanners canaried,
+`docs/verification/P11-gate.txt`) with the whole backend suite at **890 tests OK** and `check-openapi` at 405/0.
+D1 is the specification, the integrity rules and the ranking engine; D2 is the rankings API, the population the
+boards are demonstrated on, and the read path they are ranked from. D3–D7 are next: the profile integration,
+self-rank and privacy, referrals, the public SSR pages, and the anti-gaming dashboard. This file is written as
+the phase is built.
 
 The phase's acceptance sentence, from the kit, is the thing everything below is arranged around:
 
@@ -20,7 +22,7 @@ better rank — is the one a user reports as a bug.
 
 | # | Deliverable | State |
 |---|-------------|-------|
-| D1 | leaderboard specification: six boards, formula per board, eligibility gate, windows, tie-breaks, recompute cadence; integrity rules (wash, copy farms, provisional, blown-up, lucky-gambler share, disputed markets) | **built** — `packages/polygm_core/leaderboard/{boards,integrity,rank}.py`, 15 unit tests; `0013_leaderboard.sql` + its SQLite twin |
+| D1 | leaderboard specification: six boards, formula per board, eligibility gate, windows, tie-breaks, recompute cadence; integrity rules (wash, copy farms, provisional, blown-up, lucky-gambler share, disputed markets) | **built** — `packages/polygm_core/leaderboard/{boards,integrity,rank}.py`, 20 unit tests; `0013_leaderboard.sql` + its SQLite twin |
 | D2 | the rankings API: boards, rows with components, unranked-with-reasons, methodology, snapshots, the worker's recompute | **built** — `GET /v1/leaderboard{,/boards,/methodology,/why,/snapshots,/runs}` + `POST /v1/leaderboard/recompute`; `leaderboard/source.py`; `services/api/seed_leaderboard.py`; 20 + 28 tests |
 | D3 | profile integration: rank badge, 30-day rank sparkline, "why this rank", follow/copy from the row, compare up to 3 | not started |
 | D4 | self-rank: your own position on every board, pinned when off-page, the unranked state, private-by-default with an opt-in | not started |
