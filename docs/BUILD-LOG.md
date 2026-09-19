@@ -320,3 +320,78 @@ semantics are pinned against the mock and the pinned client, and a real venue ch
 on-chain `OrderFilled` measurement has a table, a job and an idempotent write but no live RPC in CI, so the
 first real day may legitimately read `unreconciled`. Nothing in this phase has touched real money: the signer is
 an HMAC and the venue is ours — per `docs/AGENTS-BUILD.md`, funds wait for P13 and P14 to be green.
+
+## P09 — the markets surfaces · 2026-09-19
+
+**Built.** The four screens a prediction-market terminal is for, plus the arithmetic under them:
+`web/src/lib/{depth,ladders,upstream,anchor}.ts` (integer micro-units; directional aggregation, bids floor /
+asks ceil, so an aggregated level is never better than what was there; one depth scale across both sides; the
+event probability-sum invariant against its tick-implied tolerance; strip→decode→strip sanitising of
+attacker-written resolution text with an http(s)-only link check; the ladder's scroll anchor across a
+re-ladder), and `MarketCard` · `MarketsClient` · `OrderBook` · `PriceChart` · `EventTable` · `MarketRail` ·
+`MarketView` · `EventView` with the two SSR detail routes. Backend half in `d54d5e7` (migration 0010, discovery
+facets/hidden tail/event summaries, the book's `aggregate` + `oneSided`, `/history`, `/holders`,
+`/v1/events/{id}`); web + doc + gate in `0ad8830`. `docs/P09-frontend-markets.md` carries the D1–D7 controls,
+the per-screen state table and ten `[UNVERIFIED]` launch items; `tools/p09-gate-check.py` is 7 checks whose c3/c4
+*call* the P08 gate's scanners rather than writing a second opinion.
+
+**Verified.** `make test` 674 OK; `check-openapi` 200/200; `make lint` 92 files 0 findings; web `npm run test`
+**145 passed / 20 files**; `tsc --noEmit` clean; i18n 345 keys, 0 missing; `make p08` **15/15** with P09 in the
+tree (worst route `/markets` **198.0 KB** of a 200 KB budget, route-level splitting proven);
+`make p09` **7/7** with **7/7 canaries** (`docs/verification/P09-gate.txt`). Ladder fixture from P01's own
+shape: 94 asks 0.001→0.094, no bids, notional $21,899,999.999976, banner states the count and the no-bid
+sentence. Five defects the phase's own tools caught, all recorded in §2.8: `kind="price"` takes **tick units**
+and was fed micro (`0.001` rendered as `1.000` — a plausible price, ten times the size); sizes out by 10^6;
+an already-cents spread multiplied by 100; `SuccessBody` unioning every documented response, so `book.bids` was
+a type error on a 200; and a contract that never declared `cumShares` or six market-detail fields the API
+already served. The P09 gate itself shipped four bugs its canaries caught (a ledger reader truncating at the
+`}` inside `{market_id}`, a `[UNVERIFIED]` pairing check that compared a slug against the document containing
+it, comment-blind scans, and a probe shelling out to a runner the repo does not have).
+
+**`[UNVERIFIED]`.** No browser here, so Lighthouse/LCP on the three routes, a 10 Hz frame trace of a 200-level
+ladder, virtualisation's necessity, touch behaviour, screen-reader output, `prefers-reduced-motion` and the
+Storybook states are launch items 1–9 in `docs/P09-frontend-markets.md` §4, each with a role owner. The recorded
+build is `next build --webpack`: Turbopack's builder is OOM-killed in this sandbox (~700 MB free), so the
+bundler is part of the measurement. The `.git` rewind recurred a fourth time (tree current, `.git` at a P05-era
+tip, `origin` missing); recovery was `git remote add` + `fetch` + `git reset --mixed`, never `--hard`.
+
+## P08 — the frontend shell · 2026-09-19
+
+**Built.** The whole page layer: Next 16 App Router, 19 routes (`/`, `/markets`, five `(auth)` screens, seven
+`(app)` screens, `/tma`, and `app/api/[...path]` as the authenticated proxy), the money path
+`src/money/cents.ts`, the number layer `src/num/{Number,StaleIndicator,flash}`, the session machine with its
+refresh single-flight, the Telegram bridge, `src/ui` primitives and `WidgetBoundary` per widget,
+`src/api/routes.ts` as the route ledger, and `tools/p08-gate-check.py` — 15 checks that read the served response
+rather than the source.
+
+**Verified.** `docs/P08-frontend-shell.md` §5 records it: `make p08` 15/15 (`--self-test` 11/11, recorded in
+`docs/verification/P08-gate.txt` and `P08-bundle.txt`), 95 web tests in 15 files, first-load 187.6 KB on `/`
+against a 200 KB budget (worst route 190.3 KB), 223 dictionary keys with 181 used, `check-openapi` 177/177,
+`ci-log-scan --built web/.next` 403 built files 0 findings. The bug that mattered was a two-ended contract:
+`pgm_at` written as a bare expiry and read as `"<expiry>:<token>"`, so every request after a rotation presented
+a *spent* single-use token and upstream revoked the whole family — writer and reader now live in one file with a
+test that reads both ends, and the property is exercised against `next start` + uvicorn, not a `TestClient`.
+
+**`[UNVERIFIED]`.** No browser: `tma-real-device`, Lighthouse, the 60 fps rail-drag trace and Storybook are
+launch items with numbered owners in the P08 doc's §4, and `measure-first-load.mjs` reports *bytes fetched per
+document* — a payload claim, not a rendering one.
+
+## P07 — the security plane · 2026-09-18
+
+**Built.** `docs/P07-security.md` (D1–D10: STRIDE ranked by cost, the two-address key envelope with a revocation
+that has been run, the factors and windows of authentication, one authorisation table with five levels, input
+integrity, secrets, network posture, abuse, incident response and the compliance sentences), the verification
+plane in `packages/polygm_core/security/*`, and `tools/p07-gate-check.py` plus its mutation suite.
+
+**Verified.** Recorded in the doc's head: `make p07` **32/32 in 45 s** (`docs/verification/P07-gate.txt`);
+`make drill-p07` pass — 10,000 wrapped keys revoked in 42 ms across 20 batch statements, 0 of 800 sessions
+surviving the global revocation (`P07-key-drill.txt`); `make gate-p07-mutate` **28 planted weaknesses, 28
+killed, 0 survived** (`P07-mutation.txt`); `python3 -m unittest discover -s tests` **641 tests OK**, 141 of them
+P07; `make lint` 8/8 rules clean with 8/8 canaries firing; `check-openapi` 176/176; `ci-log-scan --sources` 133
+files 0 findings. The bug that mattered: `_principal` derived the authorisation operation from the request
+*URL*, so every served route with an identifier in its path answered 500 `AUTHZ_UNDECLARED` to an entitled
+caller — invisible to the unit suite and found by a served response.
+
+**`[UNVERIFIED]`.** Provider custody pricing is carried as unverified in the doc and in
+`PROVIDERS[i].verified = False`; the geofence/age-gate sentences are counsel items; the first real-venue day is
+a P13 finding. No real funds: per `docs/AGENTS-BUILD.md`, money waits for P13 and P14.
