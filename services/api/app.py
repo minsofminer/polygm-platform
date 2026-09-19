@@ -29,6 +29,7 @@ from polygm_core.classify import labels as _labels
 from polygm_core.config.flags import FlagStore, Flags
 from polygm_core.ledger.ledger import IntentState
 from polygm_core.money.cents import MoneyError, ScaleError, fmt_usdc, parse_usdc, price_ticks
+from polygm_core.radar import rankings as _radar
 from polygm_core.risk.gate import Intent, Limits, MarketState, evaluate, norm_tick
 from polygm_core.risk.idempotency import Idem
 from polygm_core.security import authz as _authz
@@ -82,6 +83,15 @@ CODES = {
     "REFUSED": ("this action is refused by a guard; the reason is in the log against the request id",
                 409, False),
     "BAD_REASON": ("a kill-switch change needs a reason of 4-400 characters", 422, False),
+    # P10-D5. Both statuses already existed in this table; the codes did not, and a quota refusal that arrives
+    # as a generic 429 tells a user nothing about which budget they spent.
+    "BAD_FIELD": ("a field is missing, or its value is outside the range this operation accepts", 422, False),
+    # P10-D5. A selection that is too big, or not a list at all, is refused with the limit and the count in the
+    # sentence: "outside the range this operation accepts" tells a user that they were wrong without telling
+    # them what the range is. Its own code rather than a widened BAD_FIELD, so the public-detail rule stays
+    # narrow - `_PUBLIC_DETAIL_CODES` below lists exactly which codes may say something specific.
+    "RADAR_SCOPE": ("the market selection is outside what a radar scan accepts", 422, False),
+    "QUOTA_EXCEEDED": ("this account's budget for that operation is spent", 429, True),
     # P07. Each of these is a *user-safe* sentence: the detail a client needs is here, and the detail an
     # attacker would like is in the log line, behind the request id.
     "UNAUTHENTICATED": ("a session is required", 401, False),
@@ -216,8 +226,14 @@ for _t in (READYZ_RESPONSES, LIST_RESPONSES, TAPE_RESPONSES, KILL_RESPONSES, MAR
 del _t
 
 
-#: The one code whose `detail` is authored for the user rather than for the log. See `err`.
-_PUBLIC_DETAIL_CODES = frozenset({"REFUSED"})
+#: The codes whose `detail` is authored for the user rather than for the log. See `err`.
+#:
+#: `REFUSED` (P10) covers "well formed, and the state said no": the client has to be told WHICH guard fired.
+#: `QUOTA_EXCEEDED` is here for the same reason and joins it in P10: a 429 that says only "spent" leaves the
+#: user unable to tell whether a repeat scan is free (it is), and the numbers in the sentence come from the
+#: plan and the audit count, never from the request body. `BAD_FIELD` deliberately stays OUT: its message is
+#: generic and its detail goes to the log, because that is the path a request's own content could reach.
+_PUBLIC_DETAIL_CODES = frozenset({"REFUSED", "QUOTA_EXCEEDED", "RADAR_SCOPE"})
 
 
 def err(code: str, request_id: str, *, detail: str | None = None, where: list[str] | None = None,
@@ -2267,10 +2283,12 @@ TRADER_RESPONSES = {404: {"description": "no trader with that pseudonym in the s
 # table, and both verbs genuinely answer both statuses - GET 404s on an unknown `configId` filter and 422s on a
 # bad `limit`, POST 404s on an unknown source and 422s on a bad body. Sharing a table with a lie in it would be
 # worse than sharing one where both entries are true for both verbs.
-COPY_CREATE_RESPONSES = {401: {"description": "a session is required"},
+COPY_CREATE_RESPONSES = {400: {"description": "missing Idempotency-Key; a malformed one is a 422 naming the field"},
+                         401: {"description": "a session is required"},
                          404: {"description": "unknown source pseudonym, or an unknown configId filter"},
                          422: {"description": "missing field, an unknown field, or maxOrder above maxDaily"}}
-COPY_GUARD_RESPONSES = {401: {"description": "a session is required"},
+COPY_GUARD_RESPONSES = {400: {"description": "missing Idempotency-Key; a malformed one is a 422 naming the field"},
+                         401: {"description": "a session is required"},
                          404: {"description": "no such config for this account"},
                         409: {"description": "refused: the state does not allow this yet (no acknowledgement, "
                                              "or no dry-run history)"},
@@ -2278,7 +2296,8 @@ COPY_GUARD_RESPONSES = {401: {"description": "a session is required"},
 COPY_MONITOR_RESPONSES = {401: {"description": "a session is required"},
                          404: {"description": "no such config for this account"}}
 PORTFOLIO_RESPONSES = {401: {"description": "a session is required"}}
-WHALE_VIEW_RESPONSES = {409: {"description": "refused: a notifying view needs a market target "
+WHALE_VIEW_RESPONSES = {400: {"description": "missing Idempotency-Key; a malformed one is a 422 naming the field"},
+                         409: {"description": "refused: a notifying view needs a market target "
                                              "(`alert_rules` requires one)"}, 401: {"description": "a session is required"},
                          404: {"description": "no such market or rule"},
                         422: {"description": "a notifying view needs a market scope"}}
@@ -3069,7 +3088,16 @@ def _copy_config_out(row: tuple) -> dict:
             "warning": _copy_warning(str(source)), "sourceStats": _source_stats(_anon(str(source)))}
 
 
-@app.get("/v1/copy/configs", responses=COPY_CREATE_RESPONSES)
+#: The read side of the same resource: the write table minus the 400. Written out rather than computed,
+#: because `tools/check-openapi.py` reads these tables from the AST and a comprehension is invisible to it —
+#: and the invariant that must hold between the pair is checked there directly ("the read is the write minus
+#: the key-required answer"), which is a stronger statement than "one was built from the other".
+COPY_LIST_RESPONSES = {401: {"description": "a session is required"},
+                       404: {"description": "unknown source pseudonym, or an unknown configId filter"},
+                       422: {"description": "missing field, an unknown field, or maxOrder above maxDaily"}}
+
+
+@app.get("/v1/copy/configs", responses=COPY_LIST_RESPONSES)
 def list_copy_configs(request: Request,
                       configId: str | None = Query(default=None, max_length=64),
                       limit: int = Query(default=50, ge=1, le=200)):
@@ -3240,13 +3268,22 @@ def _as_opt_int(value):
 
 
 def _idem_shape(key: str | None) -> JSONResponse | None:
-    """A malformed `Idempotency-Key` is a 422 naming the field.
+    """The header contract, enforced for the P10 mutations: MISSING is a 400, MALFORMED is a 422 naming the field.
 
-    The header is documented on every mutating operation, so it has to behave like one: present-and-malformed is
-    refused here rather than silently ignored, because a client whose key never reaches the idempotency store is
-    a client that will double-submit the first time a request times out, and it will believe it is protected.
+    Two different failures, two different answers, because the fix differs: a client that forgot the header
+    needs to add it, and a client that sent a bad one needs to know the shape. Both used to be impossible to
+    reach here — `_idem_shape` treated `None` as "nothing to check", so the four P10 POSTs accepted a mutating
+    request with no key at all while the contract declared the header required. That is the exact hole rule 1
+    of the contract exists to close ("an endpoint that is POST but idempotent by luck is how a retry
+    double-spends"), and it was found by writing the radar tests, not by reading the contract.
+
+    What is still NOT here: these routes validate the key but do not yet *record* it, so a replayed key will
+    create a second config rather than returning the first answer. `idem.begin/finish` covers POST /v1/orders
+    only. It is recorded as an open item in docs/P10-frontend-terminal.md rather than left as an assumption.
     """
-    if key is None or _IDEM_RE.match(str(key)):
+    if not key:
+        return err("IDEM_KEY_REQUIRED", "idem")
+    if _IDEM_RE.match(str(key)):
         return None
     return err("VALIDATION", "idem", where=["Idempotency-Key must be 8-128 chars of [A-Za-z0-9_-]"])
 
@@ -3423,7 +3460,14 @@ def _neg_risk_groups(positions: list[dict]) -> list[dict]:
 
 
 # ------------------------------------------------------------------------ D4 · saved whale views
-@app.get("/v1/whale-views", responses=WHALE_VIEW_RESPONSES)
+WHALE_VIEW_LIST_RESPONSES = {401: {"description": "a session is required"},
+                             404: {"description": "no such market or rule"},
+                             409: {"description": "refused: a notifying view needs a market target "
+                                                  "(`alert_rules` requires one)"},
+                             422: {"description": "a notifying view needs a market scope"}}
+
+
+@app.get("/v1/whale-views", responses=WHALE_VIEW_LIST_RESPONSES)
 def list_whale_views(request: Request,
                      viewId: str | None = Query(default=None, max_length=64),
                      limit: int = Query(default=50, ge=1, le=200)):
@@ -3538,6 +3582,256 @@ def create_whale_view(request: Request, body: dict = Body(...),
                     ttl_ms=0, stale_ms=0)
 
 
+# ---------------------------------------------------------------- D5 · Wallet Radar
+# The two ends of one scan: POST enqueues or answers, GET collects. The rules that make this affordable are
+# visible in the payload rather than in a comment: a cached scan costs nothing, a scan past the account's tier
+# budget is a 429 with the tier in it, and a scan big enough to be slow becomes a job so the latency lands
+# outside the request that asked for it.
+RADAR_RESPONSES = {400: {"description": "missing Idempotency-Key; a malformed one is a 422 naming the field"},
+                         401: {"description": "a session is required"},
+                   422: {"description": "1 to 10 markets, and the ids must be strings"},
+                   429: {"description": "this account's daily radar scan budget is spent; cached scans are still "
+                                        "free"}}
+RADAR_JOB_RESPONSES = {401: {"description": "a session is required"},
+                       404: {"description": "no such job for this account, or it has expired"}}
+RADAR_REQUIRED = ("marketIds",)
+RADAR_PROPS = {"marketIds": {"type": "array", "items": {"type": "string", "minLength": 3, "maxLength": 128}},
+               "ranking": {"type": "string", "enum": list(_radar.RANKINGS)}}
+#: The latency line. Above this many uncached markets the scan is enqueued instead of run: the numbers here come
+#: from the seeded tape, where a scan of the ten largest markets reads about 12k fills, and a page that waits on
+#: that is a page a user reloads - which is how one scan becomes three.
+RADAR_ASYNC_AT = 6
+#: Per-plan scans per day. Pro's budget is deliberately not "unlimited": the venue's rate limit is the real
+#: ceiling, and a plan that promises unlimited reads is a plan that discovers the ceiling in production.
+RADAR_PER_DAY = {"free": 20, "trader": 100, "pro": 200, "team": 1000}
+_RADAR_CACHE: dict[str, dict] = {}
+_RADAR_JOBS: dict[str, dict] = {}
+
+
+def _radar_plan(uid: str) -> tuple[str, int]:
+    row = _db.execute("SELECT plan, radar_poll_ms FROM entitlements WHERE user_id=?", (str(uid),)).fetchone()
+    plan = str(row[0]) if row and row[0] else "free"
+    per_day = RADAR_PER_DAY.get(plan, RADAR_PER_DAY["free"])
+    return plan, per_day
+
+
+def _audit_scan(uid: str, detail: dict) -> None:
+    """One audit row per scan. `audit_log` is append-only (a trigger blocks UPDATE and DELETE), which is exactly
+    the property a quota counter wants: the count cannot be quietly adjusted by the code that is being counted.
+    """
+    _db.execute("INSERT INTO audit_log (at_ms, actor_type, actor_id, action, target_table, target_id,"
+                " request_id, detail_json) VALUES (?,?,?,?,?,?,?,?)",
+                (_now_ms(), "user", str(uid), "radar.scan", "radar", str(detail.get("job") or "sync"), "",
+                 json.dumps(detail, sort_keys=True)))
+
+
+def _radar_used_today(uid: str) -> int:
+    """Scans used today, counted from the audit log rather than a counter table.
+
+    A counter is a second copy of a fact the audit trail already holds, and the copy is the one that drifts. A
+    cached scan is not counted: the cache is the reason the second scan is cheap, so charging for it would price
+    the thing the design is selling.
+    """
+    start = _now_ms() // 86_400_000 * 86_400_000
+    row = _db.execute("SELECT COUNT(*) FROM audit_log WHERE actor_id=? AND action='radar.scan' AND at_ms>=?",
+                      (str(uid), start)).fetchone()
+    return int(row[0]) if row else 0
+
+
+def _radar_fills(market_ids: list[str]) -> list[dict]:
+    """The fills we hold for the selected markets, in the same internal shape the dossier uses - including
+    `resolved`/`realisedMicro`, because the profit ranking is a claim about settled outcomes and an unsettled
+    fill must not be able to contribute to it."""
+    if not market_ids:
+        return []
+    # `_market_rows()` is keyed by CONDITION id (it is the tape's lookup, and the tape joins on condition ids),
+    # so filtering it here by market id returns an empty dict rather than a wrong one. Only the tick is wanted.
+    marks = {m["marketId"]: m for m in _market_rows().values()}
+    qs = ",".join("?" for _ in market_ids)
+    rows = _db.execute(
+        "SELECT f.ts_ms, f.wallet, f.condition_id, f.token_id, f.side, f.price_micro, f.size_micro,"
+        " f.usd_notional_micro, t.is_winner, m.id FROM tape_fills f"
+        " JOIN markets m ON m.condition_id = f.condition_id"
+        " JOIN tokens t ON t.token_id = f.token_id"
+        " WHERE m.id IN (%s) ORDER BY f.ts_ms ASC, f.rowid ASC" % qs, tuple(market_ids)).fetchall()
+    out = []
+    for (ts, wallet, cond, token, side, price, size, notional, winner, mid) in rows:
+        resolved = winner is not None and int(winner) >= 0
+        won = bool(int(winner)) if resolved else False
+        shares, cost = _tm._int(size), _tm._int(notional)
+        if not resolved:
+            realised = 0
+        elif str(side) == "BUY":
+            realised = (shares - cost) if won else -cost
+        else:
+            realised = (cost - shares) if won else cost
+        out.append({"tsMs": _tm._int(ts), "wallet": str(wallet), "marketId": str(mid),
+                    "conditionId": str(cond), "tokenId": str(token), "side": str(side),
+                    "priceMicro": _tm._int(price), "sizeMicro": shares, "notionalMicro": cost,
+                    "resolved": resolved, "won": won, "realisedMicro": realised,
+                    "tick": norm_tick((marks.get(str(mid)) or {}).get("tick"))})
+    return out
+
+
+def _radar_labels() -> dict[str, list[dict]]:
+    """The publishable labels, with their rule and disclaimer, keyed by wallet. A classification badge without
+    its rule is a horoscope, so the rule travels with it or the badge does not travel."""
+    out: dict[str, list[dict]] = {}
+    for (wallet, label, conf) in _db.execute(
+            "SELECT wallet, label, confidence FROM wallet_labels WHERE publishable=1 ORDER BY label").fetchall():
+        fact = _LABEL_FACTS.get(str(label))
+        if fact is None:
+            continue
+        out.setdefault(str(wallet), []).append({"label": str(label), "rule": fact["rule"],
+                                                "disclaimer": fact["disclaimer"],
+                                                "confidence": _tm._int(conf), "publishable": True})
+    return out
+
+
+def _radar_questions(market_ids: list[str]) -> dict[str, str]:
+    qs = ",".join("?" for _ in market_ids) or "''"
+    rows = _db.execute("SELECT id, COALESCE(question,'') FROM markets WHERE id IN (%s)" % qs,
+                       tuple(market_ids)).fetchall()
+    return {str(r[0]): str(r[1]) for r in rows}
+
+
+def _radar_payload(uid: str, market_ids: list[str], ranking: str, *, cached: bool, job_id: str | None) -> dict:
+    """One scan, assembled. Split out so the synchronous path and the job's completion build the SAME payload -
+    a second builder is how the cached answer and the fresh answer start disagreeing about their own numbers."""
+    ranked = _radar.rank(_radar_fills(market_ids), market_ids=market_ids, sample_gate_n=_tm.SAMPLE_GATE)
+    labels = _radar_labels()
+    questions = _radar_questions(market_ids)
+    meta = ranked["rankingsMeta"]
+    tables: dict[str, list[dict]] = {}
+    for entry in meta:
+        rows = ranked.get(entry["id"]) or []
+        tables[entry["id"]] = [
+            {**{k: v for k, v in r.items() if k != "reason"},
+             "anonWallet": _anon(r["wallet"]),
+             "matched": [{"marketId": m, "question": questions.get(m, "")} for m in r["markets"]],
+             "labels": labels.get(r["wallet"], []),
+             "rank": i + 1,
+             "reason": r["reason"]}
+            for i, r in enumerate(rows)
+        ]
+    plan, per_day = _radar_plan(uid)
+    used = _radar_used_today(uid)
+    return {"items": tables.get(ranking) or tables["active"], "ranking": ranking,
+            "rankings": tables, "rankingsMeta": meta,
+            "unranked": [{"anonWallet": _anon(r["wallet"]), "wallet": r["wallet"], "fills": r["fills"],
+                          "markets": r["markets"], "realisedMicro": r["realisedMicro"],
+                          "winRateBps": r["winRateBps"], "insufficientSample": True,
+                          "reason": r["reason"]} for r in (ranked.get("unranked") or [])],
+            "markets": market_ids, "scanned": ranked["scanned"], "sampleGate": ranked["sampleGate"],
+            "quota": {"plan": plan, "usedToday": used, "perDay": per_day, "cached": cached, "jobId": job_id,
+                      "pollMs": 2_000,
+                      "note": ("this scan came from the cache and cost you nothing"
+                               if cached else
+                               "%d of %d scans used today on the %s plan; a repeated scan of the same markets is "
+                               "free" % (used, per_day, plan))},
+            "costNote": ("a scan is cached for %d seconds, the same set in a different order is the same scan, "
+                         "and over %d uncached markets the scan runs as a job so the page does not wait on it"
+                         % (_radar.CACHE_TTL_MS // 1000, RADAR_ASYNC_AT))}
+
+
+@app.post("/v1/radar/runs", status_code=200, responses=RADAR_RESPONSES,
+          openapi_extra=_body_schema(RADAR_REQUIRED, RADAR_PROPS))
+def create_radar_run(request: Request, body: dict = Body(...),
+                     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key")):
+    """D5: up to ten markets in, four rankings out, with the sample gate on the profit list and the account's
+    scan budget stated in the answer.
+
+    The order of the decisions matters and is the order below: shape, identity, scope, budget, cache, then work.
+    A scan that is refused for budget must not have enqueued a job first, and a cached scan must not spend
+    budget - both of those are refusals a user can see, so both of them are checked before anything else is
+    written.
+    """
+    rid = request.state.request_id
+    bad_key = _idem_shape(idempotency_key)
+    if bad_key is not None:
+        return bad_key
+    bad = _check_body(body, RADAR_REQUIRED, rid, allowed=tuple(RADAR_PROPS))
+    if bad is not None:
+        return bad
+    bad = _check_props(body, RADAR_PROPS, rid)
+    if bad is not None:
+        return bad
+    uid, _row, e = _principal(request)
+    if e:
+        return e
+    raw = body.get("marketIds")
+    if raw is not None and not isinstance(raw, list):
+        return err("RADAR_SCOPE", rid, detail="marketIds must be an array of market ids")
+    market_ids, refusal = _radar.validate_markets(raw or [])
+    if refusal:
+        return err("RADAR_SCOPE", rid, detail=refusal)
+    ranking = str(body.get("ranking") or "active")
+    key = "%s|%s" % (uid, _radar.cache_key(market_ids))
+    hit = _RADAR_CACHE.get(key)
+    if hit and (_now_ms() - _tm._int(hit["atMs"])) <= _radar.CACHE_TTL_MS:
+        payload = _radar_payload(uid, market_ids, ranking, cached=True, job_id=None)
+        return _stamped(payload, ttl_ms=_radar.CACHE_TTL_MS, stale_ms=_radar.CACHE_TTL_MS,
+                        as_of_ms=_tm._int(hit["atMs"]))
+    _plan, per_day = _radar_plan(uid)
+    if _radar_used_today(uid) >= per_day:
+        return err("QUOTA_EXCEEDED", rid, detail=(
+            "refused: %d of %d radar scans used today on this plan. A repeat of a scan you already ran is still "
+            "free - the cache is not metered." % (_radar_used_today(uid), per_day)))
+    if len(market_ids) > RADAR_ASYNC_AT:
+        job_id = "rr-" + uuid.uuid4().hex[:12]
+        _RADAR_JOBS[job_id] = {"userId": str(uid), "marketIds": market_ids, "ranking": ranking,
+                               "state": "queued", "atMs": _now_ms()}
+        _audit_scan(str(uid), {"markets": market_ids, "job": job_id, "cached": False})
+        payload = _radar_payload(uid, market_ids, ranking, cached=False, job_id=job_id)
+        # An enqueued scan answers with the ranking set it can already compute and names the job: the page shows
+        # something true immediately and fills in the rest, instead of holding a spinner over ten markets.
+        payload["status"] = "queued"
+        payload["quota"]["note"] = ("%d markets is past the %d-market line, so this scan runs as a job; the table "
+                                    "below is what we already hold" % (len(market_ids), RADAR_ASYNC_AT))
+        return _stamped(payload, ttl_ms=0, stale_ms=1_000, as_of_ms=_now_ms())
+    _audit_scan(str(uid), {"markets": market_ids, "job": None, "cached": False})
+    _RADAR_CACHE[key] = {"atMs": _now_ms()}
+    payload = _radar_payload(uid, market_ids, ranking, cached=False, job_id=None)
+    payload["status"] = "done"
+    return _stamped(payload, ttl_ms=0, stale_ms=2_000, as_of_ms=_now_ms())
+
+
+@app.get("/v1/radar/runs/{job_id}", responses=RADAR_JOB_RESPONSES)
+def get_radar_run(job_id: str, request: Request):
+    """The other half of a big scan.
+
+    The job runs on the FIRST poll rather than in a worker thread. That is a real trade and it is stated rather
+    than dressed up: the request that asked for ten markets still returns immediately, the work happens on a
+    later request, and it happens exactly once - the second poll reads the completed job. A worker thread would
+    move the same work behind a queue this single-process API does not have yet; when the executor's worker
+    lands (P12), this is where it plugs in, and the shape of the answer does not change.
+    """
+    rid = request.state.request_id
+    uid, _row, e = _principal(request)
+    if e:
+        return e
+    job = _RADAR_JOBS.get(str(job_id))
+    if not job or str(job.get("userId")) != str(uid):
+        return err("NO_SUCH_RESOURCE", rid, detail="no such radar job for this account")
+    if job["state"] != "done":
+        market_ids = list(job["marketIds"])
+        _audit_scan(str(uid), {"markets": market_ids, "job": str(job_id), "cached": False})
+        _RADAR_CACHE["%s|%s" % (uid, _radar.cache_key(market_ids))] = {"atMs": _now_ms()}
+        payload = _radar_payload(str(uid), market_ids, str(job["ranking"]), cached=False, job_id=None)
+        payload["status"] = "done"
+        payload["quota"]["note"] = ("the job finished and its scan is now cached for %d seconds; a repeat of "
+                                    "these markets costs nothing"
+                                    % (_radar.CACHE_TTL_MS // 1000))
+        job.update({"state": "done", "payload": payload})
+        return _stamped(payload, ttl_ms=0, stale_ms=2_000, as_of_ms=_now_ms())
+    payload = dict(job["payload"])
+    payload["quota"] = {**payload["quota"], "jobId": None,
+                        "note": "this job finished and its scan is now cached for %d seconds"
+                                % (_radar.CACHE_TTL_MS // 1000)}
+    return _stamped(payload, ttl_ms=_radar.CACHE_TTL_MS, stale_ms=_radar.CACHE_TTL_MS,
+                    as_of_ms=_tm._int(job["atMs"]))
+
+
 # The P10 routes' auth levels. Every served route needs a row here or the request fails closed with
 # `AUTHZ_UNDECLARED`, which is the correct default and an infuriating one to debug — so the four public reads
 # (a tape, its facets, the whale feed and a pseudonymous dossier: all of them reveal only what the venue
@@ -3554,9 +3848,12 @@ _levels_p10 = {
     "GET /v1/me/portfolio": (_authz.USER, ""),
     "GET /v1/whale-views": (_authz.USER, ""),
     "POST /v1/whale-views": (_authz.USER, ""),
+    "POST /v1/radar/runs": (_authz.USER, ""),
+    "GET /v1/radar/runs/{job_id}": (_authz.USER, ""),
 }
 for _t in (TAPE_FILLS_RESPONSES, FACETS_RESPONSES, WHALES_RESPONSES, TRADER_RESPONSES, COPY_CREATE_RESPONSES,
-           COPY_GUARD_RESPONSES, COPY_MONITOR_RESPONSES, PORTFOLIO_RESPONSES, WHALE_VIEW_RESPONSES):
+           COPY_GUARD_RESPONSES, COPY_MONITOR_RESPONSES, PORTFOLIO_RESPONSES, WHALE_VIEW_RESPONSES,
+           RADAR_RESPONSES, RADAR_JOB_RESPONSES, COPY_LIST_RESPONSES, WHALE_VIEW_LIST_RESPONSES):
     _t.update(_INTERNAL)                       # every route can 500 through the app-wide handler
 del _t
 _authz.LEVELS_TABLE.update(_levels_p10)

@@ -1818,6 +1818,11 @@ paths:
                       warning: {$ref: "#/components/schemas/SlippageFacts"}
                       sourceStats: {$ref: "#/components/schemas/SourceStats"}
                       next: {type: string}
+        "400":
+          description: missing Idempotency-Key; a malformed one is a 422 naming the field
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Error"}
         "401": {$ref: "#/components/responses/Denied"}
         "404": {$ref: "#/components/responses/NotFound"}
         "422": {$ref: "#/components/responses/Validation"}
@@ -1881,6 +1886,11 @@ paths:
                 allOf:
                   - $ref: "#/components/schemas/Stamped"
                   - $ref: "#/components/schemas/CopyConfig"
+        "400":
+          description: missing Idempotency-Key; a malformed one is a 422 naming the field
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Error"}
         "401": {$ref: "#/components/responses/Denied"}
         "404": {$ref: "#/components/responses/NotFound"}
         "409":
@@ -1977,6 +1987,84 @@ paths:
         "401": {$ref: "#/components/responses/Denied"}
 
         "500": {$ref: "#/components/responses/Internal"}
+  /v1/radar/runs:
+    post:
+      tags: [market]
+      summary: Scan up to ten markets for the wallets worth watching (P10 D5)
+      description: |
+        Four rankings over one selection, and each answers a different question: who is most active here, who
+        made money (sample-gated), who was earliest, and who holds several of these markets at once. Cost
+        control is part of the contract rather than an operational footnote: a scan is cached for 60 seconds,
+        the same markets in a different order are the same scan, an account has a daily scan budget, and past
+        six uncached markets the scan runs as a job so the page does not wait on it.
+      operationId: createRadarRun
+      x-auth: user
+      x-rate-class: metered
+      x-cache: no-store
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [marketIds]
+              properties:
+                # The count is documented here and ENFORCED in the app, so that the refusal can say what the
+                # limit is and what the request contained: a schema-level `maxItems` answers first with
+                # "outside the range", which is true and tells the user nothing.
+                marketIds:
+                  type: array
+                  items: {type: string, minLength: 3, maxLength: 128}
+                ranking: {type: string, enum: [active, profit, earliest, overlap]}
+      responses:
+        "200":
+          description: the rankings; `quota.jobId` is set when the scan was enqueued
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Stamped"
+                  - $ref: "#/components/schemas/RadarResult"
+        "400":
+          description: missing Idempotency-Key; a malformed one is a 422 naming the field
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Error"}
+        "401": {$ref: "#/components/responses/Denied"}
+        # RADAR_SCOPE, with the limit and the count in the message: a user who selected eleven markets needs
+        # to know the limit is ten, and "outside the range" is not that sentence.
+        "422": {$ref: "#/components/responses/Validation"}
+        "429": {$ref: "#/components/responses/RateLimited"}
+        "500": {$ref: "#/components/responses/Internal"}
+  /v1/radar/runs/{job_id}:
+    get:
+      tags: [market]
+      summary: Collect a radar scan that ran as a job (P10 D5)
+      description: |
+        The job executes on the first poll and exactly once; the second poll reads the completed result and the
+        scan is cached by then. Polling is what the UI does with `quota.jobId`, so a slow scan costs one
+        request that returns immediately plus whatever the client's poll interval is.
+      operationId: getRadarRun
+      x-auth: user
+      x-rate-class: authed-read
+      x-cache: no-store
+      parameters:
+        - {name: job_id, in: path, required: true, schema: {type: string, minLength: 3, maxLength: 64}}
+      responses:
+        "200":
+          description: the scan's result
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Stamped"
+                  - $ref: "#/components/schemas/RadarResult"
+        "401": {$ref: "#/components/responses/Denied"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "500": {$ref: "#/components/responses/Internal"}
   /v1/whale-views:
     get:
       tags: [market]
@@ -2055,6 +2143,11 @@ paths:
                 allOf:
                   - $ref: "#/components/schemas/Stamped"
                   - $ref: "#/components/schemas/WhaleView"
+        "400":
+          description: missing Idempotency-Key; a malformed one is a 422 naming the field
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Error"}
         "401": {$ref: "#/components/responses/Denied"}
         "404": {$ref: "#/components/responses/NotFound"}
         "409": {$ref: "#/components/responses/Conflict"}
@@ -2871,6 +2964,80 @@ components:
             public: {type: boolean}
             immutable: {type: boolean}
 
+    RadarRow:
+      type: object
+      required: [anonWallet, matched, fills, boughtMicro, soldMicro, realisedMicro, winRateBps,
+                 insufficientSample, labels, rank, reason]
+      additionalProperties: false
+      description: >-
+        One wallet in one ranking. `winRateBps` is null below the sample gate and `insufficientSample` says so,
+        because a win rate off three resolved markets is a coin that landed twice. `matched` names the markets
+        this wallet was found in, so "shared exposure" is checkable rather than asserted.
+      properties:
+        anonWallet: {type: string}
+        matched:
+          type: array
+          items:
+            type: object
+            required: [marketId, question]
+            properties:
+              marketId: {type: string}
+              question: {type: string}
+        fills: {type: integer, minimum: 0}
+        boughtMicro: {type: integer}
+        soldMicro: {type: integer}
+        realisedMicro: {type: integer, description: "realised only; an open position contributes nothing"}
+        winRateBps: {type: [integer, "null"], minimum: 0, maximum: 10000}
+        insufficientSample: {type: boolean}
+        labels:
+          type: array
+          items: {$ref: "#/components/schemas/LabelFact"}
+        rank: {type: integer, minimum: 1}
+        reason: {type: string, description: "the sentence that explains this row's position in this ranking"}
+    RadarResult:
+      type: object
+      required: [items, ranking, rankings, rankingsMeta, unranked, markets, scanned, sampleGate, quota, costNote]
+      additionalProperties: true
+      properties:
+        items:
+          type: array
+          items: {$ref: "#/components/schemas/RadarRow"}
+        ranking: {type: string, enum: [active, profit, earliest, overlap]}
+        rankings:
+          type: object
+          additionalProperties:
+            type: array
+            items: {$ref: "#/components/schemas/RadarRow"}
+        rankingsMeta:
+          type: array
+          items:
+            type: object
+            required: [id, label, question]
+            properties:
+              id: {type: string}
+              label: {type: string}
+              question: {type: string}
+        unranked:
+          type: array
+          description: wallets the profit ranking will not place, each with the gate's own sentence
+          items: {type: object}
+        markets:
+          type: array
+          items: {type: string}
+        scanned: {type: integer, minimum: 0}
+        sampleGate: {type: integer, minimum: 1}
+        quota:
+          type: object
+          required: [plan, usedToday, perDay, cached, jobId, pollMs, note]
+          properties:
+            plan: {type: string}
+            usedToday: {type: integer, minimum: 0}
+            perDay: {type: integer, minimum: 1}
+            cached: {type: boolean}
+            jobId: {type: [string, "null"]}
+            pollMs: {type: integer, minimum: 250}
+            note: {type: string}
+        costNote: {type: string}
     Error:
       type: object
       required: [error]
@@ -2890,7 +3057,7 @@ components:
                      OFF_TICK, BAD_MARKET_META, BELOW_MIN_SIZE, ZERO_SIZE, BAD_AMOUNT, OVER_ORDER_CAP,
                      PRICE_FAR_FROM_MID, TOO_MANY_OPEN, DAILY_CAP, IDEM_CONFLICT, IDEM_IN_PROGRESS,
                      IDEM_KEY_REQUIRED, RISK_UNAVAILABLE, SIGNER_UNAVAILABLE, BAD_REASON, NOT_FOUND, REFUSED,
-                     VALIDATION, INTERNAL, UNAUTHENTICATED, SESSION_STALE, SESSION_REVOKED, SESSION_MISMATCH, ADMIN_REQUIRED, LOGIN_FAILED, ACCOUNT_LOCKED, TOTP_REQUIRED, TOTP_INVALID, TOTP_LOCKED, ADDRESS_COOLDOWN, ADDRESS_LIMIT, REMOVE_DURING_COOLDOWN, NO_SUCH_RESOURCE, REFRESH_UNKNOWN, REFRESH_REUSED, REFRESH_EXPIRED, TELEGRAM_REPLAY, TELEGRAM_INVALID, SECURITY_ENV_MISSING, KEYSTORE_TAMPER, BREAK_GLASS_DENIED, AUTHZ_UNDECLARED]
+                     VALIDATION, INTERNAL, UNAUTHENTICATED, SESSION_STALE, SESSION_REVOKED, SESSION_MISMATCH, ADMIN_REQUIRED, LOGIN_FAILED, ACCOUNT_LOCKED, TOTP_REQUIRED, TOTP_INVALID, TOTP_LOCKED, ADDRESS_COOLDOWN, ADDRESS_LIMIT, REMOVE_DURING_COOLDOWN, NO_SUCH_RESOURCE, REFRESH_UNKNOWN, REFRESH_REUSED, REFRESH_EXPIRED, TELEGRAM_REPLAY, TELEGRAM_INVALID, SECURITY_ENV_MISSING, KEYSTORE_TAMPER, BREAK_GLASS_DENIED, AUTHZ_UNDECLARED, BAD_FIELD, QUOTA_EXCEEDED, RADAR_SCOPE]
             message: {type: string, description: "user-safe by construction"}
             retryable: {type: boolean}
             requestId: {type: string}
@@ -2913,6 +3080,14 @@ components:
           schema: {$ref: "#/components/schemas/Error"}
     Validation:
       description: request rejected before any money logic ran
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Error"}
+    RateLimited:
+      description: >-
+        the account's budget for this operation is spent. `QUOTA_EXCEEDED` carries the plan, the numbers used,
+        and the fact that a cached repeat is free - a 429 that says only "spent" leaves the user unable to tell
+        whether the next scan costs anything.
       content:
         application/json:
           schema: {$ref: "#/components/schemas/Error"}

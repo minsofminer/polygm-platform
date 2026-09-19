@@ -64,7 +64,17 @@ class TerminalBase(unittest.TestCase):
         return r.json()
 
     def post(self, url, body, headers=None):
-        return self.client.post(url, json=body, headers=headers or USER)
+        """POST with the dev identity AND an `Idempotency-Key`.
+
+        The key used to be omitted here because the P10 mutations accepted a header-less POST while the contract
+        declared the header required - the tests were passing through a hole. They now send a unique key per
+        call, which is what a real client does, and the one test that needs to prove the 400 body (in
+        test_radar_api.py) sends none on purpose.
+        """
+        self.__class__._key_n = getattr(self.__class__, "_key_n", 0) + 1
+        key = "tapi-%s-%06d" % (re.sub(r"[^a-z0-9]+", "-", url.lower())[:24].strip("-"), self.__class__._key_n)
+        hdrs = {**USER, "Idempotency-Key": key, **(headers or {})}
+        return self.client.post(url, json=body, headers=hdrs)
 
     def fixture_config(self):
         """The seeded config, by id — not `items[0]`, which is whichever config a previous test created."""

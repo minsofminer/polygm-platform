@@ -130,7 +130,16 @@ class Probe:
             return r.status_code, {}
 
     def post(self, url: str, body: dict, **kw) -> tuple[int, dict]:
-        r = self.client().post(url, json=body, headers=self.user_headers(), **kw)
+        """POST the way the contract says a client must: with an `Idempotency-Key`.
+
+        Every P10 mutation documents the header as required and answers 400 without it (the rule this gate
+        itself helped enforce: the routes accepted a header-less POST until the radar's tests found the hole).
+        A probe that omitted the key would be measuring the 400 path and calling the copy config "not a dry
+        run", which is exactly what happened the first time this ran after the fix.
+        """
+        self._post_n = getattr(self, "_post_n", 0) + 1
+        headers = {**self.user_headers(), "Idempotency-Key": "g10-%s-%04d" % (url.strip("/").replace("/", "-"), self._post_n)}
+        r = self.client().post(url, json=body, headers=headers, **kw)
         try:
             return r.status_code, r.json()
         except ValueError:
@@ -323,7 +332,7 @@ def c1_contract(p: Probe) -> tuple[str, bool, str]:
     user = [op for op in USER_OPS if authz.LEVELS_TABLE.get(op, ("",))[0] == authz.USER]
     ok = (ok_openapi and not missing_contract and not missing_table
           and len(public) == len(PUBLIC_OPS) and len(user) == len(USER_OPS))
-    return ("the contract, the router and the authz table agree on P10's nine operations", ok,
+    return ("the contract, the router and the authz table agree on P10's eleven operations", ok,
             "%s; paths in the contract %d/%d, in TABLE_FOR_PATH %d/%d; public %d/%d, user %d/%d"
             % (tail[-1] if tail else out.strip()[-90:], len(P10_PATHS) - len(missing_contract), len(P10_PATHS),
                len(P10_PATHS) - len(missing_table), len(P10_PATHS), len(public), len(PUBLIC_OPS), len(user),
@@ -662,8 +671,99 @@ def c9_acceptance_path(p: Probe) -> tuple[str, bool, str]:
             " | ".join(steps))
 
 
+
+def radar_findings(payload: dict) -> list[str]:
+    """Wallet Radar (D5): what the payload must say about its own cost and its own gating.
+
+    Four things, and each is a rule the screen depends on: the budget is stated (plan, used, per-day, and
+    whether this scan was cached), the four rankings are named with their questions, the profit list contains
+    nobody under the sample gate, and every wallet the gate excluded is present with the sentence that says why.
+    A payload missing the last one is a screen that shows a shorter list with no explanation.
+    """
+    out: list[str] = []
+    quota = payload.get("quota") or {}
+    for key in ("plan", "usedToday", "perDay", "cached", "jobId", "note"):
+        if key not in quota:
+            out.append("quota.%s is missing" % key)
+    if isinstance(quota.get("perDay"), int) and isinstance(quota.get("usedToday"), int) \
+            and quota["usedToday"] > quota["perDay"]:
+        out.append("usedToday %d is past perDay %d with no refusal" % (quota["usedToday"], quota["perDay"]))
+    meta = payload.get("rankingsMeta") or []
+    ids = sorted(str(m.get("id")) for m in meta)
+    if ids != ["active", "earliest", "overlap", "profit"]:
+        out.append("rankingsMeta is %s, not the four rankings" % ids)
+    for m in meta:
+        if not str(m.get("question") or "").strip():
+            out.append("ranking %s has no question" % m.get("id"))
+    for row in ((payload.get("rankings") or {}).get("profit") or []):
+        if row.get("winRateBps") is None and not row.get("insufficientSample"):
+            out.append("profit row %s has neither a win rate nor a refusal" % row.get("anonWallet"))
+    for row in payload.get("unranked") or []:
+        if not row.get("insufficientSample") or not str(row.get("reason") or "").strip():
+            out.append("an unranked wallet (%s) is listed without the gate's sentence" % row.get("anonWallet"))
+    if not str(payload.get("costNote") or "").strip():
+        out.append("costNote is missing: the cache window and the async line are not stated")
+    return out
+
+
+
+
+def c10_radar_cost(p: Probe) -> tuple[str, bool, str]:
+    """D5's cost control, as four behaviours rather than as a promise.
+
+    A scan is answered; the SAME scan in a different order is answered from the cache without spending budget; a
+    selection past the limit is refused with the limit in the sentence; a big scan becomes a job that runs once;
+    and a scan with no `Idempotency-Key` is refused before any of it, because a POST that is idempotent by luck
+    is how a retry doubles a purchase.
+    """
+    rows = p.rows("SELECT m.id, COUNT(*) n FROM tape_fills f JOIN markets m ON m.condition_id=f.condition_id"
+                  " GROUP BY m.id HAVING n >= 4 ORDER BY n DESC LIMIT 12")
+    markets = [str(r[0]) for r in rows]
+    if len(markets) < 12:
+        return ("a scan of many markets is refused, cached, and enqueued", False,
+                "the seed holds only %d markets with fills" % len(markets))
+    steps = []
+    code, first = p.post("/v1/radar/runs", {"marketIds": markets[:2]})
+    if code != 200:
+        return ("a scan of many markets is refused, cached, and enqueued", False,
+                "a two-market scan answered %d: %s" % (code, str(first)[:160]))
+    findings = radar_findings(first)
+    if findings:
+        return ("a scan of many markets is refused, cached, and enqueued", False, "; ".join(findings[:3]))
+    steps.append("two markets -> 4 rankings; quota %d/%d on the %s plan"
+                 % (first["quota"]["usedToday"], first["quota"]["perDay"], first["quota"]["plan"]))
+    code, second = p.post("/v1/radar/runs", {"marketIds": list(reversed(markets[:2]))})
+    if code != 200 or second.get("quota", {}).get("cached") is not True:
+        return (steps[-1], False, "the same scan in a different order was not served from the cache (%d)" % code)
+    if second["quota"]["usedToday"] != first["quota"]["usedToday"]:
+        return (steps[-1], False, "a cached scan spent budget: %d -> %d"
+                % (first["quota"]["usedToday"], second["quota"]["usedToday"]))
+    steps.append("the same two markets, reversed, came from the cache and spent nothing")
+    code, refused = p.post("/v1/radar/runs", {"marketIds": markets})
+    if code != 422 or "up to 10" not in str(refused.get("error", {}).get("message")):
+        return (steps[-1], False, "twelve markets answered %d without the limit in the sentence" % code)
+    steps.append("twelve markets: 422 with the limit stated (%s)" % refused["error"]["message"][:60])
+    code, big = p.post("/v1/radar/runs", {"marketIds": markets[:8]})
+    job_id = (big.get("quota") or {}).get("jobId")
+    if code != 200 or not job_id:
+        return (steps[-1], False, "an eight-market scan was not enqueued as a job (%d, jobId %s)" % (code, job_id))
+    code2, done = p.get("/v1/radar/runs/%s" % job_id)
+    if code2 != 200 or done.get("status") != "done" or (done.get("quota") or {}).get("jobId") is not None:
+        return (steps[-1], False, "the job did not finish on its first poll (%d)" % code2)
+    steps.append("eight markets ran as job %s and finished with 4 rankings" % job_id)
+    # Deliberately NOT `p.post`: that helper adds the header (as a real client must), and this step is the one
+    # place that has to send nothing to prove the 400 body is real.
+    code3 = p.client().post("/v1/radar/runs", json={"marketIds": markets[:2]},
+                            headers=p.user_headers()).status_code
+    if code3 != 400:
+        return (steps[-1], False, "a mutation with no Idempotency-Key answered %d, not 400" % code3)
+    steps.append("a scan with no Idempotency-Key is 400 before anything runs")
+    return ("a scan is cached, budgeted, refused past the limit, enqueued when large, and keyed", True,
+            " | ".join(steps))
+
+
 CHECKS = (c1_contract, c2_no_addresses, c3_gate_and_drawdown, c4_whale_rule, c5_copy_safety, c6_views_and_alerts,
-          c7_integers_only, c8_freshness, c9_acceptance_path)
+          c7_integers_only, c8_freshness, c9_acceptance_path, c10_radar_cost)
 
 
 # --------------------------------------------------------------------------------------------------- self-test
@@ -735,6 +835,21 @@ def self_test() -> int:
         good = "# a decimal like 1.5 in prose is fine\nx = total_micro // 1_000_000  # 1.0 exact\n"
         return len(float_findings(bad, "planted")) >= 2 and not float_findings(good, "clean"), \
             float_findings(bad, "planted")
+
+    @canary
+    def radar_scanner():
+        bad = {"rankingsMeta": [{"id": "active", "question": ""}],
+               "rankings": {"profit": [{"anonWallet": "w_x", "winRateBps": None, "insufficientSample": False}]},
+               "unranked": [{"anonWallet": "w_y", "insufficientSample": True, "reason": ""}],
+               "quota": {"plan": "free"}}
+        good = {"rankingsMeta": [{"id": i, "question": "q"} for i in ("active", "profit", "earliest", "overlap")],
+                "rankings": {"profit": [{"anonWallet": "w_x", "winRateBps": 6000, "insufficientSample": False}]},
+                "unranked": [{"anonWallet": "w_y", "insufficientSample": True, "reason": "2 settled markets"}],
+                "quota": {"plan": "free", "usedToday": 1, "perDay": 20, "cached": False, "jobId": None,
+                          "note": "1 of 20"},
+                "costNote": "cached for 60 seconds"}
+        got = radar_findings(bad)
+        return len(got) >= 4 and not radar_findings(good), got
 
     for fn in cases:
         try:

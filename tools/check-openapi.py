@@ -42,6 +42,8 @@ BUILTIN_DOCS = {"/docs", "/docs/oauth2-redirect", "/openapi.json", "/redoc"}
 # contract adopts the app's snake_case for those, and camelCase survives only on query parameters, where
 # `alias=` is real. Normalising the difference away would have hidden an actual rename.
 TABLE_FOR_PATH = {
+    "/v1/radar/runs": "RADAR_RESPONSES",
+    "/v1/radar/runs/{job_id}": "RADAR_JOB_RESPONSES",
     "/healthz": "HEALTH_RESPONSES",                    # empty on purpose; the comment in app.py says why
     "/readyz": "READYZ_RESPONSES",
     "/v1/markets": "LIST_RESPONSES",
@@ -80,6 +82,12 @@ TABLE_FOR_PATH = {
     "/v1/copy/configs/monitor": "COPY_MONITOR_RESPONSES",
     "/v1/me/portfolio": "PORTFOLIO_RESPONSES",
     "/v1/whale-views": "WHALE_VIEW_RESPONSES",
+    # A path with a read and a write has TWO tables, and they differ by exactly the rows that describe the
+    # difference: only the write takes an Idempotency-Key, so only the write answers its 400. Keyed by
+    # (verb, path) and looked up before the bare path, because a single name per path would force one of the
+    # two to lie about a status it never returns.
+    ("GET", "/v1/copy/configs"): "COPY_LIST_RESPONSES",
+    ("GET", "/v1/whale-views"): "WHALE_VIEW_LIST_RESPONSES",
 }
 
 
@@ -213,7 +221,7 @@ def contract_rules(rep: Report, doc: dict, ops: dict) -> None:
 
 def compare_tables(rep: Report, ops: dict, tables: dict) -> None:
     for (verb, path), op in sorted(ops.items(), key=lambda kv: str(kv[0])):
-        tname = TABLE_FOR_PATH.get(path)
+        tname = TABLE_FOR_PATH.get((verb, path)) or TABLE_FOR_PATH.get(path)
         rep.check("%s %s is mapped to a table in app.py" % (verb, path), tname is not None,
                   "no TABLE_FOR_PATH entry — the checker would silently skip this operation")
         if tname is None:
@@ -229,6 +237,17 @@ def compare_tables(rep: Report, ops: dict, tables: dict) -> None:
                   "yaml %s vs app %s" % (sorted(want), sorted(declared)))
         rep.check("%s %s: the yaml documents no status the app cannot return" % (verb, path),
                   not want - declared, "extra in yaml: %s" % sorted(want - declared))
+
+    # A path that serves both a read and a write must not answer the write's refusals on its read. The two
+    # P10 tables differ by exactly {400}: the key-required answer belongs to the verb that takes the header.
+    for verb_pair in (("GET", "/v1/copy/configs", "COPY_LIST_RESPONSES"),
+                      ("GET", "/v1/whale-views", "WHALE_VIEW_LIST_RESPONSES")):
+        read_verb, path, read_table = verb_pair
+        write_path = TABLE_FOR_PATH.get(path)
+        read = set(tables.get(read_table, set())) | {200}
+        write = set(tables.get(write_path, set())) | {200}
+        rep.check("%s %s is its write table minus the Idempotency-Key answer" % (read_verb, path),
+                  400 in write and write - {400} == read, "read %s vs write %s" % (sorted(read), sorted(write)))
 
 
 def compare_live(rep: Report, doc: dict, ops: dict) -> None:
