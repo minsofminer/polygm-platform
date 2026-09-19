@@ -144,6 +144,9 @@
   --pgm-font-dense: 11px;
   --pgm-min-touch-target: 44px; /* never scaled down by density */
   --pgm-shell-max-width: 1680px;
+  --pgm-book-max-block: 560px;
+  --pgm-rail-left: 280px;
+  --pgm-rail-right: 320px;
 
 [data-density="comfortable"] {
   --pgm-row-active-table-row: var(--pgm-row-table-row-comfortable);

@@ -208,6 +208,19 @@ seed-rules:         ## write the default alert rules for one owner (P09 owns the
 # cookie flags, the CSRF hop, the refresh race and the logged-out flash are properties of a *served* response.
 # So the target builds first — and `npm run measure` re-writes docs/verification/P08-bundle.txt in the same
 # breath, because a budget number older than the tree it describes is a number nobody should read.
+# P09 · the markets surfaces. `p09` is the 7 checks. Two of them (c3, c4) call the P08 gate's own scanners over
+# this phase's files rather than reimplementing them; c7 is the phase's acceptance line, run whole. The build is
+# not run here for the same reason as P08 — `make p08` builds and records the payload measurement, and c7 refuses
+# a measurement older than the newest source file, so `p08` before `p09` is the order that keeps both honest.
+p09: web-deps
+	$(PY) tools/p09-gate-check.py --record docs/verification/P09-gate.txt
+
+p09-offline: web-deps    ## the 6 checks that need no build artefact
+	$(PY) tools/p09-gate-check.py --fast
+
+p09-selftest: web-deps   ## prove the 7 checks can fail, one planted violation at a time
+	$(PY) tools/p09-gate-check.py --self-test
+
 p08: web-build
 	$(PY) tools/p08-gate-check.py --record docs/verification/P08-gate.txt
 
@@ -234,7 +247,7 @@ p03:
 	$(PY) tools/p03-gate-check.py
 	$(PY) tools/p03-mutation-test.py
 
-check: test lint lint-canary openapi-selftest sql-sqlite-check gate gate-mutate p01 p02 p03 p04 p05 p06 p07 p08 probe-fresh
+check: test lint lint-canary openapi-selftest sql-sqlite-check gate gate-mutate p01 p02 p03 p04 p05 p06 p07 p08 p09 probe-fresh
 	@echo "ALL GREEN"
 
 # ------------------------------------------------------------------ diagnostics

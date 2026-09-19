@@ -387,3 +387,426 @@ body {
     box-shadow: inset var(--pgm-space-off-3) 0 0 var(--pgm-border-strong);
   }
 }
+
+/* ---------------------------------------------------------------- P09 · the market surfaces
+   Everything below is layout and state colour; every value is a token, because the P08 gate reads this file
+   and fails the build on a px literal, a colour literal, a duration in ms or an undeclared --pgm-* variable.
+   The classes here are the ones the P09 screens reference; a class in a component with no rule here is how a
+   screen ships unstyled and nobody notices until the visual pass a phase later. */
+
+.pgm-page {
+  padding: var(--pgm-pad-screen-compact);
+  max-inline-size: var(--pgm-shell-max-width);
+  margin-inline: auto;
+  display: grid;
+  gap: var(--pgm-space-3);
+}
+
+.pgm-markets-head,
+.pgm-market-head,
+.pgm-chart-head,
+.pgm-ladder-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--pgm-space-2);
+}
+
+.pgm-fine {
+  color: var(--pgm-text-muted);
+  font-size: var(--pgm-font-compact);
+}
+
+.pgm-freshness {
+  color: var(--pgm-text-secondary);
+  font-size: var(--pgm-font-compact);
+}
+
+.pgm-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--pgm-space-2);
+  align-items: end;
+}
+
+.pgm-filters label {
+  display: grid;
+  gap: var(--pgm-space-0);
+  font-size: var(--pgm-font-compact);
+}
+
+.pgm-checkbox {
+  display: flex;
+  align-items: center;
+  gap: var(--pgm-space-0);
+}
+
+.pgm-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--pgm-space-1);
+}
+
+.pgm-chips button,
+.pgm-view-toggle button,
+.pgm-segmented button,
+.pgm-sort {
+  border-radius: var(--pgm-radius-chip);
+  border-color: var(--pgm-border-default);
+  border-style: solid;
+  border-width: var(--pgm-border-w-hair);
+  background: var(--pgm-bg-elevated);
+  color: var(--pgm-text-secondary);
+  min-block-size: var(--pgm-min-touch-target);
+  padding-inline: var(--pgm-space-1);
+}
+
+.pgm-chips button[aria-pressed="true"],
+.pgm-view-toggle button[aria-pressed="true"],
+.pgm-segmented button[aria-pressed="true"] {
+  background: var(--pgm-brand-primary-subtle);
+  color: var(--pgm-brand-primary-text);
+  border-color: var(--pgm-border-strong);
+}
+
+.pgm-chip-count {
+  color: var(--pgm-text-muted);
+}
+
+.pgm-view-toggle,
+.pgm-segmented {
+  display: inline-flex;
+  gap: var(--pgm-space-off-1);
+}
+
+.pgm-new-rows {
+  display: flex;
+  gap: var(--pgm-space-1);
+  align-items: center;
+  background: var(--pgm-bg-inset);
+  padding-inline: var(--pgm-space-1);
+  border-radius: var(--pgm-radius-chip);
+}
+
+.pgm-empty {
+  display: grid;
+  gap: var(--pgm-space-1);
+  justify-items: start;
+  padding: var(--pgm-pad-panel-compact);
+  border-radius: var(--pgm-radius-card);
+  background: var(--pgm-bg-inset);
+}
+
+.pgm-market-list,
+.pgm-market-grid {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: var(--pgm-space-2);
+}
+
+.pgm-market-grid {
+  grid-template-columns: repeat(auto-fill, minmax(var(--pgm-rail-left), 1fr));
+}
+
+.pgm-card {
+  border-radius: var(--pgm-radius-card);
+  border-color: var(--pgm-border-default);
+  border-style: solid;
+  border-width: var(--pgm-border-w-hair);
+  background: var(--pgm-bg-elevated);
+  padding: var(--pgm-pad-panel-compact);
+  display: grid;
+  gap: var(--pgm-space-1);
+}
+
+.pgm-card-meta {
+  display: flex;
+  gap: var(--pgm-space-off-1);
+  flex-wrap: wrap;
+}
+
+.pgm-chip {
+  border-radius: var(--pgm-radius-chip);
+  border-color: var(--pgm-border-default);
+  border-style: solid;
+  border-width: var(--pgm-border-w-hair);
+  padding-inline: var(--pgm-space-off-1);
+  color: var(--pgm-text-secondary);
+  font-size: var(--pgm-font-compact);
+}
+
+.pgm-card-link {
+  background: none;
+  border: none;
+  color: var(--pgm-text-primary);
+  text-align: start;
+  padding: 0;
+  font: inherit;
+}
+
+.pgm-card-event ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: var(--pgm-space-off-1);
+}
+
+.pgm-card-event li {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--pgm-space-1);
+}
+
+.pgm-card-numbers,
+.pgm-rail-numbers {
+  display: grid;
+  gap: var(--pgm-space-1);
+  grid-template-columns: repeat(auto-fit, minmax(var(--pgm-rail-left), 1fr));
+  margin: 0;
+}
+
+.pgm-card-numbers dt,
+.pgm-rail-numbers dt {
+  color: var(--pgm-text-muted);
+  font-size: var(--pgm-font-compact);
+}
+
+.pgm-card-numbers dd,
+.pgm-rail-numbers dd {
+  margin: 0;
+  color: var(--pgm-text-primary);
+}
+
+.pgm-market-main,
+.pgm-event-main {
+  display: grid;
+  gap: var(--pgm-space-3);
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+}
+
+.pgm-market-left,
+.pgm-market-right {
+  display: grid;
+  gap: var(--pgm-space-2);
+  align-content: start;
+}
+
+/* The book is bounded and scrolls inside itself, which is a decision with a cost (a wheel trap) paid
+   deliberately: 200 levels at the 44px touch target is ~8800px of page, and the requirement is that the reader
+   keeps their place in it while the ladder re-folds. Bounded here, the browser's document-level anchoring
+   cannot help, so `src/lib/anchor.ts` puts the price that was under the top edge back under it. */
+.pgm-ladder-scroll {
+  max-block-size: var(--pgm-book-max-block);
+  overflow-y: auto;
+  overflow-anchor: none;      /* ours is the anchor that matters; two anchors would fight over one scrollTop */
+  scroll-behavior: auto;      /* a re-ladder is not a journey: no smooth scrolling, no animated scrollTop */
+  overscroll-behavior: contain;
+}
+
+.pgm-book-stale {
+  position: sticky;
+  inset-block-start: 0;
+  margin: 0;
+  padding-block: var(--pgm-space-1);
+  padding-inline: var(--pgm-pad-cell-x-compact);
+  background: var(--pgm-bg-elevated);
+  color: var(--pgm-alert-high);
+  border-block-end: var(--pgm-border-w-hair) solid var(--pgm-border-strong);
+}
+
+/* Stale is shown by dimming the numbers AND by the sentence above them: a colour alone is not a state a reader
+   can be expected to decode, and the levels stay readable because "we cannot see" is not "there is nothing". */
+.pgm-ladder-pair[data-stale="true"] {
+  opacity: 0.55;
+}
+
+.pgm-ladder-pair {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: var(--pgm-space-2);
+}
+
+.pgm-ladder {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.pgm-ladder-row {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr);
+  inline-size: 100%;
+  gap: var(--pgm-space-off-1);
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: end;
+  padding-inline: var(--pgm-pad-cell-x-compact);
+  min-block-size: var(--pgm-min-touch-target);
+  align-items: center;
+}
+
+.pgm-ladder-row:disabled {
+  color: var(--pgm-text-muted);
+  cursor: not-allowed;
+}
+
+/* Stacking without z-index: the bar is the first child and the numbers come after it, so painting order
+   (positioned descendants in tree order) puts the numbers on top. The first version used `z-index: 0/1`, which
+   the design system has no rungs for — and the gate's c5 fails on a z-index literal, correctly: an invented
+   rung is how two surfaces end up fighting over the same layer. */
+.pgm-ladder-bar {
+  position: absolute;
+  inset-block: 0;
+  inset-inline-end: 0;
+  background: var(--pgm-row-active-book-level);
+  border-radius: var(--pgm-radius-xs);
+}
+
+.pgm-ladder-price,
+.pgm-ladder-size,
+.pgm-ladder-cum {
+  position: relative;
+}
+
+.pgm-ladder-cum,
+.pgm-ladder-empty {
+  color: var(--pgm-text-muted);
+}
+
+.pgm-spread {
+  display: flex;
+  gap: var(--pgm-space-1);
+  align-items: baseline;
+  flex-wrap: wrap;
+}
+
+.pgm-one-sided {
+  display: grid;
+  gap: var(--pgm-space-off-1);
+  border-radius: var(--pgm-radius-card);
+  border-color: var(--pgm-alert-watch);
+  border-style: solid;
+  border-width: var(--pgm-border-w-strong);
+  background: var(--pgm-bg-inset);
+  padding: var(--pgm-pad-panel-compact);
+}
+
+.pgm-invariant {
+  border-radius: var(--pgm-radius-card);
+  background: var(--pgm-bg-inset);
+  padding: var(--pgm-pad-panel-compact);
+}
+
+.pgm-event-table {
+  inline-size: 100%;
+  border-collapse: collapse;
+}
+
+.pgm-event-table th,
+.pgm-event-table td {
+  text-align: start;
+  padding-inline: var(--pgm-pad-cell-x-compact);
+  border-block-end-color: var(--pgm-border-default);
+  border-block-end-style: solid;
+  border-block-end-width: var(--pgm-border-w-hair);
+}
+
+.pgm-chart {
+  inline-size: 100%;
+  block-size: auto;
+  background: var(--pgm-bg-inset);
+  border-radius: var(--pgm-radius-card);
+}
+
+.pgm-chart-line {
+  fill: none;
+  stroke: var(--pgm-chart-1);
+  stroke-width: var(--pgm-border-w-heavy);
+}
+
+.pgm-chart-up {
+  fill: var(--pgm-action-buy);
+  stroke: var(--pgm-action-buy);
+}
+
+.pgm-chart-down {
+  fill: var(--pgm-action-sell);
+  stroke: var(--pgm-action-sell);
+}
+
+.pgm-chart-volume {
+  fill: var(--pgm-chart-3);
+  opacity: 0.35;
+}
+
+.pgm-chart-avg {
+  stroke: var(--pgm-chart-2);
+  stroke-dasharray: var(--pgm-space-0) var(--pgm-space-off-1);
+}
+
+.pgm-chart-entry {
+  fill: var(--pgm-brand-primary);
+}
+
+.pgm-chart-buy {
+  fill: var(--pgm-action-buy);
+}
+
+.pgm-chart-sell {
+  fill: var(--pgm-action-sell);
+}
+
+.pgm-chart-mark {
+  stroke: var(--pgm-text-muted);
+  stroke-width: var(--pgm-border-w-hair);
+}
+
+.pgm-chart-mark-resolved {
+  stroke: var(--pgm-alert-info);
+}
+
+.pgm-chart-mark-dispute {
+  stroke: var(--pgm-alert-high);
+}
+
+.pgm-rail {
+  display: grid;
+  gap: var(--pgm-space-2);
+  grid-template-columns: repeat(auto-fit, minmax(var(--pgm-rail-right), 1fr));
+}
+
+.pgm-rail section {
+  display: grid;
+  gap: var(--pgm-space-off-1);
+  align-content: start;
+}
+
+.pgm-holders {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--pgm-space-off-1);
+}
+
+.pgm-holders li {
+  display: flex;
+  gap: var(--pgm-space-1);
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+@media (max-width: var(--pgm-bp-md)) {
+  .pgm-market-main,
+  .pgm-event-main,
+  .pgm-ladder-pair {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

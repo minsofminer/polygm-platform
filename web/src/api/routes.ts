@@ -51,6 +51,33 @@ export const ROUTES = {
   book: { method: "GET", path: "/v1/markets/{market_id}/book", built: true, whileMissing: "refuses", owner: "P05" },
   fills: { method: "GET", path: "/v1/markets/{market_id}/fills", built: true, whileMissing: "refuses", owner: "P05" },
   tape: { method: "GET", path: "/v1/tape", built: true, whileMissing: "refuses", owner: "P05" },
+  // ---- P09's three read surfaces. Each is `built: true` because the gate's c1 asserts a built route is in
+  // contracts/openapi.yaml, and each is declared HERE rather than called by path so a screen cannot reach a
+  // route the ledger does not know about.
+  history: {
+    method: "GET",
+    path: "/v1/markets/{market_id}/history",
+    built: true,
+    whileMissing: "refuses",
+    owner: "P09",
+    note: "candles from our fills; 6h/1d are derived on the client from the 1h series",
+  },
+  holders: {
+    method: "GET",
+    path: "/v1/markets/{market_id}/holders",
+    built: true,
+    whileMissing: "refuses",
+    owner: "P09",
+    note: "tape-derived and pseudonymised; provenance is returned so the rail can say which list it is",
+  },
+  event: {
+    method: "GET",
+    path: "/v1/events/{event_id}",
+    built: true,
+    whileMissing: "refuses",
+    owner: "P09",
+    note: "the 128-row table plus the negRisk sum/deviation/tolerance",
+  },
   createOrder: { method: "POST", path: "/v1/orders", built: true, whileMissing: "refuses", owner: "P06" },
   intent: { method: "GET", path: "/v1/orders/intents/{intent_id}", built: true, whileMissing: "refuses", owner: "P06" },
   addressList: {

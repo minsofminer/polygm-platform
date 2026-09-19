@@ -86,6 +86,88 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/markets/{market_id}/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Trade-derived candles for the price chart
+         * @description Candles from OUR fills, not the venue's `/prices-history`: the venue's series samples mid-price on its
+         *     own schedule and is Cloudflare-cached (measured in P01), so it is a different object with the same
+         *     name. Consequences are stated rather than implied - a bucket with no fills is a GAP with `trades: 0`,
+         *     not a flat candle, and `sampled` says when the 20k-fill read cap was reached.
+         *
+         *     The server builds 1m, 5m, 15m and 1h. 6h and 1d are derived by the client by bucketing the 1h
+         *     candles, and both lists are served so a client feature-detects instead of trusting a changelog.
+         */
+        get: operations["getMarketHistory"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/markets/{market_id}/holders": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Wallets we have seen trade this market, with published labels only
+         * @description Provenance is `tape`: these are the wallets in OUR fill log, so a whale that traded before ingest
+         *     started is invisible and a wallet that only posted unfilled orders never appears. Not the venue's
+         *     holder list, and the rail says which one it is. Addresses are pseudonymised exactly as in `/v1/tape`
+         *     (sha256 with a local prefix), and `insider_suspect` filters out at the join because it is not a
+         *     publishable label.
+         */
+        get: operations["getMarketHolders"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/events/{event_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One negRisk event, every market under it, and the invariant they must satisfy
+         * @description The 128-row table's data source. Two statements, and the difference matters:
+         *
+         *       * `probabilitySum`/`deviation`/`tolerance` are the INVARIANT. For a negRisk event the YES prices
+         *         partition one dollar, so the sum must be near 1 - near, because each price is only known to a
+         *         tick and the sum of N quotes is only known to N ticks, which is exactly `tolerance`.
+         *       * `buyAllCost`/`sellAllProceeds`/`opportunity` are the TRADABLE statement, computed from executable
+         *         levels rather than mids: buying one of every outcome costs the sum of the best asks, selling one
+         *         of every outcome returns the sum of the best bids. `opportunity` is null unless one of those
+         *         crosses a dollar by more than a tick, because a screen that shouts at every 1-tick deviation
+         *         teaches its reader to ignore it.
+         *
+         *     A market with only one side has no mid; it is marked `summable: false` and excluded from the sum
+         *     instead of borrowing its last trade price, which would put a stale number into a live invariant.
+         */
+        get: operations["getEvent"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/markets/{market_id}/fills": {
         parameters: {
             query?: never;
@@ -480,6 +562,8 @@ export interface components {
         Levels: {
             price: components["schemas"]["Price"];
             shares: string;
+            /** @description cumulative size from the top of this side, as a decimal string. Served rather than left to the client because deriving it means summing floats in a render loop, and the depth bar is a fraction of the largest cumulative figure on either side. P09 added it to the payload and to this schema in the same change: a field the ladder cannot work without is not optional documentation. */
+            cumShares: string;
             /** @description how many venue orders sit at this price; 1 is a real answer and must render */
             levels: number;
         }[];
@@ -511,8 +595,7 @@ export interface components {
             source: "rest" | "ws";
             /** @description sha256 of the counterparty address with a local prefix, 10 hex chars. The address itself is never returned: a public tape that echoes every trader's wallet is an address book of our users' counterparties, and `raw_json` is withheld for the same reason. */
             anonWallet: string;
-            /** @description published labels only; `insider_suspect` is never publishable, so it cannot appear here */
-            labels?: ("whale" | "smart_money" | "new_wallet" | "insider_suspect" | "cluster" | "wash_like")[];
+            labels?: components["schemas"]["Labels"];
         };
         /** @description the fields the risk gate reads (P01 D5.2) plus what the header renders. acceptingOrders, secondsDelay, minimumOrderSize and enableOrderBook are required because a missing one is a different order-management UI, not a default. */
         Market: {
@@ -530,6 +613,86 @@ export interface components {
             feeType: string;
             enableOrderBook: boolean;
             endDate?: number | null;
+            category?: string;
+            eventId?: string | null;
+            outcomeCount?: number;
+            negRisk?: boolean;
+            volume24h?: components["schemas"]["Price"];
+            liquidity?: components["schemas"]["Price"];
+            openInterest?: components["schemas"]["Price"];
+            lastPrice?: components["schemas"]["Price"] | null;
+            price24hAgo?: components["schemas"]["Price"] | null;
+            /** @description signed difference of two prices in micro units, null when our tape does not reach back 24h. Zero would be a claim we do not have the data to make. */
+            change24h?: components["schemas"]["Price"] | null;
+            /** @description integer micro units; null when one side is missing, which is not a spread of zero */
+            spreadMicro?: number | null;
+            event?: components["schemas"]["EventSummary"];
+            slug?: string;
+            eventTitle?: string | null;
+            eventSlug?: string | null;
+            volume7d?: components["schemas"]["Price"];
+            volume30d?: components["schemas"]["Price"];
+            /** @description verbatim from the venue, including a `javascript:` URL if a market creator wrote one. It is data here on purpose: the client is what refuses to render it as a link, and a fixture that never reaches the client proves nothing about the client. */
+            resolutionSource?: string | null;
+            /** @description attacker-influenced text, returned verbatim and rendered as sanitised PLAIN TEXT by the client. Sanitising in the API would hide the fixture that proves the client does not trust it. */
+            resolutionCriteria?: string | null;
+            /** @description wallets WE have seen trade this market, not the venue's holder list, which does not exist for every market. The rail labels it "seen trading" for that reason. */
+            holderCount?: number;
+        };
+        /** @description published labels only; `insider_suspect` is never publishable, so it cannot appear here */
+        Labels: ("whale" | "smart_money" | "new_wallet" | "insider_suspect" | "cluster" | "wash_like")[];
+        /** @description one price bucket derived from our fills. A bucket with `trades: 0` does not exist in the array - the gaps are ABSENT rather than flat, because a candle drawn across a gap is a chart inventing prices. */
+        Candle: {
+            /** @description bucket start */
+            t: number;
+            o: components["schemas"]["Price"];
+            h: components["schemas"]["Price"];
+            l: components["schemas"]["Price"];
+            c: components["schemas"]["Price"];
+            shares: string;
+            trades: number;
+            notional: components["schemas"]["Price"];
+        };
+        /** @description what a discovery card needs to summarise an event instead of listing it. The 128-outcome event is the reason this exists: a card that lists 128 rows is unreadable and one that shows the first three is wrong, so the card shows the top three BY 24h VOLUME and says how many it left out. */
+        EventSummary: {
+            id: string;
+            title: string;
+            marketCount: number;
+            totalVolume24h: components["schemas"]["Price"];
+            hiddenCount: number;
+            topOutcomes: {
+                marketId: string;
+                question: string;
+                price: components["schemas"]["Price"] | null;
+                volume24h: components["schemas"]["Price"];
+            }[];
+        };
+        Event: {
+            id: string;
+            slug?: string;
+            title: string;
+            negRisk: boolean;
+            category?: string | null;
+            endTs?: number | null;
+            marketCount: number;
+        };
+        /** @description one market under the event, i.e. one row of the 128-row table the client virtualises */
+        EventOutcome: {
+            marketId: string;
+            question: string;
+            acceptingOrders: boolean;
+            /** @enum {string} */
+            minimumTickSize: "0.001" | "0.01";
+            minimumOrderSize: string;
+            price: components["schemas"]["Price"] | null;
+            bestBid?: components["schemas"]["Price"] | null;
+            bestAsk?: components["schemas"]["Price"] | null;
+            volume24h: components["schemas"]["Price"];
+            liquidity: components["schemas"]["Price"];
+            openInterest?: components["schemas"]["Price"];
+            change24h?: components["schemas"]["Price"] | null;
+            /** @description false when the market has one side or none, so it has no mid. Excluded from the sum rather than borrowing its last trade price, which would put a stale number into a live invariant. */
+            summable: boolean;
         };
         /** @description every read payload carries these three fields */
         Stamped: {
@@ -714,8 +877,10 @@ export interface operations {
     getBook: {
         parameters: {
             query?: {
-                /** @description levels per side; 400 is the design-system ladder cap and is also the hard maximum */
+                /** @description levels per side; 400 is the design-system ladder cap and is also the hard maximum. The limit is applied to the RAW ladder before aggregation, so a bucket count can be lower than `depth` - the alternative is loading the whole book into memory to count it, which is the cost this endpoint exists to avoid. */
                 depth?: number;
+                /** @description bucket width for the ladder. A 0.001-tick market has a thousand levels per dollar, so the raw ladder is unreadable; 1c and 5c fold it. Rounding is DIRECTIONAL - a bid rounds down and an ask rounds up - so an aggregated level never shows a price the user could not have got. */
+                aggregate?: "raw" | "1c" | "5c";
             };
             header?: never;
             path: {
@@ -735,11 +900,154 @@ export interface operations {
                         market: string;
                         bids: components["schemas"]["Levels"];
                         asks: components["schemas"]["Levels"];
+                        /** @enum {string} */
+                        aggregate: "raw" | "1c" | "5c";
+                        aggregateStep?: components["schemas"]["Price"] | null;
+                        tickSize?: components["schemas"]["Price"] | null;
                         bestBid?: components["schemas"]["Price"];
                         bestAsk?: components["schemas"]["Price"];
+                        midPrice?: components["schemas"]["Price"];
+                        /** @description the largest cumulative size on either side, so a depth bar can be a fraction of it without the chart summing the ladder itself */
+                        maxCumShares?: string;
                         /** @description metadata arithmetic on integers, never a float price */
                         spreadTicks: number | null;
+                        oneSided: null | {
+                            /** @enum {string} */
+                            side: "asks-only" | "bids-only";
+                            /** @description a machine code; the client owns the words */
+                            why: string;
+                            levels: number;
+                            notionalUsdc: components["schemas"]["Price"];
+                            bestAsk?: components["schemas"]["Price"];
+                            bestBid?: components["schemas"]["Price"];
+                        };
                         ageMs: number;
+                    };
+                };
+            };
+            404: components["responses"]["NotFound"];
+            422: components["responses"]["Validation"];
+            500: components["responses"]["Internal"];
+        };
+    };
+    getMarketHistory: {
+        parameters: {
+            query?: {
+                interval?: "1m" | "5m" | "15m" | "1h";
+                /** @description buckets of history, counted back from now; it bounds the fill read as well as the output */
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                market_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description candles, oldest first */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Stamped"] & {
+                        market: string;
+                        interval: string;
+                        bucketMs: number;
+                        /** @description the oldest bucket boundary the request reaches */
+                        fromTs?: number;
+                        candles: components["schemas"]["Candle"][];
+                        serverIntervals: string[];
+                        derivedIntervals: string[];
+                        /** @enum {string} */
+                        source: "fills";
+                        /** @description the read cap was hit; the left edge is not the beginning of the market */
+                        sampled?: boolean;
+                    };
+                };
+            };
+            404: components["responses"]["NotFound"];
+            422: components["responses"]["Validation"];
+            500: components["responses"]["Internal"];
+        };
+    };
+    getMarketHolders: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                market_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description holders by notional, largest first */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Stamped"] & {
+                        market: string;
+                        /** @enum {string} */
+                        provenance: "tape";
+                        holderCount: number;
+                        holders: {
+                            anonWallet: string;
+                            notional: components["schemas"]["Price"];
+                            fills: number;
+                            firstSeenMs?: number;
+                            lastSeenMs?: number;
+                            /** @description share of the tape's notional */
+                            shareBp: number;
+                            labels: components["schemas"]["Labels"];
+                        }[];
+                    };
+                };
+            };
+            404: components["responses"]["NotFound"];
+            422: components["responses"]["Validation"];
+            500: components["responses"]["Internal"];
+        };
+    };
+    getEvent: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                event_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description the event and its outcomes, biggest 24h volume first */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Stamped"] & {
+                        event: components["schemas"]["Event"];
+                        outcomes: components["schemas"]["EventOutcome"][];
+                        probabilitySum: components["schemas"]["Price"] | null;
+                        deviation: components["schemas"]["Price"] | null;
+                        tolerance: components["schemas"]["Price"];
+                        withinTolerance: boolean | null;
+                        summableCount?: number;
+                        buyAllCost?: components["schemas"]["Price"] | null;
+                        sellAllProceeds?: components["schemas"]["Price"] | null;
+                        opportunity: null | {
+                            /** @enum {string} */
+                            kind: "buy-all" | "sell-all";
+                            edge: components["schemas"]["Price"];
+                        };
                     };
                 };
             };
@@ -822,9 +1130,22 @@ export interface operations {
                 limit?: number;
                 /** @description accepting orders right now */
                 live?: boolean;
-                sortBy?: "endsSoon" | "newMarket" | "spread";
-                /** @description case-folded substring over question and slug, matched with instr() rather than LIKE so a user's own % cannot change the meaning of their own search */
+                sortBy?: "endsSoon" | "newMarket" | "spread" | "volume24h" | "liquidity" | "openInterest" | "move24h";
+                /** @description case-folded substring over question, slug and category, matched with instr() rather than LIKE so a user's own % cannot change the meaning of their own search. Three columns, not four: the prompt asks for tags as well, and we do not store tags - a typeahead that searches a column which does not exist is a docstring, not a feature. */
                 q?: string;
+                /** @description the P09 filter vocabulary. Case-folded, canonicalised server-side, and a value outside the vocabulary is a 422 rather than an empty page, because "no markets match" and "you spelled the category wrong" are different answers. */
+                category?: "Politics" | "Sports" | "Crypto" | "Finance" | "Economics" | "Tech" | "Culture" | "Weather" | "Geopolitics" | "Other";
+                /** @description micro-USDC over the last 24h, in integer micro units - a float here would be a float in the money path */
+                minVolume24h?: number;
+                minLiquidity?: number;
+                minOpenInterest?: number;
+                /** @description only markets whose end is between now and now+N hours. A market that already ended is NOT within the window, which is what stops a dead market leading the default sort. */
+                endsWithinHours?: number;
+                /** @description only markets first seen in the last N hours */
+                newWithinHours?: number;
+                negRiskOnly?: boolean;
+                /** @description false by default - markets under $1,000 of 24h volume are omitted and counted in `longTail.hiddenCount`. P01 measured a median event at $19,910/day, so the default view is what someone can actually trade and the long tail is one parameter away, never silently dropped. */
+                includeLongTail?: boolean;
             };
             header?: never;
             path?: never;
@@ -842,7 +1163,18 @@ export interface operations {
                         items: components["schemas"]["Market"][];
                         nextCursor: string | null;
                         /** @enum {string} */
-                        sortBy?: "endsSoon" | "newMarket" | "spread";
+                        sortBy?: "endsSoon" | "newMarket" | "spread" | "volume24h" | "liquidity" | "openInterest" | "move24h";
+                        /** @description market counts per category, with every filter applied EXCEPT the category one and without the cursor: a category tab that zeroes the other tabs is a tab nobody can navigate back from */
+                        facets?: {
+                            [key: string]: number;
+                        };
+                        categories?: string[];
+                        longTail?: {
+                            includeLongTail: boolean;
+                            thresholdMicro: number;
+                            /** @description left out by the filter ABOVE */
+                            hiddenCount: number;
+                        };
                         /** @description what the server accepts today */
                         sortKeys?: string[];
                         /**

@@ -17,7 +17,8 @@ import { proxy } from "@/auth/server";
  */
 export type ServerRead<T> =
   | { ok: true; data: T; stampLabel: string; freshness: Freshness; ageMs: number | null }
-  | { ok: false; code: string; message: string; stampLabel: string; freshness: Freshness; ageMs: number | null };
+  | { ok: false; code: string; message: string; status: number; stampLabel: string; freshness: Freshness;
+      ageMs: number | null };
 
 export async function serverRead<T>(method: "GET", path: string): Promise<ServerRead<T>> {
   const out = await proxy(path, { method });
@@ -30,7 +31,11 @@ export async function serverRead<T>(method: "GET", path: string): Promise<Server
     const error = (parsed?.error ?? {}) as Record<string, unknown>;
     return {
       ok: false,
+      // `status` as well as the code: the caller has to tell "no such market" (404 -> notFound()) from "the
+      // API is down", and a code string is not the right shape for that decision.
+      status: out.status,
       code: String(error.code ?? "INTERNAL"),
+
       message: String(error.message ?? `the API answered ${out.status}`),
       stampLabel: "no data",
       freshness: "unknown",

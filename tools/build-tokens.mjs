@@ -101,6 +101,18 @@ for (const [k, by] of Object.entries(t.density.padding_px)) {
 for (const m of MODES) densityLines.push(`  --pgm-font-${m}: ${px(t.density.font_size_px[m])};`);
 densityLines.push(`  --pgm-min-touch-target: ${px(t.density.constants.min_touch_target)}; /* never scaled down by density */`);
 if (t.density.constants["shell-max-width"]) densityLines.push(`  --pgm-shell-max-width: ${px(t.density.constants["shell-max-width"])};`);
+// P09. The rail widths are emitted from the same constants block as the shell ceiling, and that is the point:
+// they were used by web/src/globals.css against an `auto` fallback before they existed here, so the layout
+// looked right for as long as nobody asked which two widths it was actually laying out against. A token that
+// only exists in a `var(..., fallback)` is a token the design system does not have.
+// The ladder's ceiling. 560px is ~12 rows at the 44px touch target, which is the book the "2xl" breakpoint in
+// this same file already promises ("12 book levels"); rows never shrink with density, so one value is honest
+// where the rail widths needed none. A bounded book is what makes src/lib/anchor.ts load-bearing: a re-ladder
+// inside a scroll container has to put the reader back, and the page-level anchoring cannot do it for us.
+if (t.density.constants["book_max_block"]) densityLines.push(`  --pgm-book-max-block: ${px(t.density.constants["book_max_block"])};`);
+for (const [key, name] of [["rail_left", "rail-left"], ["rail_right", "rail-right"]]) {
+  if (t.density.constants[key]) densityLines.push(`  --pgm-${name}: ${px(t.density.constants[key])};`);
+}
 for (const m of MODES) {
   densityLines.push(`\n[data-density="${m}"] {`);
   for (const [row, by] of Object.entries(t.density.row_heights_px)) densityLines.push(`  --pgm-row-active-${row.replace(/_/g, '-')}: var(--pgm-row-${row.replace(/_/g, '-')}-${m});`);

@@ -1555,10 +1555,17 @@ components:
       maxItems: 400
       items:
         type: object
-        required: [price, shares, levels]
+        required: [price, shares, levels, cumShares]
         properties:
           price: {$ref: "#/components/schemas/Price"}
           shares: {type: string, pattern: '^[0-9]+(\.[0-9]{1,6})?$'}
+          cumShares:
+            type: string
+            description: >-
+              cumulative size from the top of this side, as a decimal string. Served rather than left to the
+              client because deriving it means summing floats in a render loop, and the depth bar is a fraction
+              of the largest cumulative figure on either side. P09 added it to the payload and to this schema in
+              the same change: a field the ladder cannot work without is not optional documentation.
           levels:
             type: integer
             minimum: 1
@@ -1641,6 +1648,28 @@ components:
           oneOf: [{type: integer}, {type: "null"}]
           description: integer micro units; null when one side is missing, which is not a spread of zero
         event: {$ref: "#/components/schemas/EventSummary"}
+        # P09 · detail. `GET /v1/markets/{market_id}` serves these and the info rail renders them, so they are
+        # declared here rather than left as fields the client reads from a shape it had to guess.
+        slug: {type: string}
+        eventTitle: {oneOf: [{type: string}, {type: "null"}]}
+        eventSlug: {oneOf: [{type: string}, {type: "null"}]}
+        volume7d: {$ref: "#/components/schemas/Price"}
+        volume30d: {$ref: "#/components/schemas/Price"}
+        resolutionSource:
+          oneOf: [{type: string}, {type: "null"}]
+          description: >-
+            verbatim from the venue, including a `javascript:` URL if a market creator wrote one. It is data
+            here on purpose: the client is what refuses to render it as a link, and a fixture that never reaches
+            the client proves nothing about the client.
+        resolutionCriteria:
+          oneOf: [{type: string}, {type: "null"}]
+          description: >-
+            attacker-influenced text, returned verbatim and rendered as sanitised PLAIN TEXT by the client.
+            Sanitising in the API would hide the fixture that proves the client does not trust it.
+        holderCount:
+          type: integer
+          description: wallets WE have seen trade this market, not the venue's holder list, which does not exist
+            for every market. The rail labels it "seen trading" for that reason.
 
     Labels:
       type: array
