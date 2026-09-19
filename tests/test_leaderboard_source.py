@@ -241,14 +241,28 @@ class TestRankWindowPassThrough(unittest.TestCase):
                 fills=rows, at_ms=AT, plan=source.read_plan(board_id="volume", window="7d", at_ms=AT)),
                 at_ms=AT, window="90d")
 
-    def test_the_rising_row_counts_settled_markets_in_the_seven_day_window(self):
+    def test_the_rising_row_publishes_the_seven_day_half_beside_the_sample_it_was_measured_on(self):
+        """`settledMarkets` is the sample the row's own win rate came from, and it says so on every board.
+
+        The rising board reads fourteen days because its metric is a subtraction of two weeks. Its win rate is
+        taken over the eleven markets in that read, so the row prints eleven — and the five that fell inside the
+        7-day half, which is the number the improvement is about, travel separately as `windowSettledMarkets`.
+        Printing five under a win rate taken over eleven is the failure this pins.
+        """
         rows = wallet_record("0xR", ["0xA%d" % i for i in range(6)], wins=6, at=AT - 10 * DAY)
         rows += wallet_record("0xR", ["0xB%d" % i for i in range(5)], wins=5, at=AT - 2 * DAY)
         board = rank.rank_board(board_id="rising", wallets=source.evidence(
             fills=rows, at_ms=AT, plan=source.read_plan(board_id="rising", window="7d", at_ms=AT)),
             at_ms=AT, window="7d")
         row = board["rows"][0]
-        self.assertEqual(row["settledMarkets"], 5, "the row shows the window's results, not the 14-day read")
+        self.assertEqual(row["settledMarkets"], 11, "the win rate is over the 14-day read, so the row says 11")
+        self.assertEqual(row["wins"], 11, "and it prints the wins OF THAT SAMPLE")
+        # Eleven markets is under the platform's twenty-market gate, so there is no rate to show — and the row
+        # says which sample that is about, rather than the 5-market window count the old row printed.
+        self.assertIsNone(row["winRateBps"])
+        self.assertTrue(row["insufficientSample"])
+        self.assertIn("11 settled markets", row["sampleNote"])
+        self.assertEqual(row["windowSettledMarkets"], 5, "the 7-day half is published separately")
         self.assertEqual(row["priorWeekMicro"], 6 * 600 * MICRO)
         self.assertEqual(row["weekMicro"], 5 * 600 * MICRO)
 

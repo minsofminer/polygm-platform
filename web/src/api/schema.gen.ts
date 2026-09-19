@@ -1116,6 +1116,170 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/leaderboard": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One board — rows with their components, the refusals with their reasons, and the freshness (P11 D2)
+         * @description Six boards share this read: `risk_adjusted` (the default), `win_rate`, `volume`, `rising`, `category`
+         *     and `copied`. `window` must be one the board actually reads — there is no 24-hour SKILL board, because
+         *     ranking a win rate on a day's sample would print a number with no sample behind it and call it a
+         *     leaderboard.
+         *
+         *     A wallet under the gate is not hidden: it appears in `unranked` with the number that refused it ("9
+         *     settled markets; this board needs 20"). A blown-up wallet keeps its real, negative score and stays on
+         *     the board, and `summary.blewUpCount` counts it. Every row states the components it was ranked on, the
+         *     window its turnover came from, and any label that applies to it — each with the rule behind it.
+         */
+        get: operations["getLeaderboard"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/leaderboard/boards": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The board picker
+         * @description Generated from the same specification the engine ranks from, so a board that exists in the engine and
+         *     not in the picker cannot happen. `isDefault` is on `risk_adjusted`, not on the venue's volume board:
+         *     volume rewards churn, and a board that can be topped by round-tripping tells a stranger to copy the
+         *     wrong wallet.
+         */
+        get: operations["listLeaderboardBoards"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/leaderboard/methodology": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The published methodology, as the same object the engine reads
+         * @description The boards with their formulas, gates, tie-breaks and cadences, the six integrity rules each with what
+         *     it does AND what it does not do, and the window each board actually reads. Served rather than written
+         *     down separately — a methodology page maintained by hand beside a ranking engine maintained in code is
+         *     two authorities over one number, and the first disagreement is the one a user screenshots.
+         */
+        get: operations["getLeaderboardMethodology"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/leaderboard/why": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Why one wallet is above another, in one sentence, with both component sets
+         * @description This is the phase's own acceptance question, served: "a trader at rank 47 with fewer resolved markets
+         *     than the trader at rank 12" is answered with numbers rather than adjectives, and the sentence names the
+         *     sample explicitly in both directions — the sample gate decides ELIGIBILITY, never order.
+         */
+        get: operations["explainLeaderboardRank"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/leaderboard/snapshots": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One wallet's rank history per board — the source of the 30-day sparkline
+         * @description Read from `leaderboard_snapshots` and nothing else. A rank recomputed from today's ledger is today's
+         *     rank, not the rank they had last Tuesday: "were they falling?" is a question about the past, and only a
+         *     written-down past answers it. `delta` is a change in RANK, so a negative number is an improvement.
+         */
+        get: operations["getLeaderboardSnapshots"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/leaderboard/runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The recompute record, newest first
+         * @description Public on purpose: a cadence nobody can check is a claim. `freshness` states each board's snapshot age
+         *     against the cadence that board declares, so "is this stale" is a comparison rather than a reading of a
+         *     sentence.
+         */
+        get: operations["listLeaderboardRuns"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/leaderboard/recompute": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Write the rank history — one snapshot per wallet per board, plus the integrity verdict
+         * @description Deterministic and idempotent per `Idempotency-Key`: a repeated key returns the first run's answer rather
+         *     than appending a second history point. The run table is keyed by (board, window, hour), so a recompute
+         *     inside the same hour replaces that hour's row instead of inventing cadence we did not have.
+         *
+         *     `boards` and `window` are optional; without them every board is written at its own default window.
+         */
+        post: operations["recomputeLeaderboard"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -2126,6 +2290,307 @@ export interface components {
             plan: string;
             ruleCount: number;
             note: string;
+        };
+        /**
+         * @description USDC as a dot-decimal string — signed where the number can be negative (realised PnL, improvement,
+         *     a drawdown). The integer `…Micro` field beside every one of these is the number the ranking is defined
+         *     against; the string is what the number layer renders.
+         * @example 26800
+         * @example -1200.5
+         * @example 0
+         */
+        LeaderboardMoney: string;
+        LeaderboardRankBadge: {
+            rank: number;
+            rankedTotal: number;
+            /** @example #47 */
+            text: string;
+        };
+        /** @description every term of the score, so a user can recompute their own rank with arithmetic */
+        LeaderboardComponents: {
+            /** @description max(largest drawdown, N x sigma) — the denominator */
+            scaleMicro: number;
+            /** @description what excluding the single best market removed */
+            trimRemovedMicro: number;
+            volatilityMultiple: number;
+            formula: string;
+            trimRule: string;
+        };
+        /**
+         * @description One ranked wallet. `state` is `ranked`, `provisional` or `blew_up`, and a blown-up wallet keeps its real
+         *     (negative) score: quietly dropping blown-up accounts is how a leaderboard lies. `volumeWindow` says which
+         *     window `verifiedVolumeMicro` was measured over — the volume board ranks its window, every skill board's
+         *     eligibility floor is written in LIFETIME turnover, and a row that did not say which would be unreadable.
+         */
+        LeaderboardRow: {
+            rank: number;
+            /** @description the wallet's pseudonym; an address never leaves the API */
+            anon: string;
+            board: string;
+            scoreBps: number;
+            /** @enum {string} */
+            state: "ranked" | "provisional" | "blew_up";
+            /** @description each label states its own rule */
+            labels: string[];
+            settledMarkets: number;
+            wins: number;
+            winRateBps: number;
+            insufficientSample: boolean;
+            sampleNote: string;
+            realisedMicro: number;
+            trimmedMicro: number;
+            volatilityMicro: number;
+            maxDrawdownMicro: number;
+            bestTradeShareBps: number;
+            ageDays: number;
+            verifiedVolumeMicro: number;
+            /** @description the window the turnover was measured over, or `lifetime` */
+            volumeWindow: string;
+            washedMicro: number;
+            washNote: string;
+            copiers: number;
+            disputedExcluded: number;
+            improvementMicro?: number;
+            weekMicro?: number;
+            priorWeekMicro?: number;
+            category?: string | null;
+            categoryShareBps?: number;
+            categorySettled?: number;
+            components: components["schemas"]["LeaderboardComponents"];
+            realised: components["schemas"]["LeaderboardMoney"];
+            trimmed: components["schemas"]["LeaderboardMoney"];
+            volatility: components["schemas"]["LeaderboardMoney"];
+            drawdown: components["schemas"]["LeaderboardMoney"];
+            verifiedVolume: components["schemas"]["LeaderboardMoney"];
+            washed: components["schemas"]["LeaderboardMoney"];
+            improvement?: components["schemas"]["LeaderboardMoney"];
+            week?: components["schemas"]["LeaderboardMoney"];
+            priorWeek?: components["schemas"]["LeaderboardMoney"];
+            rankBadge: components["schemas"]["LeaderboardRankBadge"];
+            /** @description the behaviour labels the trader dossier carries, each with its rule and disclaimer */
+            classifications: {
+                label: string;
+                rule: string;
+                disclaimer: string;
+            }[];
+        };
+        /**
+         * @description Why a wallet is NOT on the board, with the number that refused it. A leaderboard that hides its refusals
+         *     is a leaderboard nobody can audit; this list is part of the response, not an empty page.
+         */
+        LeaderboardUnranked: {
+            anon: string;
+            reasons: string[];
+            settledMarkets: number;
+            verifiedVolumeMicro: number;
+            verifiedVolume: components["schemas"]["LeaderboardMoney"];
+            washedMicro: number;
+            washed: components["schemas"]["LeaderboardMoney"];
+            washNote: string;
+            note: string;
+            classifications: Record<string, never>[];
+        };
+        /** @description counts over the WHOLE board, never over the page */
+        LeaderboardSummary: {
+            rankedTotal: number;
+            unrankedTotal: number;
+            blewUpCount: number;
+            provisionalCount: number;
+            disputedWithheld: number;
+            washedMicro: number;
+            settledMarkets: number;
+            /** @description wallets an operator has removed from this board */
+            excludedTotal: number;
+            medianSettledMarkets: number;
+            filteredTotal?: number | null;
+            note: string;
+        };
+        LeaderboardPage: {
+            limit: number;
+            offset: number;
+            returned: number;
+            unrankedReturned: number;
+            rankedTotal: number;
+            hasMore: boolean;
+            filtered: boolean;
+        };
+        /** @description which rows this board was ranked from — the first question in any ranking dispute */
+        LeaderboardReadPlan: {
+            board: string;
+            window: string;
+            windowMs: number;
+            settledFromMs: number;
+            fillsFromMs: number;
+            settledRule: string;
+            fillsRule: string;
+        };
+        LeaderboardFreshness: {
+            board: string;
+            label: string;
+            snapshotMs: number | null;
+            ageMs: number | null;
+            cadenceMs: number;
+            runs: number;
+            stale: boolean;
+            /** @description `live` — the board is ranked from the ledger on every read */
+            source: string;
+            note: string;
+        };
+        LeaderboardBoardSpec: {
+            id: string;
+            label: string;
+            isDefault: boolean;
+            /** @enum {string} */
+            kind: "skill" | "activity" | "social";
+            window: string;
+            windows: string[];
+            formula: string;
+            gate: string;
+            cadenceMs: number;
+            cadence: string;
+            categoryBoard: boolean;
+            categories: string[];
+            tieBreaks?: string;
+            rewards?: string;
+            punishes?: string;
+            note?: string;
+        };
+        LeaderboardBoards: {
+            boards: components["schemas"]["LeaderboardBoardSpec"][];
+            defaultBoard: string;
+            categories: string[];
+            note: string;
+        };
+        LeaderboardIntegrityRule: {
+            id: string;
+            label: string;
+            does: string;
+            /** @description every rule states what it does NOT do — a filter that labels a wallet is a different product from one that hides it */
+            doesNot: string;
+            detect: string;
+        };
+        LeaderboardMethodology: {
+            boards: components["schemas"]["LeaderboardBoardSpec"][];
+            defaultBoard: string;
+            sampleGate: number;
+            minVerifiedVolumeMicro: number;
+            provisionalDays: number;
+            luckyTradeShareBps: number;
+            volatilityMultiple: number;
+            integrity: components["schemas"]["LeaderboardIntegrityRule"][];
+            /** @description per board+window: the read plan the engine was handed */
+            windows: Record<string, never>;
+            readPath: string;
+            path: string;
+            launchList: Record<string, never>[];
+            excludedWallets: string;
+            note: string;
+        };
+        LeaderboardWhy: {
+            board: string;
+            window: string;
+            /** @description one sentence, with both metrics and both sample sizes */
+            why: string;
+            a: components["schemas"]["LeaderboardRow"];
+            b: components["schemas"]["LeaderboardRow"];
+            components: {
+                a: components["schemas"]["LeaderboardComponents"];
+                b: components["schemas"]["LeaderboardComponents"];
+            };
+            note: string;
+            sampleGate: number;
+            unranked: Record<string, never>[];
+        };
+        LeaderboardSnapshotPoint: {
+            tsMs: number;
+            rank: number;
+            scoreBps: number;
+            settledMarkets: number;
+            maxDrawdownMicro: number;
+            maxDrawdown: components["schemas"]["LeaderboardMoney"];
+        };
+        LeaderboardSnapshotBoard: {
+            board: string;
+            label: string;
+            window: string;
+            points: components["schemas"]["LeaderboardSnapshotPoint"][];
+            latestRank: number;
+            bestRank: number;
+            worstRank: number;
+            /** @description change in RANK; negative is an improvement */
+            delta: number;
+            note: string;
+        };
+        LeaderboardSnapshots: {
+            anon: string;
+            days: number;
+            boards: components["schemas"]["LeaderboardSnapshotBoard"][];
+            snapshots: number;
+            note: string;
+        };
+        LeaderboardRunRow: {
+            board: string;
+            label: string;
+            window: string;
+            ranked: number;
+            unranked: number;
+            blewUp: number;
+            durationMs: number;
+            computedMs: number;
+        };
+        LeaderboardRuns: {
+            rows: components["schemas"]["LeaderboardRunRow"][];
+            freshness: {
+                [key: string]: components["schemas"]["LeaderboardFreshness"];
+            };
+            cadences: {
+                [key: string]: number;
+            };
+        };
+        LeaderboardRecompute: {
+            runs: {
+                board: string;
+                window: string;
+                category: string | null;
+                ranked: number;
+                unranked: number;
+                blewUp: number;
+                disputedWithheld: number;
+                durationMs: number;
+            }[];
+            snapshots: number;
+            integrity: number;
+            computedMs: number;
+            bucketHour: number;
+            boards: string[];
+            window?: string | null;
+            note: string;
+        };
+        LeaderboardBoard: {
+            board: string;
+            label: string;
+            window: string;
+            windows: string[];
+            category: string | null;
+            categories: string[];
+            formula: string;
+            gate: string;
+            tieBreaks: string;
+            cadence: string;
+            cadenceMs: number;
+            note: string;
+            rows: components["schemas"]["LeaderboardRow"][];
+            unranked: components["schemas"]["LeaderboardUnranked"][];
+            summary: components["schemas"]["LeaderboardSummary"];
+            page: components["schemas"]["LeaderboardPage"];
+            boards: components["schemas"]["LeaderboardBoardSpec"][];
+            readPlan: components["schemas"]["LeaderboardReadPlan"];
+            freshness: components["schemas"]["LeaderboardFreshness"];
+            methodologyPath: string;
+            excludedTotal: number;
+            /** @description operator-only (admin token); null for a public caller, because a wall of shame is a different product from a leaderboard */
+            excluded: Record<string, never>[] | null;
+            disclaimer: string;
         };
     };
     responses: {
@@ -4619,6 +5084,196 @@ export interface operations {
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
             422: components["responses"]["Validation"];
+            500: components["responses"]["Internal"];
+        };
+    };
+    getLeaderboard: {
+        parameters: {
+            query?: {
+                board?: "risk_adjusted" | "win_rate" | "volume" | "rising" | "category" | "copied";
+                window?: "24h" | "7d" | "30d" | "90d" | "all";
+                /** @description required by the category board; one of Politics/Sports/Crypto/Finance */
+                category?: string;
+                /** @description filter rows by pseudonym; `page.filtered` says the totals are the board's, not the filter's */
+                q?: string;
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description the board, its rows, its refusals, its counts and its freshness */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Stamped"] & components["schemas"]["LeaderboardBoard"];
+                };
+            };
+            422: components["responses"]["Denied"];
+            500: components["responses"]["Internal"];
+        };
+    };
+    listLeaderboardBoards: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description the boards, their formulas, gates, windows and cadences */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Stamped"] & components["schemas"]["LeaderboardBoards"];
+                };
+            };
+            500: components["responses"]["Internal"];
+        };
+    };
+    getLeaderboardMethodology: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description the methodology */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Stamped"] & components["schemas"]["LeaderboardMethodology"];
+                };
+            };
+            500: components["responses"]["Internal"];
+        };
+    };
+    explainLeaderboardRank: {
+        parameters: {
+            query: {
+                a: string;
+                b: string;
+                board?: "risk_adjusted" | "win_rate" | "volume" | "rising" | "category" | "copied";
+                window?: "24h" | "7d" | "30d" | "90d" | "all";
+                category?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description the sentence, both rows, and both components sets */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Stamped"] & components["schemas"]["LeaderboardWhy"];
+                };
+            };
+            404: components["responses"]["NotFound"];
+            422: components["responses"]["Denied"];
+            500: components["responses"]["Internal"];
+        };
+    };
+    getLeaderboardSnapshots: {
+        parameters: {
+            query: {
+                anon: string;
+                days?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description rank history, per board */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Stamped"] & components["schemas"]["LeaderboardSnapshots"];
+                };
+            };
+            404: components["responses"]["NotFound"];
+            500: components["responses"]["Internal"];
+        };
+    };
+    listLeaderboardRuns: {
+        parameters: {
+            query?: {
+                board?: string;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description the run rows and the per-board freshness */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Stamped"] & components["schemas"]["LeaderboardRuns"];
+                };
+            };
+            500: components["responses"]["Internal"];
+        };
+    };
+    recomputeLeaderboard: {
+        parameters: {
+            query?: never;
+            header?: {
+                /**
+                 * @description 8-128 chars of [A-Za-z0-9_-]. Required on every mutating endpoint; the 400 for its absence is part
+                 *     of the contract so a client cannot "just try without it" once and conclude it is optional.
+                 */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    boards?: ("risk_adjusted" | "win_rate" | "volume" | "rising" | "category" | "copied")[];
+                    /** @enum {string} */
+                    window?: "24h" | "7d" | "30d" | "90d" | "all";
+                };
+            };
+        };
+        responses: {
+            /** @description what was written */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Stamped"] & components["schemas"]["LeaderboardRecompute"];
+                };
+            };
+            400: components["responses"]["Denied"];
+            401: components["responses"]["Denied"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Denied"];
             500: components["responses"]["Internal"];
         };
     };

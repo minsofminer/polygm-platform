@@ -30,6 +30,9 @@ from polygm_core.automation import engine as _au
 from polygm_core.automation import facts as _au_facts
 from polygm_core.classify import labels as _labels
 from polygm_core.config.flags import FlagStore, Flags
+from polygm_core.leaderboard import boards as _lb_boards
+from polygm_core.leaderboard import rank as _lb_rank
+from polygm_core.leaderboard import source as _lb_source
 from polygm_core.ledger.ledger import IntentState
 from polygm_core.money.cents import MoneyError, ScaleError, fmt_usdc, parse_usdc, price_ticks
 from polygm_core.radar import rankings as _radar
@@ -2801,12 +2804,8 @@ def _trader_fills(wallet: str) -> list[dict]:
         resolved = winner is not None and int(winner) >= 0
         won = bool(int(winner)) if resolved else False
         shares, cost = _tm._int(size), _tm._int(notional)
-        if not resolved:
-            realised = 0
-        elif str(side) == "BUY":
-            realised = (shares - cost) if won else -cost
-        else:
-            realised = (cost - shares) if won else cost
+        realised = _lb_source.realised_micro(side=str(side), size_micro=shares, notional_micro=cost,
+                                             winner=won, resolved=resolved)
         out.append({"tsMs": _tm._int(ts), "conditionId": str(cond), "tokenId": str(token),
                     "marketId": str(mid), "marketSlug": "", "question": "", "category": str(category),
                     "tick": norm_tick(tick), "side": str(side), "outcome": str(outcome),
@@ -3828,12 +3827,8 @@ def _radar_fills(market_ids: list[str]) -> list[dict]:
         resolved = winner is not None and int(winner) >= 0
         won = bool(int(winner)) if resolved else False
         shares, cost = _tm._int(size), _tm._int(notional)
-        if not resolved:
-            realised = 0
-        elif str(side) == "BUY":
-            realised = (shares - cost) if won else -cost
-        else:
-            realised = (cost - shares) if won else cost
+        realised = _lb_source.realised_micro(side=str(side), size_micro=shares, notional_micro=cost,
+                                             winner=won, resolved=resolved)
         out.append({"tsMs": _tm._int(ts), "wallet": str(wallet), "marketId": str(mid),
                     "conditionId": str(cond), "tokenId": str(token), "side": str(side),
                     "priceMicro": _tm._int(price), "sizeMicro": shares, "notionalMicro": cost,
@@ -4947,6 +4942,531 @@ def _settings_work(rid: str, uid: str, body: dict):
     return _stamped(_settings_view(str(uid), at), ttl_ms=0, stale_ms=0)
 
 
+# ------------------------------------------------------------------------------------------- P11 · the boards
+# D2. Six boards ranked from our own ledger, where every row carries the components it was ranked on and every
+# refusal carries the number that refused it. The engine (`leaderboard/rank.py`) decides the ordering; this
+# section decides the three things an engine must never decide for itself:
+#
+#   * **which rows it sees** — `source.read_plan()` is the window, and it differs per board on purpose (the
+#     volume board ranks the window; every skill board's floor is written in lifetime turnover).
+#   * **who a human has removed** — `leaderboard_exclusions`, append-only, applied here rather than deleted
+#     anywhere: an exclusion is a decision about somebody's standing, so it is a row with an actor and a time.
+#   * **how stale the answer is** — `leaderboard_runs` is the recompute's own record, and the response states its
+#     age against the board's declared cadence instead of hoping nobody asks.
+#
+# The board is computed LIVE from the tape on every read. That is the right trade at our size (the read is one
+# pass over the fills we hold, and a cached board is a board that can disagree with the ledger it claims to
+# summarise); `leaderboard_snapshots` exists for the rank-history sparkline, which is a question about the past
+# and cannot be answered by recomputing today.
+LB_MAX_ROWS = 10_000          # the engine's limit when a count must be over the whole board, not the page
+
+
+def _lb_fills() -> list[dict]:
+    """Every fill we hold, with the two facts a settlement needs: the token's winner and the market's category.
+
+    Read whole rather than per wallet: the copied board's farm filter asks "derived from WHOM", which is a
+    question about the other tapes, and a per-wallet read is the shape that cannot answer it.
+    """
+    rows = _db.execute(
+        "SELECT f.wallet, f.ts_ms, f.condition_id, f.token_id, f.side, f.price_micro, f.size_micro,"
+        " f.usd_notional_micro, t.is_winner, COALESCE(mm.category,'')"
+        " FROM tape_fills f JOIN markets m ON m.condition_id = f.condition_id"
+        " JOIN tokens t ON t.token_id = f.token_id"
+        " LEFT JOIN market_meta mm ON mm.market_id = m.id"
+        " ORDER BY f.ts_ms ASC, f.rowid ASC").fetchall()
+    out = []
+    for (wallet, ts, cond, token, side, price, size, notional, winner, category) in rows:
+        out.append({"wallet": str(wallet), "tsMs": _tm._int(ts), "conditionId": str(cond),
+                    "tokenId": str(token), "side": str(side), "priceMicro": _tm._int(price),
+                    "sizeMicro": _tm._int(size), "notionalMicro": _tm._int(notional),
+                    "winner": (None if winner is None else int(winner)), "category": str(category)})
+    return out
+
+
+def _lb_created_ms() -> dict[str, int]:
+    """When we first saw a wallet, so `provisional` is a fact rather than a guess from the newest tape slice."""
+    return {str(w): _tm._int(ts) for (w, ts) in _db.execute(
+        "SELECT wallet_id, MIN(first_seen_ms) FROM wallet_pseudonyms GROUP BY wallet_id").fetchall()}
+
+
+def _lb_copy_configs() -> list[dict]:
+    return [{"source": str(src), "enabled": int(en or 0)} for (src, en) in _db.execute(
+        "SELECT source_user, enabled FROM copy_configs").fetchall()]
+
+
+def _lb_blocked_conditions(*, at_ms: int) -> set[str]:
+    """Markets under an active UMA dispute — the same list the order path refuses on."""
+    return {str(r[0]) for r in _db.execute(
+        "SELECT market_id FROM risk_blocklists WHERE source='uma_dispute'"
+        " AND (expires_ms IS NULL OR expires_ms > ?)", (_tm._int(at_ms),)).fetchall()}
+
+
+def _lb_exclusions() -> dict[str, dict]:
+    """The newest human decision per (wallet, board), replayed from append-only rows.
+
+    Replayed rather than stored as state: the table is append-only, so "who removed this wallet, when, and on
+    whose say-so" is answerable after an incident — and `include` is a decision too, which is why it is a row
+    rather than a DELETE.
+    """
+    per: dict[str, dict[str, dict]] = {}
+    for (wallet, board, action, reason, actor, at_ms) in _db.execute(
+            "SELECT wallet, board, action, reason, actor, at_ms FROM leaderboard_exclusions"
+            " ORDER BY at_ms ASC, id ASC").fetchall():
+        per.setdefault(str(wallet), {})[str(board)] = {
+            "wallet": str(wallet), "board": str(board), "action": str(action), "reason": str(reason),
+            "actor": str(actor), "atMs": _tm._int(at_ms)}
+    return {w: by_board for w, by_board in per.items()}
+
+
+def _lb_excluded(*, decisions: dict, board_id: str) -> dict[str, dict]:
+    """Who is off THIS board. `exclude` removes; `flag` does not — a flag is a question for a human, and a
+    leaderboard that quietly drops a flagged wallet would be hiding the wallet instead of reviewing it."""
+    out: dict[str, dict] = {}
+    for wallet, by_board in decisions.items():
+        decision = by_board.get(board_id) or by_board.get("")
+        if decision and decision["action"] == "exclude":
+            out[str(wallet)] = decision
+    return out
+
+
+def _lb_pseudonymise(ev: dict) -> dict:
+    """Evidence whose identity is a pseudonym — so the ranker, the rows and every `why` sentence it prints are
+    structurally incapable of carrying an address to a public response."""
+    return {**ev, "wallet": _anon(str(ev["wallet"]))}
+
+
+def _lb_evidence(*, board_id: str, window: str, at_ms: int) -> tuple[list[dict], dict, dict]:
+    plan = _lb_source.read_plan(board_id=board_id, window=window, at_ms=at_ms)
+    evidence = _lb_source.evidence(fills=_lb_fills(), at_ms=at_ms, plan=plan,
+                                   copy_configs=_lb_copy_configs(),
+                                   blocked_conditions=_lb_blocked_conditions(at_ms=at_ms),
+                                   created_ms=_lb_created_ms())
+    excluded = _lb_excluded(decisions=_lb_exclusions(), board_id=board_id)
+    kept = [_lb_pseudonymise(w) for w in evidence if str(w["wallet"]) not in excluded]
+    return kept, plan, excluded
+
+
+def _lb_board(*, board_id: str, window: str, at_ms: int, category: str = "") -> dict:
+    """One board, ranked over the whole eligible population (the page is applied by the caller)."""
+    evidence, plan, excluded = _lb_evidence(board_id=board_id, window=window, at_ms=at_ms)
+    out = _lb_rank.rank_board(board_id=board_id, wallets=evidence, at_ms=at_ms, limit=LB_MAX_ROWS,
+                              category=category, window=plan["window"])
+    out["plan"] = plan
+    out["summary"] = _lb_source.summarise(out, excluded=len(excluded))
+    out["excludedTotal"] = len(excluded)
+    return out
+
+
+_LB_MONEY_STRINGS = (("realisedMicro", "realised"), ("trimmedMicro", "trimmed"), ("bestMicro", "best"),
+                     ("volatilityMicro", "volatility"), ("maxDrawdownMicro", "drawdown"),
+                     ("verifiedVolumeMicro", "verifiedVolume"), ("washedMicro", "washed"),
+                     ("improvementMicro", "improvement"), ("weekMicro", "week"), ("priorWeekMicro", "priorWeek"))
+
+
+def _lb_row_out(row: dict, *, total: int, labels: dict | None = None) -> dict:
+    """One row on the wire: `anon` instead of `wallet`, the display strings beside the micro integers.
+
+    Both, not one: the integers are what the ranking is defined against and rounding them to cents would move a
+    row's own components, while the strings are what the number layer renders (no surface formats money itself).
+    """
+    out = dict(row)
+    anon = str(out.pop("wallet", ""))
+    out["anon"] = anon
+    for micro_key, text_key in _LB_MONEY_STRINGS:
+        if micro_key in out:
+            out[text_key] = fmt_usdc(_tm._int(out[micro_key]))
+    out["rankBadge"] = {"rank": _tm._int(out.get("rank")), "rankedTotal": _tm._int(total),
+                        "text": "#%d" % _tm._int(out.get("rank"))}
+    out["classifications"] = list((labels or {}).get(anon, []))
+    return out
+
+
+def _lb_freshness(board_id: str, *, at_ms: int, label: str) -> dict:
+    """"How old is this board", answered against the cadence the board itself declares."""
+    row = _db.execute("SELECT MAX(computed_ms), COUNT(*) FROM leaderboard_runs WHERE board=?",
+                      (str(board_id),)).fetchone()
+    last, runs = (row[0], row[1]) if row else (None, 0)
+    cadence = _tm._int((_lb_boards.board(board_id) or {}).get("cadenceMs"))
+    age = None if last is None else max(0, _tm._int(at_ms) - _tm._int(last))
+    return {"board": board_id, "label": label, "snapshotMs": (None if last is None else _tm._int(last)),
+            "ageMs": age, "cadenceMs": cadence, "runs": _tm._int(runs),
+            "stale": (True if age is None else age > 2 * cadence),
+            "source": "live",
+            "note": ("this board was ranked from the ledger when you asked; the snapshot time is when the rank "
+                     "history was last appended, and the sparkline is the only thing that reads it")}
+
+
+def _lb_picker() -> list[dict]:
+    """The board picker, generated from the specification so a new board cannot appear in one place only."""
+    return [{"id": b["id"], "label": b["label"], "isDefault": bool(b["isDefault"]), "kind": b["kind"],
+             "window": b["window"], "windows": list(b["windows"]), "formula": b["formula"],
+             "gate": b["gate"], "cadenceMs": _tm._int(b.get("cadenceMs")), "cadence": b["cadence"],
+             "categoryBoard": b["id"] == "category",
+             "categories": (list(_lb_boards.CATEGORIES) if b["id"] == "category" else [])} for b in _lb_boards.BOARDS]
+
+
+#: The status sets, written out per route rather than composed by spreading a shared dict: the checker reads these
+#: tables from the AST, and `{200: ..., **OTHER}` tells it (correctly, from what it can see) that the table declares
+#: exactly one status. A shared set that the tool cannot see through is a shared set that quietly stops being
+#: checked — so the reads declare what they can actually answer, and nothing more.
+LEADERBOARD_RESPONSES = {422: {"description": "an unknown board, a window that board does not read, or a category "
+                                               "the category board does not have"}}
+LEADERBOARD_WHY_RESPONSES = {404: {"description": "one of the two pseudonyms is not on this board"},
+                             422: {"description": "an unknown board or a window it does not read"}}
+LEADERBOARD_METHODOLOGY_RESPONSES = {200: {"description": "the boards, their formulas, their gates, and the "
+                                                        "integrity rules, as data"}}
+LEADERBOARD_SNAPSHOT_RESPONSES = {200: {"description": "a wallet's rank history per board"},
+                                  404: {"description": "no such pseudonym"},
+                                  500: {"description": "an internal failure, with a request id"}}
+LEADERBOARD_RUN_RESPONSES = {200: {"description": "the recompute record, newest first"}}
+LEADERBOARD_RECOMPUTE_RESPONSES = {400: {"description": "no Idempotency-Key"},
+                                   401: {"description": "a session is required"},
+                                   409: {"description": "the Idempotency-Key was reused with a different body"},
+                                   422: {"description": "a malformed key, an unknown board, or a window a board "
+                                                        "does not read"}}
+
+
+@app.get("/v1/leaderboard/boards", responses=LEADERBOARD_METHODOLOGY_RESPONSES)
+def get_leaderboard_boards(request: Request):
+    """The picker's own read, so a client that only wants the tab strip does not fetch a board to get it.
+
+    Generated from the specification rather than listed by hand: a board that exists in the engine and not in the
+    picker is a board nobody can open, and a hand-written list is how that happens.
+    """
+    at = _now_ms()
+    return _stamped({"boards": _lb_picker(), "defaultBoard": _lb_boards.DEFAULT_BOARD,
+                     "categories": list(_lb_boards.CATEGORIES),
+                     "note": ("the default board is risk-adjusted PnL, not volume: the venue's own volume board "
+                              "ranks churn, and a board that can be topped by round-tripping is a board that "
+                              "tells a stranger to copy the wrong wallet")},
+                    ttl_ms=60_000, stale_ms=0, as_of_ms=at)
+
+
+@app.get("/v1/leaderboard", responses=LEADERBOARD_RESPONSES)
+def get_leaderboard(request: Request,
+                    board: str = Query(default="risk_adjusted",
+                                       pattern="^(risk_adjusted|win_rate|volume|rising|category|copied)$"),
+                    window: str | None = Query(default=None, pattern="^(24h|7d|30d|90d|all)$"),
+                    category: str = Query(default="", max_length=32),
+                    q: str = Query(default="", max_length=64),
+                    limit: int = Query(default=50, ge=1, le=200),
+                    offset: int = Query(default=0, ge=0, le=5000)):
+    """One board: the page of rows, the refusals with their reasons, the counts, and the freshness.
+
+    The unranked list is a first-class part of the response, not an empty page. A wallet under the gate is not
+    hidden from the product — it is shown with the number that refused it, because "why am I not on it" is the
+    question every leaderboard gets and the answer must not require a support ticket.
+    """
+    rid = request.state.request_id
+    at = _now_ms()
+    try:
+        out = _lb_board(board_id=str(board), window=str(window or ""), at_ms=at, category=str(category))
+    except ValueError as exc:
+        return err("VALIDATION", rid, detail=str(exc), where=["window" if "reads" in str(exc) else "category"])
+    try:
+        is_admin, _e = _admin(request)
+    except Exception:                                                       # noqa: BLE001
+        is_admin = False
+    decisions = _lb_exclusions()
+    excluded = _lb_excluded(decisions=decisions, board_id=str(board))
+    labels = _labels_by_wallet()
+    total = _tm._int(out["rankedTotal"])
+    rows = [_lb_row_out(r, total=total, labels=labels) for r in out["rows"]]
+    # NOT `_anon(u["wallet"])`: the engine's rows already carry pseudonyms (that is the point of pseudonymising
+    # the evidence before ranking), and hashing a pseudonym again produced a second, wrong identity — a refusal
+    # that could not be matched to the row it refuses, with a name nothing else in the product would ever print.
+    unranked = [{"anon": str(u["wallet"]), "reasons": list(u["reasons"]),
+                 "settledMarkets": _tm._int(u["settledMarkets"]),
+                 "verifiedVolumeMicro": _tm._int(u["verifiedVolumeMicro"]),
+                 "verifiedVolume": fmt_usdc(_tm._int(u["verifiedVolumeMicro"])),
+                 "washedMicro": _tm._int(u.get("washedMicro")),
+                 "washed": fmt_usdc(_tm._int(u.get("washedMicro"))),
+                 "washNote": ("" if not _tm._int(u.get("washedMicro")) else
+                              "removed %s of round-tripped volume before refusing it"
+                              % fmt_usdc(_tm._int(u.get("washedMicro")))),
+                 "note": u["note"],
+                 "classifications": list(labels.get(str(u["wallet"]), []))}
+                for u in out["unranked"]]
+    needle = str(q).strip().lower()
+    filtered = False
+    if needle:
+        rows = [r for r in rows if needle in r["anon"].lower()]
+        unranked = [u for u in unranked if needle in u["anon"].lower()]
+        filtered = True
+    page_rows = rows[offset:offset + limit]
+    page_unranked = unranked[offset:offset + limit]
+    newest = _db.execute("SELECT MAX(ts_ms) FROM tape_fills").fetchone()
+    as_of = _tm._int(newest[0]) if newest and newest[0] is not None else at
+    payload = {
+        "board": out["board"], "label": out["label"], "window": out["window"], "windows": out["windows"],
+        "category": out.get("category"), "categories": list(_lb_boards.CATEGORIES) if board == "category" else [],
+        "formula": out["formula"], "gate": out["gate"], "tieBreaks": out["tieBreaks"],
+        "cadence": out["cadence"], "cadenceMs": out["cadenceMs"], "note": out["note"],
+        "rows": page_rows, "unranked": page_unranked,
+        "summary": dict(out["summary"], **{"filteredTotal": (len(rows) if filtered else None)}),
+        "page": {"limit": limit, "offset": offset, "returned": len(page_rows),
+                 "unrankedReturned": len(page_unranked), "rankedTotal": total,
+                 "hasMore": (offset + limit) < len(rows), "filtered": filtered},
+        "boards": _lb_picker(),
+        "readPlan": out["plan"],
+        "freshness": _lb_freshness(str(board), at_ms=at, label=str(out["label"])),
+        "methodologyPath": "/v1/leaderboard/methodology",
+        "excludedTotal": len(excluded),
+        # The exclusion LIST is an operator surface (D7): the count is public because the board's own totals have
+        # to add up, the reasons are not, because a wall of shame is a different product from a leaderboard.
+        "excluded": ([{"anon": _anon(w), "reason": d["reason"], "atMs": d["atMs"], "actor": d["actor"]}
+                      for w, d in sorted(excluded.items())] if is_admin else None),
+        "disclaimer": ("ranked by the formula above from our own settled tape; a rank is not advice, and every "
+                       "win rate here is behind the same sample gate as the rest of the product"),
+    }
+    return _stamped(payload, ttl_ms=1_000, stale_ms=flags().stale_ms_tape, as_of_ms=as_of)
+
+
+@app.get("/v1/leaderboard/methodology", responses=LEADERBOARD_METHODOLOGY_RESPONSES)
+def get_leaderboard_methodology(request: Request):
+    """The published methodology: the same object the engine reads, plus the parts only the read path knows.
+
+    Served rather than written down separately (D1 §2.4): a methodology page maintained by hand beside a ranking
+    engine maintained in code is two authorities over one number, and the first disagreement is the one a user
+    screenshots.
+    """
+    at = _now_ms()
+    windows = {}
+    for board_id in _lb_boards.BOARD_IDS:
+        for w in _lb_boards.windows_for(board_id):
+            try:
+                windows["%s:%s" % (board_id, w)] = _lb_source.read_plan(board_id=board_id, window=w, at_ms=at)
+            except ValueError:                                              # pragma: no cover - spec only
+                continue
+    return _stamped(_lb_boards.methodology(extra={
+        "path": "/v1/leaderboard/methodology",
+        "windows": windows,
+        "readPath": ("every board is ranked from our own settled tape, per settled market, on every read; the "
+                     "snapshot table feeds the rank sparkline and nothing else"),
+        "launchList": [{"item": "the $500 lifetime turnover floor re-derived on production data (it is a "
+                                "judgement, and the seed's median fill is $0.02)",
+                        "owner": "P11 D2"}],
+        "excludedWallets": ("a wallet can be excluded from a board by an operator; the board's totals show how "
+                            "many, and the reasons are not published"),
+    }), ttl_ms=60_000, stale_ms=0, as_of_ms=at)
+
+
+@app.get("/v1/leaderboard/why", responses=LEADERBOARD_WHY_RESPONSES)
+def get_leaderboard_why(request: Request,
+                        a: str = Query(min_length=4, max_length=64),
+                        b: str = Query(min_length=4, max_length=64),
+                        board: str = Query(default="risk_adjusted",
+                                           pattern="^(risk_adjusted|win_rate|volume|rising|category|copied)$"),
+                        window: str | None = Query(default=None, pattern="^(24h|7d|30d|90d|all)$"),
+                        category: str = Query(default="", max_length=32)):
+    """Why one wallet is above another, in one sentence, with both component sets.
+
+    This is the P11 gate's own question, served: "a trader at rank 47 with fewer resolved markets than the trader
+    at rank 12" is not a bug to explain away — the sample gate decides eligibility and the metric decides order,
+    and the sentence says so with the numbers.
+    """
+    rid = request.state.request_id
+    at = _now_ms()
+    try:
+        evidence, plan, _excluded = _lb_evidence(board_id=str(board), window=str(window or ""), at_ms=at)
+    except ValueError as exc:
+        return err("VALIDATION", rid, detail=str(exc), where=["window"])
+    try:
+        out = _lb_rank.explain(board_id=str(board), wallets=evidence, at_ms=at, a=str(a), b=str(b),
+                               category=str(category), window=plan["window"])
+    except ValueError as exc:
+        return err("VALIDATION", rid, detail=str(exc), where=["category"])
+    labels = _labels_by_wallet()
+    if not out.get("ok"):
+        return err("NOT_FOUND", rid, detail=out["why"])
+    total = max(_tm._int(out["a"]["rank"]), _tm._int(out["b"]["rank"]))
+    return _stamped({"board": out["board"], "window": plan["window"], "why": out["why"],
+                     "a": _lb_row_out(out["a"], total=total, labels=labels),
+                     "b": _lb_row_out(out["b"], total=total, labels=labels),
+                     "components": out["components"], "note": out["note"],
+                     "sampleGate": _lb_boards.MIN_RESOLVED, "unranked": out.get("unranked") or []},
+                    ttl_ms=1_000, stale_ms=flags().stale_ms_tape, as_of_ms=at)
+
+
+@app.get("/v1/leaderboard/snapshots", responses=LEADERBOARD_SNAPSHOT_RESPONSES)
+def get_leaderboard_snapshots(request: Request, anon: str = Query(min_length=4, max_length=64),
+                              days: int = Query(default=30, ge=1, le=90)):
+    """One wallet's rank history: the 30-day sparkline, from the snapshot table and nothing else.
+
+    A rank recomputed from today's ledger is today's rank, not the rank they had last Tuesday; "were they
+    falling?" is a question about the past and only a written-down past can answer it.
+    """
+    rid = request.state.request_id
+    if _wallet_for_anon(str(anon)) is None:
+        return err("NOT_FOUND", rid)
+    at = _now_ms()
+    since = at - int(days) * 86_400_000
+    # Queried by the PSEUDONYM, because that is what the table holds: the recompute writes rows that came out of
+    # the engine, and the engine only ever sees pseudonyms. The check above is the address lookup — a pseudonym
+    # nobody has is a 404 rather than an empty history that reads as "this trader never ranked".
+    rows = _db.execute(
+        "SELECT board, window_key, computed_ms, rank, score_bps, settled, drawdown_micro"
+        " FROM leaderboard_snapshots WHERE wallet=? AND computed_ms >= ?"
+        " ORDER BY board, window_key, computed_ms ASC", (str(anon), since)).fetchall()
+    grouped: dict[tuple, list[dict]] = {}
+    for (board_id, window_key, computed, rank, score, settled, drawdown) in rows:
+        grouped.setdefault((str(board_id), str(window_key)), []).append(
+            {"tsMs": _tm._int(computed), "rank": _tm._int(rank), "scoreBps": _tm._int(score),
+             "settledMarkets": _tm._int(settled), "maxDrawdownMicro": _tm._int(drawdown),
+             "maxDrawdown": fmt_usdc(_tm._int(drawdown))})
+    boards = []
+    for (board_id, window_key), points in sorted(grouped.items()):
+        ranks = [p["rank"] for p in points]
+        boards.append({"board": board_id, "label": (_lb_boards.board(board_id) or {}).get("label", board_id),
+                       "window": window_key, "points": points, "latestRank": ranks[-1], "bestRank": min(ranks),
+                       "worstRank": max(ranks), "delta": ranks[-1] - ranks[0],
+                       "note": ("delta is a change in RANK, so a negative number is an improvement; the board's "
+                                "size changes between snapshots, which is why the rank is shown beside the score")})
+    return _stamped({"anon": str(anon), "days": int(days), "boards": boards,
+                     "snapshots": sum(len(p) for p in grouped.values()),
+                     "note": ("rank history is written by the recompute; a board with no points has not been "
+                              "recomputed since this wallet first appeared")},
+                    ttl_ms=30_000, stale_ms=flags().stale_ms_tape, as_of_ms=at)
+
+
+@app.get("/v1/leaderboard/runs", responses=LEADERBOARD_RUN_RESPONSES)
+def get_leaderboard_runs(request: Request, board: str | None = Query(default=None, max_length=32),
+                         limit: int = Query(default=24, ge=1, le=200)):
+    """The recompute record, newest first. Public on purpose: a cadence nobody can check is a claim."""
+    sql = ("SELECT board, window_key, ranked, unranked, blew_up, duration_ms, computed_ms"
+           " FROM leaderboard_runs")
+    args: list = []
+    if board:
+        sql += " WHERE board=?"
+        args.append(str(board))
+    sql += " ORDER BY computed_ms DESC, board ASC LIMIT ?"
+    args.append(int(limit))
+    rows = []
+    for (b, window_key, ranked, unranked, blew_up, duration, computed) in _db.execute(sql, tuple(args)).fetchall():
+        rows.append({"board": str(b), "label": (_lb_boards.board(str(b)) or {}).get("label", str(b)),
+                     "window": str(window_key), "ranked": _tm._int(ranked), "unranked": _tm._int(unranked),
+                     "blewUp": _tm._int(blew_up), "durationMs": _tm._int(duration),
+                     "computedMs": _tm._int(computed)})
+    freshest = {b: _lb_freshness(b, at_ms=_now_ms(), label=(_lb_boards.board(b) or {}).get("label", b))
+                for b in _lb_boards.BOARD_IDS}
+    return _stamped({"rows": rows, "freshness": freshest,
+                     "cadences": {b: _tm._int((_lb_boards.board(b) or {}).get("cadenceMs"))
+                                  for b in _lb_boards.BOARD_IDS}}, ttl_ms=5_000, stale_ms=0)
+
+
+@app.post("/v1/leaderboard/recompute", status_code=200, responses=LEADERBOARD_RECOMPUTE_RESPONSES,
+          openapi_extra=_body_schema((), {
+              "boards": {"type": "array", "items": {"type": "string", "enum": list(_lb_boards.BOARD_IDS)},
+                         "minItems": 1, "maxItems": len(_lb_boards.BOARD_IDS),
+                         "description": "defaults to every board"},
+              "window": {"type": "string", "enum": ["24h", "7d", "30d", "90d", "all"],
+                         "description": "defaults to each board's own default window"}}))
+def post_leaderboard_recompute(request: Request, body: dict | None = Body(default=None),
+                               idempotency_key: str | None = Header(default=None, alias="Idempotency-Key")):
+    """Write the rank history: one snapshot per wallet per board, plus the integrity verdict and the run row.
+
+    The worker's job, callable by an account because it is deterministic and idempotent per key — and because a
+    gate that has to reach inside the process to prove the cadence works is a gate that never runs. A repeated
+    key returns the first run's answer rather than appending a second history point.
+    """
+    rid = request.state.request_id
+    body = body or {}
+    bad_key = _idem_shape(idempotency_key)
+    if bad_key is not None:
+        return bad_key
+    bad = _check_body(body, (), rid, allowed=("boards", "window"))
+    if bad is not None:
+        return bad
+    bad = _check_props(body, {"boards": {"type": "array", "minItems": 1}, "window": {"type": "string"}}, rid)
+    if bad is not None:
+        return bad
+    uid, _row, e = _principal(request)
+    if e:
+        return e
+    return _idem_run(str(uid), str(idempotency_key), body, rid, lambda: _lb_recompute_work(rid, body))
+
+
+def _lb_recompute_work(rid: str, body: dict):
+    """Rank every board, write the history, and answer with what was written."""
+    at = _now_ms()
+    bucket = at // _lb_boards.HOUR_MS
+    wanted = [str(b) for b in (body.get("boards") or list(_lb_boards.BOARD_IDS))]
+    unknown = [b for b in wanted if _lb_boards.board(b) is None]
+    if unknown:
+        return err("VALIDATION", rid, detail="unknown board", where=["boards"])
+    window = body.get("window")
+    runs, snapshots, integrity_rows = [], 0, 0
+    for board_id in wanted:
+        spec = _lb_boards.board(str(board_id))
+        try:
+            window_key = str(window or spec["window"])
+            cats = list(_lb_boards.CATEGORIES) if board_id == "category" else [""]
+            for cat in cats:
+                started = time.perf_counter()
+                out = _lb_board(board_id=board_id, window=window_key, at_ms=at, category=cat)
+                duration = int((time.perf_counter() - started) * 1000)
+                # The run key is the window — plus the category, for the board that is four boards in one. The
+                # table's key is (board, window, hour), and without the suffix the four category runs collapse
+                # into one row and the record says we recomputed a quarter as often as we did.
+                key = ("%s:%s" % (window_key, cat)) if cat else window_key
+                _db.execute("INSERT OR REPLACE INTO leaderboard_runs (board, window_key, bucket_hour, ranked,"
+                            " unranked, blew_up, duration_ms, computed_ms) VALUES (?,?,?,?,?,?,?,?)",
+                            (board_id, key, bucket, _tm._int(out["rankedTotal"]),
+                             _tm._int(out["unrankedTotal"]), _tm._int(out["blewUpCount"]), duration, at))
+                for row in out["rows"]:
+                    _db.execute("INSERT OR REPLACE INTO leaderboard_snapshots (board, window_key, wallet, rank,"
+                                " score_bps, settled, drawdown_micro, computed_ms) VALUES (?,?,?,?,?,?,?,?)",
+                                (board_id, window_key, str(row["wallet"]), _tm._int(row["rank"]),
+                                 _tm._int(row["scoreBps"]), _tm._int(row["settledMarkets"]),
+                                 _tm._int(row["maxDrawdownMicro"]), at))
+                    snapshots += 1
+                runs.append({"board": board_id, "window": window_key, "category": cat or None,
+                             "ranked": _tm._int(out["rankedTotal"]), "unranked": _tm._int(out["unrankedTotal"]),
+                             "blewUp": _tm._int(out["blewUpCount"]), "disputedWithheld": out["summary"]["disputedWithheld"],
+                             "durationMs": duration})
+                if cat == "" and board_id == _lb_boards.DEFAULT_BOARD:
+                    integrity_rows = _lb_write_integrity(out, at_ms=at)
+        except ValueError as exc:
+            return err("VALIDATION", rid, detail=str(exc), where=["window"])
+    _db.commit()
+    return _stamped({"runs": runs, "snapshots": snapshots, "integrity": integrity_rows, "computedMs": at,
+                     "bucketHour": bucket, "boards": wanted, "window": window,
+                     "note": ("the run table is keyed by (board, window, hour), so a recompute inside the same "
+                              "hour replaces that hour's row rather than inventing cadence we did not have")},
+                    ttl_ms=0, stale_ms=0, as_of_ms=at)
+
+
+def _lb_write_integrity(board_out: dict, *, at_ms: int) -> int:
+    """The newest integrity verdict per wallet: the state, the reasons behind it, and the numbers a row shows.
+
+    Written from the board's own rows rather than recomputed, so the dashboard and the leaderboard cannot
+    disagree about why a wallet is where it is.
+    """
+    written = 0
+    seen = set()
+    for row in board_out["rows"]:
+        wallet = str(row["wallet"])
+        if wallet in seen:
+            continue
+        seen.add(wallet)
+        age = _tm._int(row.get("ageDays"))
+        reasons = {"labels": list(row.get("labels") or []), "washNote": row.get("washNote", ""),
+                   "bestTradeShareBps": _tm._int(row.get("bestTradeShareBps")),
+                   "disputedExcluded": _tm._int(row.get("disputedExcluded")),
+                   "sampleNote": row.get("sampleNote", "")}
+        state = str(row.get("state") or "ranked")
+        _db.execute("INSERT OR REPLACE INTO wallet_integrity (wallet, state, reasons_json, washed_micro,"
+                    " verified_micro, best_trade_share_bps, derived_from, provisional_until_ms, computed_ms)"
+                    " VALUES (?,?,?,?,?,?,?,?,?)",
+                    (wallet, state, json.dumps(reasons, sort_keys=True), _tm._int(row.get("washedMicro")),
+                     _tm._int(row.get("verifiedVolumeMicro")), _tm._int(row.get("bestTradeShareBps")),
+                     str((row.get("farm") or {}).get("derivedFrom", "")),
+                     (None if age >= _lb_boards.PROVISIONAL_DAYS
+                      else at_ms + (_lb_boards.PROVISIONAL_DAYS - age) * 86_400_000), at_ms))
+        written += 1
+    return written
+
+
 # The P10 routes' auth levels. Every served route needs a row here or the request fails closed with
 # `AUTHZ_UNDECLARED`, which is the correct default and an infuriating one to debug — so the four public reads
 # (a tape, its facets, the whale feed and a pseudonymous dossier: all of them reveal only what the venue
@@ -4987,8 +5507,24 @@ for _t in (TAPE_FILLS_RESPONSES, FACETS_RESPONSES, WHALES_RESPONSES, TRADER_RESP
            COPY_SOURCES_RESPONSES, AUTOMATION_CREATE_RESPONSES, AUTOMATION_GUARD_RESPONSES,
            AUTOMATION_LIST_RESPONSES, AUTOMATION_RUNS_RESPONSES, AUTOMATION_TEMPLATES_RESPONSES,
            AUTOMATION_PREVIEW_RESPONSES, ALERT_UPSERT_RESPONSES, ALERT_TEST_RESPONSES, ALERT_LIST_RESPONSES,
-           ALERT_DELIVERIES_RESPONSES, ALERT_SETTINGS_RESPONSES):
+           ALERT_DELIVERIES_RESPONSES, ALERT_SETTINGS_RESPONSES,
+           LEADERBOARD_RESPONSES, LEADERBOARD_METHODOLOGY_RESPONSES, LEADERBOARD_SNAPSHOT_RESPONSES,
+           LEADERBOARD_RUN_RESPONSES, LEADERBOARD_RECOMPUTE_RESPONSES):
     _t.update(_INTERNAL)                       # every route can 500 through the app-wide handler
 del _t
+# P11 D2. Six public reads and one user mutation. The reads are PUBLIC because the entire point of a leaderboard
+# is that a stranger can look at it (D6 renders three of them server-side for exactly that reason): they publish
+# pseudonyms, and a pseudonym is what this product is allowed to publish. The recompute is USER — deterministic,
+# idempotent per key, and a cadence nobody can exercise is a cadence nobody has tested.
+_levels_p11 = {
+    "GET /v1/leaderboard": (_authz.PUBLIC, ""),
+    "GET /v1/leaderboard/boards": (_authz.PUBLIC, ""),
+    "GET /v1/leaderboard/methodology": (_authz.PUBLIC, ""),
+    "GET /v1/leaderboard/why": (_authz.PUBLIC, ""),
+    "GET /v1/leaderboard/snapshots": (_authz.PUBLIC, ""),
+    "GET /v1/leaderboard/runs": (_authz.PUBLIC, ""),
+    "POST /v1/leaderboard/recompute": (_authz.USER, ""),
+}
 _authz.LEVELS_TABLE.update(_levels_p10)
+_authz.LEVELS_TABLE.update(_levels_p11)
 _authz._MATCHERS.clear()                    # the matchers cache the table; a new row must invalidate it

@@ -159,7 +159,11 @@ def wallet_state(*, first_seen_ms: int, at_ms: int, curve: list[dict], best_micr
         state = "blew_up"
         labels.append("blew up: this wallet was up and is now at or below zero, and it stays on the board")
     best = max(0, _int(best_micro))
-    share = best * 10_000 // max(1, _int(realised_micro)) if _int(realised_micro) > 0 else 0
+    # Clamped at 100%: a wallet can have a best market larger than its realised total (everything else lost
+    # money), and "140% of the PnL" is not a share of anything — the row says 100%, which is the true statement
+    # ("one trade is all of it, and then some"). It is also what the schema's CHECK allows, so the clamp is
+    # enforced in the engine rather than discovered by an INSERT.
+    share = min(10_000, best * 10_000 // _int(realised_micro)) if _int(realised_micro) > 0 else 0
     lucky = share >= bd.LUCKY_TRADE_SHARE_BPS
     if lucky:
         labels.append("one trade: %d%% of this wallet's realised PnL is a single market" % (share // 100))

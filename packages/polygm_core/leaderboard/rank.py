@@ -151,7 +151,10 @@ def _gate_failure(ev: dict, board: dict) -> list[str]:
     bid = board["id"]
     if bid == "copied":
         if ev["copiers"] <= 0:
-            out.append("nobody is copying this wallet")
+            # With its number, like every other refusal: "nobody is copying this wallet" is a fact a user cannot
+            # check, and "0 accounts are copying this wallet; this board needs 1" is the same fact with the bar
+            # it missed. (The copied board's gate sentence says one copier, so the bar is stated in copy.)
+            out.append("%d accounts are copying this wallet; this board needs 1" % ev["copiers"])
         if ev["volume"]["verifiedMicro"] < bd.MIN_VERIFIED_VOLUME_MICRO:
             out.append("turnover %d micro is below the %d micro floor"
                        % (ev["volume"]["verifiedMicro"], bd.MIN_VERIFIED_VOLUME_MICRO))
@@ -192,10 +195,15 @@ def _gate_failure(ev: dict, board: dict) -> list[str]:
 def _row_for(board: dict, ev: dict, rank: int) -> dict:
     """One ranked row: the score, every component behind it, the labels, and the components of the order."""
     score = ev.get("boardScore") or ev["score"]
-    # The rising board's evidence reaches 14 days so its subtraction has two halves; the number the row shows is
-    # the one the board ranked: settled markets INSIDE the 7-day window.
-    settled_count = (ev["rising"]["settledInWindow"] if board["id"] == "rising" and ev.get("rising")
-                     else len(ev["settled"]))
+    # `settledMarkets` has ONE meaning on every board: the sample the row's own win rate and score were computed
+    # from. On the category board that is the wallet's markets in that category (the row's score is scored on
+    # them, so publishing the all-category count here would put a win rate on screen above a larger sample than
+    # it was taken from), and on the rising board it is the 14 days the subtraction was read over — whose 7-day
+    # half is published separately as `windowSettledMarkets`.
+    if board["id"] == "category" and ev.get("category"):
+        settled_count = len(ev["category"]["settled"])
+    else:
+        settled_count = len(ev["settled"])
     row = {
         "rank": rank,
         "wallet": ev["wallet"],
@@ -231,6 +239,7 @@ def _row_for(board: dict, ev: dict, rank: int) -> dict:
         row["improvementMicro"] = ev["rising"]["improvementMicro"]
         row["weekMicro"] = ev["rising"]["weekMicro"]
         row["priorWeekMicro"] = ev["rising"]["priorWeekMicro"]
+        row["windowSettledMarkets"] = ev["rising"]["settledInWindow"]
     if ev.get("category"):
         row["category"] = board.get("category")
         row["categoryShareBps"] = ev["category"]["shareBps"]
@@ -241,7 +250,19 @@ def _row_for(board: dict, ev: dict, rank: int) -> dict:
 
 
 def _sort_key(board: dict):
+    """The order of each board, as a function of the row's own published fields.
+
+    The sort keys are read off the built rows rather than off the evidence, so the thing ordered and the thing
+    displayed are the same object. `win_rate` is the branch that a reader would most expect to be free — and it
+    is not: a board named after a field that is sorted by a different one is a board whose label is a lie, and
+    the row would have said `wins / settled markets` above a number that came from somewhere else.
+    """
     bid = board["id"]
+    if bid == "win_rate":
+        # A row without a rate cannot lead this board: `winRateBps` is None under the sample gate, and None is
+        # not a win rate of zero. In practice the gate refuses those rows before they are ranked (MIN_RESOLVED
+        # is the same 20), so this is a floor and not a policy.
+        return lambda r: (-(r["winRateBps"] or 0), -r["settledMarkets"], r["maxDrawdownMicro"], r["wallet"])
     if bid == "volume":
         return lambda r: (-r["verifiedVolumeMicro"], -r["settledMarkets"], r["wallet"])
     if bid == "rising":
@@ -296,6 +317,10 @@ def rank_board(*, board_id: str, wallets: list[dict], at_ms: int, limit: int = 1
             unranked.append({"wallet": ev["wallet"], "reasons": reasons,
                              "settledMarkets": len(ev["settled"]),
                              "verifiedVolumeMicro": ev["volume"]["verifiedMicro"],
+                             # A refusal is still a row about a wallet, so it carries the subtraction too: the
+                             # washer's "9 settled markets" must not be the only thing said about a wallet whose
+                             # volume board entry prints $20,000 of round trips.
+                             "washedMicro": ev["volume"]["washedMicro"],
                              "note": "not ranked, and the reason is stated rather than the row being blank"})
         else:
             rows.append(ev)

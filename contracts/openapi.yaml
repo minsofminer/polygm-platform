@@ -28,6 +28,7 @@ tags:
   - name: health
   - name: market
   - name: trading
+  - name: leaderboard
   - name: admin
 
 paths:
@@ -2695,6 +2696,245 @@ paths:
         "422": {$ref: "#/components/responses/Validation"}
 
         "500": {$ref: "#/components/responses/Internal"}
+  /v1/leaderboard:
+    get:
+      tags: [leaderboard]
+      summary: One board — rows with their components, the refusals with their reasons, and the freshness (P11 D2)
+      description: |-
+        Six boards share this read: `risk_adjusted` (the default), `win_rate`, `volume`, `rising`, `category`
+        and `copied`. `window` must be one the board actually reads — there is no 24-hour SKILL board, because
+        ranking a win rate on a day's sample would print a number with no sample behind it and call it a
+        leaderboard.
+
+        A wallet under the gate is not hidden: it appears in `unranked` with the number that refused it ("9
+        settled markets; this board needs 20"). A blown-up wallet keeps its real, negative score and stays on
+        the board, and `summary.blewUpCount` counts it. Every row states the components it was ranked on, the
+        window its turnover came from, and any label that applies to it — each with the rule behind it.
+      operationId: getLeaderboard
+      x-auth: none
+      x-rate-class: public-read
+      x-cache: short
+      parameters:
+        - name: board
+          in: query
+          schema:
+            type: string
+            enum: [risk_adjusted, win_rate, volume, rising, category, copied]
+        - name: window
+          in: query
+          schema:
+            type: string
+            enum: [24h, 7d, 30d, 90d, all]
+            description: defaults to the board's own default; a window the board does not read is a 422
+        - name: category
+          in: query
+          schema: {type: string, maxLength: 32}
+          description: required by the category board; one of Politics/Sports/Crypto/Finance
+        - name: q
+          in: query
+          schema: {type: string, maxLength: 64}
+          description: filter rows by pseudonym; `page.filtered` says the totals are the board's, not the filter's
+        - name: limit
+          in: query
+          schema: {type: integer, minimum: 1, maximum: 200, default: 50}
+        - name: offset
+          in: query
+          schema: {type: integer, minimum: 0, maximum: 5000, default: 0}
+      responses:
+        "200":
+          description: the board, its rows, its refusals, its counts and its freshness
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Stamped"
+                  - $ref: "#/components/schemas/LeaderboardBoard"
+        "422": {$ref: "#/components/responses/Denied"}
+        "500": {$ref: "#/components/responses/Internal"}
+
+  /v1/leaderboard/boards:
+    get:
+      tags: [leaderboard]
+      summary: The board picker
+      description: |-
+        Generated from the same specification the engine ranks from, so a board that exists in the engine and
+        not in the picker cannot happen. `isDefault` is on `risk_adjusted`, not on the venue's volume board:
+        volume rewards churn, and a board that can be topped by round-tripping tells a stranger to copy the
+        wrong wallet.
+      operationId: listLeaderboardBoards
+      x-auth: none
+      x-rate-class: public-read
+      x-cache: long
+      responses:
+        "200":
+          description: the boards, their formulas, gates, windows and cadences
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Stamped"
+                  - $ref: "#/components/schemas/LeaderboardBoards"
+        "500": {$ref: "#/components/responses/Internal"}
+
+  /v1/leaderboard/methodology:
+    get:
+      tags: [leaderboard]
+      summary: The published methodology, as the same object the engine reads
+      description: |-
+        The boards with their formulas, gates, tie-breaks and cadences, the six integrity rules each with what
+        it does AND what it does not do, and the window each board actually reads. Served rather than written
+        down separately — a methodology page maintained by hand beside a ranking engine maintained in code is
+        two authorities over one number, and the first disagreement is the one a user screenshots.
+      operationId: getLeaderboardMethodology
+      x-auth: none
+      x-rate-class: public-read
+      x-cache: long
+      responses:
+        "200":
+          description: the methodology
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Stamped"
+                  - $ref: "#/components/schemas/LeaderboardMethodology"
+        "500": {$ref: "#/components/responses/Internal"}
+
+  /v1/leaderboard/why:
+    get:
+      tags: [leaderboard]
+      summary: Why one wallet is above another, in one sentence, with both component sets
+      description: |-
+        This is the phase's own acceptance question, served: "a trader at rank 47 with fewer resolved markets
+        than the trader at rank 12" is answered with numbers rather than adjectives, and the sentence names the
+        sample explicitly in both directions — the sample gate decides ELIGIBILITY, never order.
+      operationId: explainLeaderboardRank
+      x-auth: none
+      x-rate-class: public-read
+      x-cache: short
+      parameters:
+        - {name: a, in: query, required: true, schema: {type: string, minLength: 4, maxLength: 64}}
+        - {name: b, in: query, required: true, schema: {type: string, minLength: 4, maxLength: 64}}
+        - name: board
+          in: query
+          schema:
+            type: string
+            enum: [risk_adjusted, win_rate, volume, rising, category, copied]
+        - name: window
+          in: query
+          schema: {type: string, enum: [24h, 7d, 30d, 90d, all]}
+        - {name: category, in: query, schema: {type: string, maxLength: 32}}
+      responses:
+        "200":
+          description: the sentence, both rows, and both components sets
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Stamped"
+                  - $ref: "#/components/schemas/LeaderboardWhy"
+        "404": {$ref: "#/components/responses/NotFound"}
+        "422": {$ref: "#/components/responses/Denied"}
+        "500": {$ref: "#/components/responses/Internal"}
+
+  /v1/leaderboard/snapshots:
+    get:
+      tags: [leaderboard]
+      summary: One wallet's rank history per board — the source of the 30-day sparkline
+      description: |-
+        Read from `leaderboard_snapshots` and nothing else. A rank recomputed from today's ledger is today's
+        rank, not the rank they had last Tuesday: "were they falling?" is a question about the past, and only a
+        written-down past answers it. `delta` is a change in RANK, so a negative number is an improvement.
+      operationId: getLeaderboardSnapshots
+      x-auth: none
+      x-rate-class: public-read
+      x-cache: short
+      parameters:
+        - {name: anon, in: query, required: true, schema: {type: string, minLength: 4, maxLength: 64}}
+        - {name: days, in: query, schema: {type: integer, minimum: 1, maximum: 90, default: 30}}
+      responses:
+        "200":
+          description: rank history, per board
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Stamped"
+                  - $ref: "#/components/schemas/LeaderboardSnapshots"
+        "404": {$ref: "#/components/responses/NotFound"}
+        "500": {$ref: "#/components/responses/Internal"}
+
+  /v1/leaderboard/runs:
+    get:
+      tags: [leaderboard]
+      summary: The recompute record, newest first
+      description: |-
+        Public on purpose: a cadence nobody can check is a claim. `freshness` states each board's snapshot age
+        against the cadence that board declares, so "is this stale" is a comparison rather than a reading of a
+        sentence.
+      operationId: listLeaderboardRuns
+      x-auth: none
+      x-rate-class: public-read
+      x-cache: short
+      parameters:
+        - {name: board, in: query, schema: {type: string, maxLength: 32}}
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 200, default: 24}}
+      responses:
+        "200":
+          description: the run rows and the per-board freshness
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Stamped"
+                  - $ref: "#/components/schemas/LeaderboardRuns"
+        "500": {$ref: "#/components/responses/Internal"}
+
+  /v1/leaderboard/recompute:
+    post:
+      tags: [leaderboard]
+      summary: Write the rank history — one snapshot per wallet per board, plus the integrity verdict
+      description: |-
+        Deterministic and idempotent per `Idempotency-Key`: a repeated key returns the first run's answer rather
+        than appending a second history point. The run table is keyed by (board, window, hour), so a recompute
+        inside the same hour replaces that hour's row instead of inventing cadence we did not have.
+
+        `boards` and `window` are optional; without them every board is written at its own default window.
+      operationId: recomputeLeaderboard
+      x-auth: user
+      x-rate-class: authed-write
+      x-cache: no-store
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                boards:
+                  type: array
+                  minItems: 1
+                  maxItems: 6
+                  items: {type: string, enum: [risk_adjusted, win_rate, volume, rising, category, copied]}
+                window: {type: string, enum: [24h, 7d, 30d, 90d, all]}
+      responses:
+        "200":
+          description: what was written
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Stamped"
+                  - $ref: "#/components/schemas/LeaderboardRecompute"
+        "400": {$ref: "#/components/responses/Denied"}
+        "401": {$ref: "#/components/responses/Denied"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/Denied"}
+        "500": {$ref: "#/components/responses/Internal"}
+
 components:
   headers:
     xRequestId:
@@ -4057,6 +4297,379 @@ components:
         plan: {type: string, description: "the plan the channel checks read"}
         ruleCount: {type: integer}
         note: {type: string}
+
+    LeaderboardMoney:
+      description: |-
+        USDC as a dot-decimal string — signed where the number can be negative (realised PnL, improvement,
+        a drawdown). The integer `…Micro` field beside every one of these is the number the ranking is defined
+        against; the string is what the number layer renders.
+      type: string
+      pattern: '^-?[0-9]+(\.[0-9]{1,6})?$'
+      examples: ["26800", "-1200.5", "0"]
+
+    LeaderboardRankBadge:
+      type: object
+      required: [rank, rankedTotal, text]
+      properties:
+        rank: {type: integer, minimum: 1}
+        rankedTotal: {type: integer, minimum: 0}
+        text: {type: string, examples: ["#47"]}
+
+    LeaderboardComponents:
+      type: object
+      required: [scaleMicro, trimRemovedMicro, volatilityMultiple, formula, trimRule]
+      description: every term of the score, so a user can recompute their own rank with arithmetic
+      properties:
+        scaleMicro: {type: integer, minimum: 1, description: "max(largest drawdown, N x sigma) — the denominator"}
+        trimRemovedMicro: {type: integer, minimum: 0, description: "what excluding the single best market removed"}
+        volatilityMultiple: {type: integer, minimum: 1}
+        formula: {type: string}
+        trimRule: {type: string}
+
+    LeaderboardRow:
+      type: object
+      required: [rank, anon, scoreBps, state, labels, settledMarkets, wins, winRateBps, insufficientSample,
+                 sampleNote, realisedMicro, trimmedMicro, volatilityMicro, maxDrawdownMicro, bestTradeShareBps,
+                 ageDays, verifiedVolumeMicro, volumeWindow, washedMicro, washNote, copiers, disputedExcluded,
+                 board, components, anon, realised, trimmed, volatility, drawdown, verifiedVolume, washed,
+                 rankBadge, classifications]
+      description: |-
+        One ranked wallet. `state` is `ranked`, `provisional` or `blew_up`, and a blown-up wallet keeps its real
+        (negative) score: quietly dropping blown-up accounts is how a leaderboard lies. `volumeWindow` says which
+        window `verifiedVolumeMicro` was measured over — the volume board ranks its window, every skill board's
+        eligibility floor is written in LIFETIME turnover, and a row that did not say which would be unreadable.
+      properties:
+        rank: {type: integer, minimum: 1}
+        anon: {type: string, description: "the wallet's pseudonym; an address never leaves the API"}
+        board: {type: string}
+        scoreBps: {type: integer}
+        state: {type: string, enum: [ranked, provisional, blew_up]}
+        labels: {type: array, items: {type: string}, description: "each label states its own rule"}
+        settledMarkets: {type: integer, minimum: 0}
+        wins: {type: integer, minimum: 0}
+        winRateBps: {type: integer}
+        insufficientSample: {type: boolean}
+        sampleNote: {type: string}
+        realisedMicro: {type: integer}
+        trimmedMicro: {type: integer}
+        volatilityMicro: {type: integer, minimum: 0}
+        maxDrawdownMicro: {type: integer, minimum: 0}
+        bestTradeShareBps: {type: integer, minimum: 0, maximum: 10000}
+        ageDays: {type: integer, minimum: 0}
+        verifiedVolumeMicro: {type: integer, minimum: 0}
+        volumeWindow: {type: string, description: "the window the turnover was measured over, or `lifetime`"}
+        washedMicro: {type: integer, minimum: 0}
+        washNote: {type: string}
+        copiers: {type: integer, minimum: 0}
+        disputedExcluded: {type: integer, minimum: 0}
+        improvementMicro: {type: integer}
+        weekMicro: {type: integer}
+        priorWeekMicro: {type: integer}
+        windowSettledMarkets: {type: integer, minimum: 0, description: "the rising board's 7-day half: how many of `settledMarkets` fell inside the window being measured"}
+        category: {type: [string, "null"]}
+        categoryShareBps: {type: integer, minimum: 0, maximum: 10000}
+        categorySettled: {type: integer, minimum: 0}
+        components: {$ref: "#/components/schemas/LeaderboardComponents"}
+        realised: {$ref: "#/components/schemas/LeaderboardMoney"}
+        trimmed: {$ref: "#/components/schemas/LeaderboardMoney"}
+        volatility: {$ref: "#/components/schemas/LeaderboardMoney"}
+        drawdown: {$ref: "#/components/schemas/LeaderboardMoney"}
+        verifiedVolume: {$ref: "#/components/schemas/LeaderboardMoney"}
+        washed: {$ref: "#/components/schemas/LeaderboardMoney"}
+        improvement: {$ref: "#/components/schemas/LeaderboardMoney"}
+        week: {$ref: "#/components/schemas/LeaderboardMoney"}
+        priorWeek: {$ref: "#/components/schemas/LeaderboardMoney"}
+        rankBadge: {$ref: "#/components/schemas/LeaderboardRankBadge"}
+        classifications:
+          type: array
+          description: the behaviour labels the trader dossier carries, each with its rule and disclaimer
+          items:
+            type: object
+            required: [label, rule, disclaimer]
+            properties:
+              label: {type: string}
+              rule: {type: string}
+              disclaimer: {type: string}
+
+    LeaderboardUnranked:
+      type: object
+      required: [anon, reasons, settledMarkets, verifiedVolumeMicro, verifiedVolume, washedMicro, washed,
+                 washNote, note, classifications]
+      description: |-
+        Why a wallet is NOT on the board, with the number that refused it. A leaderboard that hides its refusals
+        is a leaderboard nobody can audit; this list is part of the response, not an empty page.
+      properties:
+        anon: {type: string}
+        reasons: {type: array, items: {type: string}}
+        settledMarkets: {type: integer, minimum: 0}
+        verifiedVolumeMicro: {type: integer, minimum: 0}
+        verifiedVolume: {$ref: "#/components/schemas/LeaderboardMoney"}
+        washedMicro: {type: integer, minimum: 0}
+        washed: {$ref: "#/components/schemas/LeaderboardMoney"}
+        washNote: {type: string}
+        note: {type: string}
+        classifications: {type: array, items: {type: object}}
+
+    LeaderboardSummary:
+      type: object
+      required: [rankedTotal, unrankedTotal, blewUpCount, provisionalCount, disputedWithheld, washedMicro,
+                 settledMarkets, excludedTotal, medianSettledMarkets, note]
+      description: counts over the WHOLE board, never over the page
+      properties:
+        rankedTotal: {type: integer, minimum: 0}
+        unrankedTotal: {type: integer, minimum: 0}
+        blewUpCount: {type: integer, minimum: 0}
+        provisionalCount: {type: integer, minimum: 0}
+        disputedWithheld: {type: integer, minimum: 0}
+        washedMicro: {type: integer, minimum: 0}
+        settledMarkets: {type: integer, minimum: 0}
+        excludedTotal: {type: integer, minimum: 0, description: "wallets an operator has removed from this board"}
+        medianSettledMarkets: {type: integer, minimum: 0}
+        filteredTotal: {type: [integer, "null"]}
+        note: {type: string}
+
+    LeaderboardPage:
+      type: object
+      required: [limit, offset, returned, unrankedReturned, rankedTotal, hasMore, filtered]
+      properties:
+        limit: {type: integer, minimum: 1}
+        offset: {type: integer, minimum: 0}
+        returned: {type: integer, minimum: 0}
+        unrankedReturned: {type: integer, minimum: 0}
+        rankedTotal: {type: integer, minimum: 0}
+        hasMore: {type: boolean}
+        filtered: {type: boolean}
+
+    LeaderboardReadPlan:
+      type: object
+      required: [board, window, atMs, windowMs, settledFromMs, fillsFromMs, settledRule, fillsRule]
+      description: which rows this board was ranked from, as of when — the first question in any ranking dispute
+      properties:
+        board: {type: string}
+        window: {type: string}
+        atMs: {type: integer, description: "the instant the window starts were derived from"}
+        windowMs: {type: integer, minimum: 0}
+        settledFromMs: {type: integer, minimum: 0}
+        fillsFromMs: {type: integer, minimum: 0}
+        settledRule: {type: string}
+        fillsRule: {type: string}
+
+    LeaderboardFreshness:
+      type: object
+      required: [board, label, snapshotMs, ageMs, cadenceMs, runs, stale, source, note]
+      properties:
+        board: {type: string}
+        label: {type: string}
+        snapshotMs: {type: [integer, "null"]}
+        ageMs: {type: [integer, "null"]}
+        cadenceMs: {type: integer, minimum: 0}
+        runs: {type: integer, minimum: 0}
+        stale: {type: boolean}
+        source: {type: string, description: "`live` — the board is ranked from the ledger on every read"}
+        note: {type: string}
+
+    LeaderboardBoardSpec:
+      type: object
+      required: [id, label, isDefault, kind, window, windows, formula, gate, cadenceMs, cadence, categoryBoard,
+                 categories]
+      properties:
+        id: {type: string}
+        label: {type: string}
+        isDefault: {type: boolean}
+        kind: {type: string, enum: [skill, activity, social]}
+        window: {type: string}
+        windows: {type: array, items: {type: string}}
+        formula: {type: string}
+        gate: {type: string}
+        cadenceMs: {type: integer, minimum: 0}
+        cadence: {type: string}
+        categoryBoard: {type: boolean}
+        categories: {type: array, items: {type: string}}
+        tieBreaks: {type: string}
+        rewards: {type: string}
+        punishes: {type: string}
+        note: {type: string}
+
+    LeaderboardBoards:
+      type: object
+      required: [boards, defaultBoard, categories, note]
+      properties:
+        boards: {type: array, items: {$ref: "#/components/schemas/LeaderboardBoardSpec"}}
+        defaultBoard: {type: string}
+        categories: {type: array, items: {type: string}}
+        note: {type: string}
+
+    LeaderboardIntegrityRule:
+      type: object
+      required: [id, label, does, doesNot, detect]
+      properties:
+        id: {type: string}
+        label: {type: string}
+        does: {type: string}
+        doesNot: {type: string, description: "every rule states what it does NOT do — a filter that labels a wallet is a different product from one that hides it"}
+        detect: {type: string}
+
+    LeaderboardMethodology:
+      type: object
+      required: [boards, defaultBoard, sampleGate, minVerifiedVolumeMicro, provisionalDays, luckyTradeShareBps,
+                 volatilityMultiple, integrity, note, path, windows, readPath, launchList, excludedWallets]
+      properties:
+        boards: {type: array, items: {$ref: "#/components/schemas/LeaderboardBoardSpec"}}
+        defaultBoard: {type: string}
+        sampleGate: {type: integer, minimum: 1}
+        minVerifiedVolumeMicro: {type: integer, minimum: 0}
+        provisionalDays: {type: integer, minimum: 1}
+        luckyTradeShareBps: {type: integer, minimum: 0, maximum: 10000}
+        volatilityMultiple: {type: integer, minimum: 1}
+        integrity: {type: array, items: {$ref: "#/components/schemas/LeaderboardIntegrityRule"}}
+        windows: {type: object, description: "per board+window: the read plan the engine was handed"}
+        readPath: {type: string}
+        path: {type: string}
+        launchList: {type: array, items: {type: object}}
+        excludedWallets: {type: string}
+        note: {type: string}
+
+    LeaderboardWhy:
+      type: object
+      required: [board, window, why, a, b, components, note, sampleGate, unranked]
+      properties:
+        board: {type: string}
+        window: {type: string}
+        why: {type: string, description: "one sentence, with both metrics and both sample sizes"}
+        a: {$ref: "#/components/schemas/LeaderboardRow"}
+        b: {$ref: "#/components/schemas/LeaderboardRow"}
+        components:
+          type: object
+          required: [a, b]
+          properties:
+            a: {$ref: "#/components/schemas/LeaderboardComponents"}
+            b: {$ref: "#/components/schemas/LeaderboardComponents"}
+        note: {type: string}
+        sampleGate: {type: integer, minimum: 1}
+        unranked: {type: array, items: {type: object}}
+
+    LeaderboardSnapshotPoint:
+      type: object
+      required: [tsMs, rank, scoreBps, settledMarkets, maxDrawdownMicro, maxDrawdown]
+      properties:
+        tsMs: {type: integer}
+        rank: {type: integer, minimum: 1}
+        scoreBps: {type: integer}
+        settledMarkets: {type: integer, minimum: 0}
+        maxDrawdownMicro: {type: integer, minimum: 0}
+        maxDrawdown: {$ref: "#/components/schemas/LeaderboardMoney"}
+
+    LeaderboardSnapshotBoard:
+      type: object
+      required: [board, label, window, points, latestRank, bestRank, worstRank, delta, note]
+      properties:
+        board: {type: string}
+        label: {type: string}
+        window: {type: string}
+        points: {type: array, items: {$ref: "#/components/schemas/LeaderboardSnapshotPoint"}}
+        latestRank: {type: integer, minimum: 1}
+        bestRank: {type: integer, minimum: 1}
+        worstRank: {type: integer, minimum: 1}
+        delta: {type: integer, description: "change in RANK; negative is an improvement"}
+        note: {type: string}
+
+    LeaderboardSnapshots:
+      type: object
+      required: [anon, days, boards, snapshots, note]
+      properties:
+        anon: {type: string}
+        days: {type: integer, minimum: 1}
+        boards: {type: array, items: {$ref: "#/components/schemas/LeaderboardSnapshotBoard"}}
+        snapshots: {type: integer, minimum: 0}
+        note: {type: string}
+
+    LeaderboardRunRow:
+      type: object
+      required: [board, label, window, ranked, unranked, blewUp, durationMs, computedMs]
+      description: |-
+        One recompute: how many wallets ranked, how many were refused, how long it took. `window` is the board's
+        run key, which for the category board is the window plus its category (`30d:Politics`) — the board is
+        four boards in one, and a key without the category would collapse four runs into one row.
+      properties:
+        board: {type: string}
+        label: {type: string}
+        window: {type: string}
+        ranked: {type: integer, minimum: 0}
+        unranked: {type: integer, minimum: 0}
+        blewUp: {type: integer, minimum: 0}
+        durationMs: {type: integer, minimum: 0}
+        computedMs: {type: integer}
+
+    LeaderboardRuns:
+      type: object
+      required: [rows, freshness, cadences]
+      properties:
+        rows: {type: array, items: {$ref: "#/components/schemas/LeaderboardRunRow"}}
+        freshness:
+          type: object
+          additionalProperties: {$ref: "#/components/schemas/LeaderboardFreshness"}
+        cadences:
+          type: object
+          additionalProperties: {type: integer, minimum: 0}
+
+    LeaderboardRecompute:
+      type: object
+      required: [runs, snapshots, integrity, computedMs, bucketHour, boards, note]
+      properties:
+        runs:
+          type: array
+          items:
+            type: object
+            required: [board, window, category, ranked, unranked, blewUp, disputedWithheld, durationMs]
+            properties:
+              board: {type: string}
+              window: {type: string}
+              category: {type: [string, "null"]}
+              ranked: {type: integer, minimum: 0}
+              unranked: {type: integer, minimum: 0}
+              blewUp: {type: integer, minimum: 0}
+              disputedWithheld: {type: integer, minimum: 0}
+              durationMs: {type: integer, minimum: 0}
+        snapshots: {type: integer, minimum: 0}
+        integrity: {type: integer, minimum: 0}
+        computedMs: {type: integer}
+        bucketHour: {type: integer}
+        boards: {type: array, items: {type: string}}
+        window: {type: [string, "null"]}
+        note: {type: string}
+
+    LeaderboardBoard:
+      type: object
+      required: [board, label, window, windows, category, categories, formula, gate, tieBreaks, cadence,
+                 cadenceMs, note, rows, unranked, summary, page, boards, readPlan, freshness, methodologyPath,
+                 excludedTotal, excluded, disclaimer]
+      properties:
+        board: {type: string}
+        label: {type: string}
+        window: {type: string}
+        windows: {type: array, items: {type: string}}
+        category: {type: [string, "null"]}
+        categories: {type: array, items: {type: string}}
+        formula: {type: string}
+        gate: {type: string}
+        tieBreaks: {type: string}
+        cadence: {type: string}
+        cadenceMs: {type: integer, minimum: 0}
+        note: {type: string}
+        rows: {type: array, items: {$ref: "#/components/schemas/LeaderboardRow"}}
+        unranked: {type: array, items: {$ref: "#/components/schemas/LeaderboardUnranked"}}
+        summary: {$ref: "#/components/schemas/LeaderboardSummary"}
+        page: {$ref: "#/components/schemas/LeaderboardPage"}
+        boards: {type: array, items: {$ref: "#/components/schemas/LeaderboardBoardSpec"}}
+        readPlan: {$ref: "#/components/schemas/LeaderboardReadPlan"}
+        freshness: {$ref: "#/components/schemas/LeaderboardFreshness"}
+        methodologyPath: {type: string}
+        excludedTotal: {type: integer, minimum: 0}
+        excluded:
+          type: [array, "null"]
+          description: operator-only (admin token); null for a public caller, because a wall of shame is a different product from a leaderboard
+          items: {type: object}
+        disclaimer: {type: string}
 
   responses:
     NotFound:

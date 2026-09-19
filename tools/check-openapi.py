@@ -55,6 +55,14 @@ TABLE_FOR_PATH = {
     "/v1/alerts/test": "ALERT_TEST_RESPONSES",
     "/v1/alerts/deliveries": "ALERT_DELIVERIES_RESPONSES",
     "/v1/alerts/settings": "ALERT_SETTINGS_RESPONSES",
+    # P11 D2. One path with two verbs (the read and the recompute write), so both rows are verb-keyed.
+    ("GET", "/v1/leaderboard"): "LEADERBOARD_RESPONSES",
+    ("POST", "/v1/leaderboard/recompute"): "LEADERBOARD_RECOMPUTE_RESPONSES",
+    "/v1/leaderboard/boards": "LEADERBOARD_METHODOLOGY_RESPONSES",
+    "/v1/leaderboard/methodology": "LEADERBOARD_METHODOLOGY_RESPONSES",
+    "/v1/leaderboard/why": "LEADERBOARD_WHY_RESPONSES",
+    "/v1/leaderboard/snapshots": "LEADERBOARD_SNAPSHOT_RESPONSES",
+    "/v1/leaderboard/runs": "LEADERBOARD_RUN_RESPONSES",
     "/v1/radar/runs": "RADAR_RESPONSES",
     "/v1/radar/runs/{job_id}": "RADAR_JOB_RESPONSES",
     "/healthz": "HEALTH_RESPONSES",                    # empty on purpose; the comment in app.py says why

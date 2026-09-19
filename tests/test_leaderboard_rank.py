@@ -228,12 +228,67 @@ class TheBoardsAndTheMethodologyTest(unittest.TestCase):
         ids = [r["id"] for r in doc["integrity"]]
         self.assertEqual(["wash", "copy_farm", "provisional", "blown_up", "lucky", "disputed"], ids)
 
+    def test_the_win_rate_board_is_ordered_by_win_rate(self):
+        """A board named after a field must be ordered by that field.
+
+        These two wallets are built so the two orders disagree: the accurate one wins 85% of its (just-large
+        enough) sample with small, flat results, and the other wins 55% with a much better risk-adjusted score.
+        A win-rate board that serves the risk-adjusted order is a heading that lies about its own contents.
+        """
+        accurate = wallet("w_accurate", results=[600_000] * 35 + [-1_500_000] * 3 + [400_000] * 12)
+        # 55% wins, but the wins are large and the losses are small: a strong risk-adjusted record.
+        spiky = wallet("w_spiky", results=[4_000_000] * 25 + [-300_000] * 20)
+        out = lr.rank_board(board_id="win_rate", wallets=[accurate, spiky], at_ms=AT, window="90d")
+        rows = {r["wallet"]: r for r in out["rows"]}
+        self.assertGreater(rows["w_accurate"]["winRateBps"], rows["w_spiky"]["winRateBps"])
+        self.assertEqual(rows["w_accurate"]["rank"], 1, "the board is ordered by its own formula")
+        default = lr.rank_board(board_id="risk_adjusted", wallets=[accurate, spiky], at_ms=AT, window="90d")
+        self.assertEqual(default["rows"][0]["wallet"], "w_spiky",
+                         "and the default board, which ranks risk-adjusted return, still prefers the other one")
+
+    def test_the_win_rate_board_serves_the_rate_of_the_sample_printed_beside_it(self):
+        out = lr.rank_board(board_id="win_rate", wallets=[wallet("w_a", results=[600_000] * 30 + [-900_000] * 6)],
+                            at_ms=AT, window="90d")
+        row = out["rows"][0]
+        self.assertEqual(row["settledMarkets"], 36)
+        self.assertEqual(row["wins"], 30)
+        self.assertEqual(row["winRateBps"], 30 * 10_000 // 36)
+        self.assertFalse(row["insufficientSample"])
+
+    def test_a_category_row_is_sampled_on_the_categorys_own_results(self):
+        """The sample printed beside a win rate is the sample that rate was taken from."""
+        mix = wallet("w_mix", results=[500_000] * 21 + [-400_000] * 4, categories=["Politics"] * 21 + ["Sports"] * 4)
+        out = lr.rank_board(board_id="category", wallets=[mix], at_ms=AT, category="Politics")
+        row = out["rows"][0]
+        self.assertEqual(row["settledMarkets"], 21, "21 of this wallet's markets are Politics")
+        self.assertEqual(row["wins"], 21)
+        self.assertEqual(row["winRateBps"], 10_000)
+        self.assertEqual(row["categorySettled"], 21, "and the share is published alongside it")
+
     def test_the_default_board_is_the_risk_adjusted_one_and_says_so(self):
         default = next(b for b in bd.BOARDS if b["isDefault"])
         self.assertEqual("risk_adjusted", default["id"])
         self.assertEqual(bd.DEFAULT_BOARD, default["id"])
         self.assertIn("drawdown", default["formula"])
         self.assertIn("2 x", default["formula"])
+
+
+class TestBestTradeShareIsAShare(unittest.TestCase):
+    def test_the_share_is_clamped_when_the_rest_of_the_book_is_red(self):
+        """A wallet can have a best market LARGER than its realised total, and "140% of the PnL" is not a share
+        of anything. The row says 100% — one trade is all of it and then some — which is also the value the
+        schema's own CHECK allows, so the clamp lives in the engine rather than being discovered by an INSERT."""
+        state = ig.wallet_state(first_seen_ms=AT - 30 * DAY, at_ms=AT,
+                                curve=[{"cumMicro": 1}, {"cumMicro": -9}], best_micro=1_900, realised_micro=100)
+        self.assertEqual(state["bestTradeShareBps"], 10_000)
+        self.assertTrue(state["luckyGambler"])
+        self.assertIn("100%", " ".join(state["labels"]))
+
+    def test_no_share_when_there_is_no_profit_to_share(self):
+        flat = ig.wallet_state(first_seen_ms=AT - 30 * DAY, at_ms=AT, curve=[{"cumMicro": -5}],
+                               best_micro=600, realised_micro=-5)
+        self.assertEqual(flat["bestTradeShareBps"], 0)
+        self.assertFalse(flat["luckyGambler"])
 
 
 if __name__ == "__main__":

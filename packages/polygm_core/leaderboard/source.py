@@ -66,6 +66,9 @@ def read_plan(*, board_id: str, window: str, at_ms: int) -> dict:
     return {
         "board": board_id,
         "window": key,
+        # The instant the plan was derived. A window start without an "as of" is half a statement: two reads of
+        # the same board a second apart have different floors, and a reader checking our arithmetic needs ours.
+        "atMs": at,
         "windowMs": 0 if key == "all" else WINDOW_DAYS[key] * DAY_MS,
         "settledFromMs": settled_from,
         "fillsFromMs": fills_from,
