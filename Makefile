@@ -211,14 +211,20 @@ seed-rules:         ## write the default alert rules for one owner (P09 owns the
 p08: web-build
 	$(PY) tools/p08-gate-check.py --record docs/verification/P08-gate.txt
 
-p08-offline:        ## the 14 checks that need neither a build nor a booted server
+p08-offline: web-deps        ## the 14 checks that need neither a build nor a booted server
 	$(PY) tools/p08-gate-check.py --fast
 
-p08-selftest:       ## prove the 15 checks can fail, one planted violation at a time
+p08-selftest: web-deps        ## prove the 15 checks can fail, one planted violation at a time
 	$(PY) tools/p08-gate-check.py --self-test
 
-web-build:
-	@cd web && { [ -d node_modules ] || npm ci --no-audit --no-fund; } && npm run build && npm run measure
+# `web-deps` is its own target because four of the 15 checks shell out to node (openapi-typescript, vitest,
+# the i18n and env guards): "run the offline subset" must not quietly mean "install 400 MB first" either, so
+# each target states which half it needs and the install happens once.
+web-deps:
+	@cd web && { [ -d node_modules ] || npm ci --no-audit --no-fund; }
+
+web-build: web-deps
+	@cd web && npm run build && npm run measure
 
 p01:
 	$(PY) tools/p01-gate-check.py
