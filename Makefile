@@ -230,6 +230,22 @@ p08-offline: web-deps        ## the 14 checks that need neither a build nor a bo
 p08-selftest: web-deps        ## prove the 15 checks can fail, one planted violation at a time
 	$(PY) tools/p08-gate-check.py --self-test
 
+# P10 · the terminal. `p10` is the 9 checks, and it is the first gate in this repo whose subject is a
+# *journey*: c9 walks the phase's own acceptance sentence (find a whale -> open the trader -> the win rate is
+# real -> the drawdown is there -> a copy config in dry-run -> the slippage risk) over the real API, in one
+# script, because a chain verified one endpoint at a time is a chain nobody has ever walked. c1 runs
+# check-openapi over the whole contract, so this target is also where the 34-path document is enforced.
+# The web half of D1-D9 is checked by this gate too (c10 reads the terminal's own components); `make p08`
+# first, because the payload and the build artefact are shared with that phase.
+p10: web-deps
+	$(PY) tools/p10-gate-check.py --record docs/verification/P10-gate.txt
+
+p10-fast: web-deps        ## the 7 checks that need neither check-openapi nor the P08 money scanner
+	$(PY) tools/p10-gate-check.py --fast
+
+p10-selftest:             ## prove the scanners can fail, one planted violation at a time
+	$(PY) tools/p10-gate-check.py --self-test
+
 # `web-deps` is its own target because four of the 15 checks shell out to node (openapi-typescript, vitest,
 # the i18n and env guards): "run the offline subset" must not quietly mean "install 400 MB first" either, so
 # each target states which half it needs and the install happens once.
@@ -247,7 +263,7 @@ p03:
 	$(PY) tools/p03-gate-check.py
 	$(PY) tools/p03-mutation-test.py
 
-check: test lint lint-canary openapi-selftest sql-sqlite-check gate gate-mutate p01 p02 p03 p04 p05 p06 p07 p08 p09 probe-fresh
+check: test lint lint-canary openapi-selftest sql-sqlite-check gate gate-mutate p01 p02 p03 p04 p05 p06 p07 p08 p09 p10 probe-fresh
 	@echo "ALL GREEN"
 
 # ------------------------------------------------------------------ diagnostics

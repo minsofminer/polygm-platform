@@ -89,13 +89,14 @@ CREATE TABLE IF NOT EXISTS whale_views (
     user_id             TEXT NOT NULL REFERENCES users(id),
     name                TEXT NOT NULL,
     filters_json        TEXT NOT NULL DEFAULT '{}',
-    channel             TEXT NOT NULL DEFAULT 'telegram',
+    channel             TEXT CHECK (channel IS NULL OR channel IN ('telegram','email','webhook')),
     severity            TEXT NOT NULL DEFAULT 'notice' CHECK (severity IN ('info','notice','urgent')),
     scope               TEXT NOT NULL DEFAULT 'global' CHECK (scope IN ('global','market')),
     market_id           TEXT,
     rule_id             TEXT,
     created_ms          INTEGER NOT NULL,
-    CHECK ((scope = 'market') = (market_id IS NOT NULL))
+    CHECK ((scope = 'market') = (market_id IS NOT NULL)),
+    CHECK (channel IS NULL OR scope = 'market')
 );
 CREATE INDEX IF NOT EXISTS whale_views_user_idx ON whale_views(user_id, created_ms);
 CREATE TABLE IF NOT EXISTS wallet_pseudonyms (

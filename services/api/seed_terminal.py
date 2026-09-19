@@ -228,8 +228,10 @@ def whale_views(now: int) -> tuple[list[tuple], list[tuple]]:
               now - DAY_MS)]
     views = [("wv-seed-01", DEMO_USER, "Fed-market whales", json.dumps({"minSeverity": "urgent"}),
               "telegram", "urgent", "market", "0xM1", "rule-whale-01", now - DAY_MS),
+             # No channel: a global view cannot notify (`rule_has_target`, and now also the view's own CHECK),
+             # so the fixture ships it as what it legally is - a filter you look at.
              ("wv-seed-02", DEMO_USER, "Everything over notice", json.dumps({"minSeverity": "notice"}),
-              "telegram", "notice", "global", None, None, now - 2 * DAY_MS)]
+              None, "notice", "global", None, None, now - 2 * DAY_MS)]
     return rules, views
 
 

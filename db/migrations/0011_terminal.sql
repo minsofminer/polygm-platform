@@ -141,7 +141,9 @@ CREATE TABLE IF NOT EXISTS whale_views (
     user_id             TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     name                TEXT NOT NULL,
     filters_json        TEXT NOT NULL DEFAULT '{}',
-    channel             TEXT NOT NULL DEFAULT 'telegram',
+    -- NULL is a filter, a channel is a subscription. There is no DEFAULT on purpose: a default channel would
+    -- turn a saved filter into an alert the first time somebody inserted a row without thinking about it.
+    channel             TEXT CHECK (channel IS NULL OR channel IN ('telegram','email','webhook')),
     severity            TEXT NOT NULL DEFAULT 'notice' CHECK (severity IN ('info','notice','urgent')),
     scope               TEXT NOT NULL DEFAULT 'global' CHECK (scope IN ('global','market')),
     market_id           TEXT,
@@ -149,7 +151,11 @@ CREATE TABLE IF NOT EXISTS whale_views (
     created_ms          BIGINT NOT NULL,
     -- A notifying view must name a market; a view that only filters must not pretend to. This mirrors
     -- `alert_rules`' own `rule_has_target` (P04) rather than inventing a second vocabulary for the same rule.
-    CHECK ((scope = 'market') = (market_id IS NOT NULL))
+    CHECK ((scope = 'market') = (market_id IS NOT NULL)),
+    -- A notifying view must be market-scoped, which is the same rule as `alert_rules.rule_has_target` stated
+    -- where the view lives. The API refuses this with 409 and names the reason; the CHECK is what makes the
+    -- refusal true rather than merely intended.
+    CHECK (channel IS NULL OR scope = 'market')
 );
 CREATE INDEX IF NOT EXISTS whale_views_user_idx ON whale_views(user_id, created_ms DESC);
 
