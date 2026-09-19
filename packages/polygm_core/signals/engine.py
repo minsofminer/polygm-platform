@@ -17,7 +17,12 @@ import statistics
 from dataclasses import dataclass, field, replace
 
 VALID_KINDS = ("large_fill", "volume_spike", "rapid_move", "new_market", "imbalance_flip",
-               "negrisk_divergence", "watched_wallet", "resolution_imminent")
+               "negrisk_divergence", "watched_wallet", "resolution_imminent",
+               # P10 D9. The three kinds the alert screen sells that this engine did not compute. Without them
+               # the screen offered a rule the engine could not evaluate, which is a promise nobody can keep and
+               # a rule that never fires — the failure is invisible from the UI, which is what makes it the kind
+               # worth writing down.
+               "price_level", "spread_widen", "illiquid_top")
 SEVERITIES = ("info", "notice", "urgent")
 DEFAULTS: dict[str, dict] = {
     "large_fill":          {"abs_usd_micro": 10_000 * 10**6, "rel_multiple": 20.0, "min_sample": 20,
@@ -34,6 +39,28 @@ DEFAULTS: dict[str, dict] = {
     "watched_wallet":      {"min_usd_micro": 500 * 10**6, "cooldown_s": 60, "severity": "notice",
                             "channels": ("telegram",)},
     "resolution_imminent": {"hours": 6.0, "cooldown_s": 3600, "severity": "notice", "channels": ("push",)},
+    # P10 D9. Each of these fires on a CROSSING and not on a state, which is the difference between an alert and
+    # a subscription: "the price is above 0.62" is true all afternoon, and an engine that re-fires it is an engine
+    # that gets muted. `price_level` is the one a user reaches for first ("tell me if Yes crosses 60"), so its
+    # crossing semantics are the ones to get right.
+    "price_level":         {"price_micro": 500_000, "op": ">=", "cooldown_s": 300, "severity": "notice",
+                            "channels": ("push", "telegram")},
+    "spread_widen":        {"spread_bp": 300, "cooldown_s": 600, "severity": "notice", "channels": ("push",)},
+    "illiquid_top":        {"min_depth_usd_micro": 500 * 10**6, "cooldown_s": 900, "severity": "notice",
+                            "channels": ("push",)},
+}
+
+#: The alert kinds D9's screen offers, and the engine kind each one is evaluated by. `None` means "no engine
+#: rule": a manual alert fires only when its owner asks for it, and saying so is better than mapping it onto
+#: something that would fire on its own.
+ALERT_KIND_MAP: dict[str, str | None] = {
+    "price_level": "price_level",
+    "spread_widen": "spread_widen",
+    "whale_fill": "large_fill",
+    "resolve_lead": "resolution_imminent",
+    "illiquid_top": "illiquid_top",
+    "new_market": "new_market",
+    "manual": None,
 }
 
 
@@ -94,12 +121,22 @@ def build_rule(rule_id: str, kind: str, params: dict | None = None, *, owner: st
                 raise RuleError("%s must be a positive finite number, got %r" % (key, val))
         if key == "min_sample" and (not isinstance(val, int) or isinstance(val, bool) or val < 2):
             raise RuleError("min_sample must be an integer >= 2 (a z-score of one sample is not a z-score)")
+        if key == "price_micro" and (not isinstance(val, int) or isinstance(val, bool)
+                                     or not 0 < val < 10 ** 6):
+            raise RuleError("price_micro must be an integer inside (0, 1000000), got %r" % (val,))
+        if key == "op" and val not in (">=", "<="):
+            raise RuleError("op must be '>=' or '<=' (a level with no direction is not a crossing), got %r"
+                            % (val,))
+        if key == "spread_bp" and (not isinstance(val, int) or isinstance(val, bool) or val <= 0):
+            raise RuleError("spread_bp must be a positive integer of basis points, got %r" % (val,))
     if severity is not None and severity not in SEVERITIES:
         raise RuleError("severity must be one of %s" % ", ".join(SEVERITIES))
     if cooldown_s is not None and (not isinstance(cooldown_s, int) or cooldown_s < 0):
         raise RuleError("cooldown_s must be a non-negative integer")
     if channels is not None:
-        unknown = sorted(set(channels) - {"push", "telegram", "email", "digest", "inapp"})
+        # `webhook` is Pro's channel (D9) and `alert_fires.channel` has allowed it since P04; an engine
+        # that refused it while the product sells it would be a rule the paying plan cannot save.
+        unknown = sorted(set(channels) - {"push", "telegram", "email", "digest", "inapp", "webhook"})
         if unknown:
             raise RuleError("unknown channels: %s" % ", ".join(unknown))
     return Rule(rule_id, kind, owner, tuple(sorted(p.items())), cooldown_s, severity,
@@ -136,8 +173,18 @@ class Engine:
 
     @staticmethod
     def matches(rule: Rule, event: dict) -> bool:
+        """Exact match on the event's fields, with one addition: a value may be a LIST.
+
+        It exists for event-wide alerts (P10 D9): a rule watching an event must watch every market in it, and a
+        filter that only ever matched the first condition id would silently drop the other legs — the alert would
+        look armed and be wrong in the direction nobody checks.
+        """
         for k, v in rule.market_filter:
-            if str(event.get(k) or "") != str(v):
+            got = str(event.get(k) or "")
+            if isinstance(v, (list, tuple)):
+                if got not in {str(x) for x in v}:
+                    return False
+            elif got != str(v):
                 return False
         return True
 
@@ -289,3 +336,72 @@ class Engine:
                      {"ms_left": left_ms, "position_micro": e.get("user_open_position_micro")},
                      "resolm:%s:%d" % (e.get("market", ""), int(left_ms // 3600000)), now_ms,
                      rule.channel_list)
+
+
+    # ---------------------------------------------------------------- P10 D9's three kinds
+    def _eval_price_level(self, rule: Rule, e: dict, now_ms: int) -> Alert | None:
+        """A level CROSSING, not a level state.
+
+        The event carries the previous and the new mid, so "crossed 0.62" is a fact the engine can state rather
+        than infer: a rule that fired whenever the price happened to be above the level would re-fire on every
+        book update until the user muted it, and a muted alert is worse than no alert because the user believes
+        it is on.
+        """
+        if e.get("type") != "price_move":
+            return None
+        old, new = int(e.get("old_micro") or 0), int(e.get("new_micro") or 0)
+        if not old:
+            return None
+        level, op = int(rule.param("price_micro")), str(rule.param("op"))
+        crossed = (old < level <= new) if op == ">=" else (old > level >= new)
+        if not crossed:
+            return None
+        return Alert(rule.id, rule.kind, e.get("market", ""), e.get("token_id", ""), rule.severity_level,
+                     "price crossed %s %.4f" % (op, level / 10 ** 6),
+                     {"level_micro": level, "op": op, "from_micro": old, "to_micro": new,
+                      "usd_depth_micro": e.get("usd_depth_micro")},
+                     "level:%s:%s:%s" % (e.get("market", ""), op, level), now_ms, rule.channel_list)
+
+    def _eval_spread_widen(self, rule: Rule, e: dict, now_ms: int) -> Alert | None:
+        """Fires when the spread crosses the threshold going WIDER, and says both numbers.
+
+        The spread is a cost: a user who asked to hear about a 300 bp spread wants the moment it happened, not a
+        bell that rings for as long as the market stays bad. The previous value travels in the alert body, because
+        "widened 240 -> 410" is a sentence a user can act on and "410 bp" is not.
+        """
+        if e.get("type") != "book":
+            return None
+        prev, now = e.get("spread_prev_micro"), e.get("spread_micro")
+        mid = int(e.get("mid_micro") or 0)
+        if prev is None or now is None or mid <= 0:
+            return None
+        now_bp = (int(now) * 10_000) // mid
+        prev_bp = (int(prev) * 10_000) // mid
+        if not (prev_bp < int(rule.param("spread_bp")) <= now_bp):
+            return None
+        return Alert(rule.id, rule.kind, e.get("market", ""), e.get("token_id", ""), rule.severity_level,
+                     "spread widened %d -> %d bp" % (prev_bp, now_bp),
+                     {"from_bp": prev_bp, "to_bp": now_bp, "mid_micro": mid},
+                     "spread:%s:%d" % (e.get("market", ""), now_bp), now_ms, rule.channel_list)
+
+    def _eval_illiquid_top(self, rule: Rule, e: dict, now_ms: int) -> Alert | None:
+        """Fires when the top of the book DROPS through the floor.
+
+        Thin book is the condition where every other number on the screen stops meaning what it meant: the price
+        is real, the size behind it is not. Only the drop is reported — a market that has been thin for a week
+        would otherwise alert once per cooldown forever, and this is the alert whose whole value is that it is
+        rare.
+        """
+        if e.get("type") != "book":
+            return None
+        prev, now = e.get("usd_depth_prev_micro"), e.get("usd_depth_micro")
+        if prev is None or now is None:
+            return None
+        floor = int(rule.param("min_depth_usd_micro"))
+        if not (int(prev) >= floor > int(now)):
+            return None
+        return Alert(rule.id, rule.kind, e.get("market", ""), e.get("token_id", ""), rule.severity_level,
+                     "top of book thinned to %.0f USDC" % (int(now) / 10 ** 6),
+                     {"from_usd_micro": int(prev), "to_usd_micro": int(now), "floor_usd_micro": floor},
+                     "thin:%s:%d" % (e.get("market", ""), int(now) // max(1, floor // 10)),
+                     now_ms, rule.channel_list)

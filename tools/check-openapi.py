@@ -42,6 +42,19 @@ BUILTIN_DOCS = {"/docs", "/docs/oauth2-redirect", "/openapi.json", "/redoc"}
 # contract adopts the app's snake_case for those, and camelCase survives only on query parameters, where
 # `alias=` is real. Normalising the difference away would have hidden an actual rename.
 TABLE_FOR_PATH = {
+    ("GET", "/v1/automations"): "AUTOMATION_LIST_RESPONSES",
+    "/v1/automations/runs": "AUTOMATION_RUNS_RESPONSES",
+    "/v1/automations/templates": "AUTOMATION_TEMPLATES_RESPONSES",
+    ("POST", "/v1/automations"): "AUTOMATION_CREATE_RESPONSES",
+    "/v1/automations/preview": "AUTOMATION_PREVIEW_RESPONSES",
+    "/v1/automations/guards": "AUTOMATION_GUARD_RESPONSES",
+    ("GET", "/v1/alerts"): "ALERT_LIST_RESPONSES",
+    # Two methods on one path: the table is keyed by (verb, path) here because the two serve
+    # different status sets, and a path-only row would have held the POST to the GET's list.
+    ("POST", "/v1/alerts"): "ALERT_UPSERT_RESPONSES",
+    "/v1/alerts/test": "ALERT_TEST_RESPONSES",
+    "/v1/alerts/deliveries": "ALERT_DELIVERIES_RESPONSES",
+    "/v1/alerts/settings": "ALERT_SETTINGS_RESPONSES",
     "/v1/radar/runs": "RADAR_RESPONSES",
     "/v1/radar/runs/{job_id}": "RADAR_JOB_RESPONSES",
     "/healthz": "HEALTH_RESPONSES",                    # empty on purpose; the comment in app.py says why

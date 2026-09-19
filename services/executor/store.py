@@ -30,6 +30,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from polygm_core.automation import facts as _facts
 from polygm_core.config.flags import FlagStore
 from polygm_core.ledger.ledger import VENUE_ORDER_STATUS, venue_status_to_state
 from polygm_core.wallets import lifecycle as wl
@@ -747,21 +748,12 @@ class Store:
 
         Returns `age_ms = 10**12` when there is no book. A caller that treats a missing book as "0 ms old"
         has just approved an order with no reference price, which is the exact hole `STALE_QUOTE` closes.
+
+        The body is `automation.facts.quote` since P10 D8, because the copy engine, the executor and the API's
+        rule preview must all read one book — and `last_price_micro` was added there, since `price_cross`
+        accepts `uses: "last"` and nothing was filling it.
         """
-        r = self.conn.execute("SELECT side, price_micro, size_shares_micro, updated_ms FROM book_levels "
-                              "WHERE market_id=? ORDER BY side, price_micro DESC LIMIT ?",
-                              (market_id, depth * 2)).fetchall()
-        if not r:
-            return {"best_bid_micro": None, "best_ask_micro": None, "mid_micro": None, "age_ms": 10**12,
-                    "ask_ladder": [], "bid_ladder": []}
-        bids = [(x[1], x[2]) for x in r if x[0] == "bid"]
-        asks = sorted([(x[1], x[2]) for x in r if x[0] == "ask"])[:depth]
-        bid = max((x[1] for x in r if x[0] == "bid"), default=None)
-        ask = min((x[1] for x in r if x[0] == "ask"), default=None)
-        age = at - max(int(x[3]) for x in r)
-        mid = ((bid + ask) // 2) if (bid is not None and ask is not None) else None
-        return {"best_bid_micro": bid, "best_ask_micro": ask, "mid_micro": mid, "age_ms": age,
-                "ask_ladder": asks, "bid_ladder": sorted(bids, reverse=True)}
+        return _facts.quote(self.conn, market_id, at=at, depth=depth)
 
     # ------------------------------------------------------------------- reconciler durable state (D3)
     def cursor_load(self) -> dict:

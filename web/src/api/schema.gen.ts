@@ -681,6 +681,257 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/automations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Automation rules with their derived status, the halt state and the builder's vocabulary (P10 D8)
+         * @description `status` is derived rather than stored: it is a function of the rule's `enabled` flag, the engine's
+         *     `paused_reason`, whether a dry run has completed, and whether the risk service has stopped this account —
+         *     and a stored copy of it is a fifth field that can disagree with the four that decide.
+         *
+         *     `halt` is the daily-loss halt when it is unacknowledged, and every rule reads `halted` while it is set,
+         *     even a rule that is still `enabled`. That is the one state D8 asks to be loud about.
+         *
+         *     `vocabulary` is the engine's own trigger and action kinds, with the limits it enforces (8 leaves, 60s
+         *     minimum interval). A builder that offers a row the engine refuses would save rules that can never fire.
+         */
+        get: operations["listAutomations"];
+        put?: never;
+        /**
+         * Save an automation rule from the builder's rows - ALWAYS a dry run (P10 D8)
+         * @description There is no field that arms a rule, exactly as there is no field that turns copy trading live. The rows
+         *     are literals (a price, a level, a duration) joined by `AND`/`OR`; there is no expression syntax, and the
+         *     engine's own validator is the authority on whether the compiled document may exist — an unknown field is
+         *     a 422 naming it, not a rule that fails later at fire time.
+         *
+         *     Arming is a separate call that refuses until a dry run has actually been observed.
+         */
+        post: operations["createAutomation"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/automations/runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Every evaluation of a rule, with the reason it acted or did not (P10 D8)
+         * @description "Why did the bot do that" is answered here and nowhere else, so every evaluation is a row — including the
+         *     ones that did nothing. `sentence` is the engine's own reason with a next step where one exists, and
+         *     `leaves` names the parts of the trigger that were true when it was read: the engine evaluates every leaf
+         *     eagerly rather than short-circuiting precisely so a skip can be explained with the whole picture.
+         */
+        get: operations["listAutomationRuns"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/automations/templates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The rule templates, with the fee arithmetic that can withhold one (P10 D8)
+         * @description The 5-minute crypto entry template ships only if its fee arithmetic clears at current fees, and when it
+         *     does not, it is still LISTED with `available: false` and the numbers that withheld it. Hiding it would
+         *     leave a user guessing whether the feature is missing or the maths said no, and the second is worth
+         *     reading.
+         *
+         *     The protective half — exit before resolution, size cap, cancel on a one-sided book, the loss alert —
+         *     ships unconditionally, because it can only reduce a loss the user was already risking and its value does
+         *     not depend on any fee measurement.
+         *
+         *     `edgeAvailableBp` is a measurement, so it defaults to ABSENT: with no measured edge no entry template can
+         *     be offered, and the response says so rather than inventing a flattering number.
+         */
+        get: operations["listAutomationTemplates"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/automations/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Dry-run a rule against live facts - the only door to arming it (P10 D8)
+         * @description Two callers, one path. With `ruleId` this is a saved rule's dry run: the evaluation is written to
+         *     `automation_runs`, and the first one completes the rule's dry run, which is the only thing that lets it
+         *     arm. Without `ruleId` the builder's rows are compiled and evaluated and NOTHING is saved — the "show me
+         *     what this would have done" step has to work before the rule exists.
+         *
+         *     The facts are the engine's own (`automation.facts`), read from our tables: a preview that fed a rule
+         *     different numbers than the live pass would be a preview of a different rule.
+         */
+        post: operations["previewAutomation"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/automations/guards": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Arm or pause a rule - arming needs a completed dry run (P10 D8)
+         * @description Pausing is always allowed and takes effect immediately: the safe direction must never be blocked by a
+         *     precondition. Arming refuses twice over — `DRY_RUN_REQUIRED` until a dry run has been observed, and
+         *     `HALTED` while the daily-loss halt stands — and each refusal names the next step, because a user meets a
+         *     refusal like this while they can still act on it.
+         */
+        post: operations["setAutomationState"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/alerts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Alert rules with their window budget, cooldown and what they would do right now (P10 D9)
+         * @description The cooldown is not a separate setting: `firesPerWindow` per `windowMs` *is* one fire per
+         *     `windowMs/firesPerWindow`, and `cooldownRule` states that arithmetic in words so a user can check it.
+         *
+         *     `wouldDoNow` is the honest part — the plan for this rule at this instant: sent now, held for quiet hours,
+         *     batched into the digest, held by the rule's own cap, or refused because the plan does not cover the
+         *     channel. A list that showed "on" while quiet hours were holding everything is a list that gets called
+         *     broken at 2am.
+         */
+        get: operations["listAlerts"];
+        put?: never;
+        /**
+         * Create or edit one alert rule inline (P10 D9)
+         * @description The channel's plan is checked at SAVE time, not at fire time: a free account holding a webhook rule is a
+         *     rule that can never deliver, and finding that out when the alert was supposed to arrive is worse than a
+         *     402 that names the plan now. `ruleId` edits in place; without it a new rule is created.
+         *
+         *     Telegram is the default channel; email and webhook are the paid ones.
+         */
+        post: operations["upsertAlert"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/alerts/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Fire a rule on purpose and record what WOULD happen (P10 D9)
+         * @description The test writes its own signal under a `test:` rule id, so the rule's real window, cooldown and delivery
+         *     history are untouched: a test that consumed the budget it is testing would poison the feature it
+         *     validates. What comes back is the plan — sent now, held for quiet hours, batched into the digest, or
+         *     refused by the plan — plus the `alert_deliveries` rows that record it.
+         *
+         *     No delivery transport runs in this build, so a `queued` row is the record of what would be sent, and the
+         *     response says so in `note` rather than implying a notification went out.
+         */
+        post: operations["testAlert"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/alerts/deliveries": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Delivery history with per-channel status and the reason for anything held (P10 D9)
+         * @description `digest_scheduled` is HELD — quiet hours or a digest window — and `dropped_rate_limited` is REFUSED by the
+         *     rule's own cap. Two different facts, and a screen that renders them the same way sends a user looking for
+         *     a broken channel. `latencyMs` is null where nothing was sent: a zero on a row that never went out is the
+         *     kind of number that makes a dashboard lie with a straight face.
+         *
+         *     Test fires are present and flagged `isTest`, so a history can show them apart from real alerts.
+         */
+        get: operations["listAlertDeliveries"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/alerts/settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Quiet hours, digest mode and the default channel (P10 D9)
+         * @description Every field is optional and an absent field means "leave it": a settings form that required the whole
+         *     object would overwrite what it does not know, which is how a quiet window disappears when somebody
+         *     changes their digest time.
+         *
+         *     A quiet window needs both ends or neither, and a window that starts and ends at the same minute is
+         *     refused rather than treated as closed. Quiet hours hold everything, urgent included — a digest is our
+         *     batching, quiet hours are the user's instruction — and the response says so in `note` so the screen can
+         *     repeat it next to the control.
+         */
+        post: operations["setAlertSettings"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/copy/configs": {
         parameters: {
             query?: never;
@@ -1507,12 +1758,374 @@ export interface components {
             /** @description no `detail` field, ever: that is where a Python message would leak. Logs carry the code and the request id instead. */
             error: {
                 /** @enum {string} */
-                code: "RISK_HALT" | "MARKET_NOT_ACCEPTING" | "NO_ORDER_BOOK" | "STALE_QUOTE" | "BAD_SIDE" | "UNKNOWN_TICK" | "OFF_TICK" | "BAD_MARKET_META" | "BELOW_MIN_SIZE" | "ZERO_SIZE" | "BAD_AMOUNT" | "OVER_ORDER_CAP" | "PRICE_FAR_FROM_MID" | "TOO_MANY_OPEN" | "DAILY_CAP" | "IDEM_CONFLICT" | "IDEM_IN_PROGRESS" | "IDEM_KEY_REQUIRED" | "RISK_UNAVAILABLE" | "SIGNER_UNAVAILABLE" | "BAD_REASON" | "NOT_FOUND" | "REFUSED" | "VALIDATION" | "INTERNAL" | "UNAUTHENTICATED" | "SESSION_STALE" | "SESSION_REVOKED" | "SESSION_MISMATCH" | "ADMIN_REQUIRED" | "LOGIN_FAILED" | "ACCOUNT_LOCKED" | "TOTP_REQUIRED" | "TOTP_INVALID" | "TOTP_LOCKED" | "ADDRESS_COOLDOWN" | "ADDRESS_LIMIT" | "REMOVE_DURING_COOLDOWN" | "NO_SUCH_RESOURCE" | "REFRESH_UNKNOWN" | "REFRESH_REUSED" | "REFRESH_EXPIRED" | "TELEGRAM_REPLAY" | "TELEGRAM_INVALID" | "SECURITY_ENV_MISSING" | "KEYSTORE_TAMPER" | "BREAK_GLASS_DENIED" | "AUTHZ_UNDECLARED" | "BAD_FIELD" | "QUOTA_EXCEEDED" | "RADAR_SCOPE";
+                code: "RISK_HALT" | "MARKET_NOT_ACCEPTING" | "NO_ORDER_BOOK" | "STALE_QUOTE" | "BAD_SIDE" | "UNKNOWN_TICK" | "OFF_TICK" | "BAD_MARKET_META" | "BELOW_MIN_SIZE" | "ZERO_SIZE" | "BAD_AMOUNT" | "OVER_ORDER_CAP" | "PRICE_FAR_FROM_MID" | "TOO_MANY_OPEN" | "DAILY_CAP" | "IDEM_CONFLICT" | "IDEM_IN_PROGRESS" | "IDEM_KEY_REQUIRED" | "RISK_UNAVAILABLE" | "SIGNER_UNAVAILABLE" | "BAD_REASON" | "NOT_FOUND" | "REFUSED" | "HALTED" | "RULE_CAP" | "DRY_RUN_REQUIRED" | "PLAN_REQUIRED" | "VALIDATION" | "INTERNAL" | "UNAUTHENTICATED" | "SESSION_STALE" | "SESSION_REVOKED" | "SESSION_MISMATCH" | "ADMIN_REQUIRED" | "LOGIN_FAILED" | "ACCOUNT_LOCKED" | "TOTP_REQUIRED" | "TOTP_INVALID" | "TOTP_LOCKED" | "ADDRESS_COOLDOWN" | "ADDRESS_LIMIT" | "REMOVE_DURING_COOLDOWN" | "NO_SUCH_RESOURCE" | "REFRESH_UNKNOWN" | "REFRESH_REUSED" | "REFRESH_EXPIRED" | "TELEGRAM_REPLAY" | "TELEGRAM_INVALID" | "SECURITY_ENV_MISSING" | "KEYSTORE_TAMPER" | "BREAK_GLASS_DENIED" | "AUTHZ_UNDECLARED" | "BAD_FIELD" | "QUOTA_EXCEEDED" | "RADAR_SCOPE";
                 /** @description user-safe by construction */
                 message: string;
                 retryable: boolean;
                 requestId: string;
             };
+        };
+        /**
+         * @description One rule as the console shows it. `status` is derived (active/paused/dry_run/halted) and `statusWhy` is
+         *     the sentence beside the badge: "why is this not firing" is a question about a sentence, and a badge with
+         *     a colour and no sentence is a badge nobody can act on.
+         */
+        AutomationRule: {
+            ruleId: string;
+            name: string;
+            kind: string;
+            /** @enum {string} */
+            status: "active" | "paused" | "dry_run" | "halted";
+            statusWhy: string;
+            /** @enum {string} */
+            mode?: "dry_run" | "live";
+            enabled: boolean;
+            pausedReason?: string;
+            failureCount?: number;
+            lastError?: string;
+            dryRunCompletedMs?: number | null;
+            lastFiredMs?: number | null;
+            lastEvaluationMs?: number | null;
+            nextEvaluationMs: number;
+            runsToday: number;
+            maxPerDay: number;
+            minIntervalMs: number;
+            humanPriorityMs?: number;
+            maxLossMicro?: number;
+            /** @description the markets this rule watches; the engine evaluates the rule once per target */
+            targets: ({
+                marketId?: string;
+                tokenId?: string;
+            } & {
+                [key: string]: unknown;
+            })[];
+            /**
+             * @description The compiled trigger tree as the engine stores it: `all`/`any` wrapping rows of literals, or a single
+             *     leaf. Opaque here on purpose — the builder is the only thing that edits it, and the run log is what
+             *     explains it — but `additionalProperties: true` is stated so a client may read a leaf's own fields.
+             */
+            trigger: {
+                [key: string]: unknown;
+            };
+            /** @description the engine executes the first executable row */
+            actions: ({
+                kind: string;
+            } & {
+                [key: string]: unknown;
+            })[];
+            lastRun?: null | components["schemas"]["AutomationRunRow"];
+        };
+        /**
+         * @description A template with the decision it carries. `available: false` is not an omission — the withheld entry
+         *     template is listed WITH the arithmetic that withheld it, because a user deserves to read the numbers
+         *     rather than wonder whether the feature is missing.
+         */
+        AutomationTemplate: {
+            templateId: string;
+            name: string;
+            kind: string;
+            /** @description the template's own trigger tree, in the same shape a saved rule stores */
+            trigger: {
+                [key: string]: unknown;
+            };
+            /** @description what the template does when it fires */
+            actions: ({
+                kind: string;
+            } & {
+                [key: string]: unknown;
+            })[];
+            available: boolean;
+            verdict: string;
+            blockingReason: string;
+            why: string;
+            feeArithmetic: null | components["schemas"]["FeeArithmetic"];
+        };
+        /**
+         * @description The daily-loss halt, as the banner shows it. Read from `loss_halts` rather than recomputed: a second
+         *     derivation of "is this account halted" is a second answer to a question that decides whether money moves.
+         */
+        LossHalt: {
+            halted: boolean;
+            thresholdMicro: number;
+            /** @description signed */
+            realizedMicro: number;
+            lossMicro?: number;
+            trippedMs: number;
+            acknowledgeHint: string;
+            note: string;
+        };
+        /**
+         * @description One alert rule with its budget made explicit: `cooldownRule` states `firesPerWindow` per `windowMs` as
+         *     a sentence ("3 per 1h = one every 20m at most"), and `wouldDoNow` is the plan for this instant.
+         */
+        AlertRule: {
+            ruleId: string;
+            /** @enum {string} */
+            kind: "price_level" | "spread_widen" | "whale_fill" | "resolve_lead" | "illiquid_top" | "new_market" | "manual";
+            /** @description marketId and/or eventId; a rule with neither cannot fire */
+            target: {
+                marketId: string | null;
+                eventId: string | null;
+            };
+            enabled: boolean;
+            /** @enum {string} */
+            severity: "info" | "notice" | "urgent";
+            /** @enum {string} */
+            channel: "telegram" | "email" | "webhook";
+            channelAllowed: boolean;
+            channelNote: string;
+            firesPerWindow: number;
+            windowMs: number;
+            cooldownMs: number;
+            cooldownRule: string;
+            cooldownNote: string;
+            firesInWindow: number;
+            remainingInWindow: number;
+            nextAllowedMs: number | null;
+            /** @description the user's own params, as saved — what the inline editor reopens on */
+            params: {
+                [key: string]: unknown;
+            };
+            /** @description the engine kind this rule is evaluated by; null means no loop is watching it */
+            engineKind: string | null;
+            evaluated: boolean;
+            /** @description the sentence that says whether a loop reads this rule, and which */
+            evaluator: string;
+            quietHours: components["schemas"]["QuietState"];
+            digest: components["schemas"]["DigestState"];
+            wouldDoNow: components["schemas"]["AlertPlan"];
+            lastDelivery: null | components["schemas"]["LastDelivery"];
+            createdMs: number;
+        };
+        /**
+         * @description Quiet hours as a state: whether a window is configured at all, whether it is holding RIGHT NOW, and the
+         *     sentence the list shows. `configured` is a separate field from `active` because "off" and "in a window that
+         *     has not started yet" are different answers, and a screen that conflated them would tell a user their alerts
+         *     are being held when they are not.
+         */
+        QuietState: {
+            configured: boolean;
+            active: boolean;
+            untilMs: number | null;
+            note: string;
+        };
+        /**
+         * @description Whether this alert would be batched rather than sent, and when it would go out. `deferred` is true only when
+         *     the digest is what holds it: an urgent alert breaches a digest, and `deferred` stays false.
+         */
+        DigestState: {
+            /** @enum {string} */
+            mode: "off" | "hourly" | "daily";
+            deferred: boolean;
+            atMs: number | null;
+            note: string;
+        };
+        /** @description the newest delivery for a rule, so the list can show what happened last without a second read */
+        LastDelivery: {
+            channel: string;
+            status: string;
+            reason: string;
+            atMs: number;
+            title: string;
+        };
+        /**
+         * @description One channel attempt. `digest_scheduled` is held and `dropped_rate_limited` is refused by the rule's own
+         *     cap: two different facts, kept apart so a user does not go looking for a broken channel. `isTest` marks a
+         *     test fire, which is recorded but never counted as a real alert.
+         */
+        AlertDelivery: {
+            deliveryId: number;
+            ruleId: string;
+            /** @description the SCREEN's word for the kind, which is the vocabulary the user chose */
+            kind: string;
+            /** @description the engine's own kind, kept beside it so a log line matches a row */
+            engineKind: string;
+            channel: string;
+            /** @enum {string} */
+            status: "queued" | "sent" | "digest_scheduled" | "dropped_rate_limited" | "failed";
+            reason: string;
+            queuedMs: number;
+            sentMs: number | null;
+            latencyMs: number | null;
+            severity: string;
+            title: string;
+            isTest: boolean;
+        };
+        /**
+         * @description One row per account, materialised with these defaults on first read: Telegram, quiet hours OFF (-1 for
+         *     both ends — 0 would mean midnight-to-midnight, a mute button wearing a time window's clothes), digest OFF,
+         *     UTC until the client says where the user is. The offset is sent by the client and never guessed: a quiet
+         *     window evaluated in the wrong timezone is a setting that silently does not work.
+         */
+        NotificationSettings: {
+            /** @description minutes past midnight in the user's offset; -1 = off */
+            quietStartMin: number;
+            quietEndMin: number;
+            /** @description minutes east of UTC */
+            tzOffsetMin: number;
+            /** @enum {string} */
+            digestMode: "off" | "hourly" | "daily";
+            digestAtMin: number;
+            /** @enum {string} */
+            defaultChannel: "telegram" | "email" | "webhook";
+            /** @description each channel with the plan it needs, so a plan check is data rather than a client constant */
+            channels: {
+                channel: string;
+                plan: string;
+                isDefault: boolean;
+            }[];
+            quietHours: components["schemas"]["QuietState"];
+            digestNow: components["schemas"]["DigestState"];
+            note: string;
+        };
+        /**
+         * @description What one channel would do with one alert, decided now: sent, held for quiet hours, batched into the digest,
+         *     held by the rule's own cap, or refused because the plan does not cover the channel. One name, used both by
+         *     the list's `wouldDoNow` and by a test fire's rows, because they are the same answer asked twice.
+         */
+        AlertPlan: {
+            channel: string;
+            /** @enum {string} */
+            decision: "send_now" | "quiet_hours" | "digest" | "rate_limited" | "refused";
+            status: string;
+            reason?: string;
+            atMs?: number | null;
+            sentence: string;
+        };
+        /**
+         * @description One field of one trigger or action row. The builder renders these and nothing else: a row is a set of
+         *     literals, there is no expression syntax, and this is the list of what the engine will accept.
+         */
+        BuilderField: {
+            name: string;
+            /** @description the word the form shows; the engine's own name is in `name` */
+            label: string;
+            /** @description select | price | shares | notional | time_ms | integer | bool | text */
+            type: string;
+            /** @description present on a select, and the only values it takes */
+            options?: string[];
+            /** @description the value the row starts on, so a saved rule is never an empty string */
+            default?: unknown;
+            min?: number;
+            max?: number;
+            required?: boolean;
+            help?: string;
+        };
+        BuilderKind: {
+            kind: string;
+            label: string;
+            fields: components["schemas"]["BuilderField"][];
+        };
+        /**
+         * @description Everything the visual builder needs to render itself, including the limits it enforces. Both halves of the
+         *     form are here — "when" and "then" — because the builder is one form and a vocabulary split across two
+         *     reads is a form that can render half of itself.
+         */
+        BuilderVocabulary: {
+            triggers: components["schemas"]["BuilderKind"][];
+            actions: components["schemas"]["BuilderKind"][];
+            /**
+             * @description The AND/OR grouping the rows may use, as a map of the engine's own key to the word the form shows
+             *     (`{all: AND, any: OR}`). A map rather than a list because the word is copy and the key is the engine's:
+             *     a client that hard-coded "AND" would be a second place the vocabulary lives.
+             */
+            joiners: {
+                [key: string]: string;
+            };
+            limits: {
+                maxLeaves: number;
+                maxNestDepth: number;
+                minIntervalMs: number;
+                maxRunsPerDay: number;
+            };
+            note: string;
+        };
+        /**
+         * @description The two caps a user meets: their own concurrent-rule cap and the platform's daily run budget. Both are
+         *     shown because a rule that cannot run because the PLATFORM is out of budget is a different fact from one
+         *     that hit its own cap, and a user who cannot tell them apart reports the wrong bug.
+         */
+        AutomationCaps: {
+            concurrentRuleCap: number;
+            globalRunsPerDay: number;
+            activeRules: number;
+            note: string;
+        };
+        /**
+         * @description One evaluation. Every evaluation is a row, including the ones that did nothing: "why did the bot not act"
+         *     is the question this surface exists to answer, and a log that only holds the actions answers the other one.
+         */
+        AutomationRunRow: {
+            ruleId: string;
+            /** @enum {string} */
+            mode: "dry_run" | "live";
+            /** @enum {string} */
+            outcome: "placed" | "would_place" | "skipped" | "failed";
+            reason: string;
+            denyCode?: string;
+            intentId?: string;
+            atMs: number;
+            /** @description the trigger's leaves with the values they held when they were read */
+            leaves?: string;
+            sentence: string;
+        };
+        /**
+         * @description The automation console's read: this account's rules, the halt state, the caps and the builder's vocabulary.
+         *     One read rather than four because the form cannot be rendered or the banner decided from a partial answer.
+         */
+        AutomationList: {
+            rules: components["schemas"]["AutomationRule"][];
+            halt?: null | components["schemas"]["LossHalt"];
+            caps: components["schemas"]["AutomationCaps"];
+            vocabulary: components["schemas"]["BuilderVocabulary"];
+            note: string;
+        };
+        /**
+         * @description The template catalog with the arithmetic that decides it. Kept as a name so the screen that renders it (the
+         *     "start from a template" panel) reads the same shape the API promises.
+         */
+        TemplateCatalog: {
+            templates: components["schemas"]["AutomationTemplate"][];
+            feeArithmetic?: null | components["schemas"]["FeeArithmetic"];
+            ships: boolean;
+            verdict: string;
+            why: string;
+            blockingReason?: string;
+        };
+        /**
+         * @description The numbers behind the entry verdict: the fee actually charged per share, the cost of crossing the spread,
+         *     what our own latency adds, and the edge that has to clear all three. `edgeAvailableBp` is a MEASUREMENT, so
+         *     it is null when nothing measured it — the response says so rather than inventing a flattering number.
+         */
+        FeeArithmetic: {
+            feeType?: string | null;
+            feeRateBps?: number | null;
+            maker?: boolean | null;
+            legs?: number | null;
+            priceMicro?: number | null;
+            breakEvenWinRateBp?: number | null;
+            impliedProbBp?: number | null;
+            feesPerShareMicro?: number | null;
+            spreadCostMicro?: number | null;
+            spreadCostBp?: number | null;
+            latencyMs?: number | null;
+            latencyCostBp?: number | null;
+            edgeNeededBp?: number | null;
+            edgeAvailableBp?: number | null;
+            builderBps?: number | null;
+            assumptions?: string | null;
+        };
+        /**
+         * @description The alert list as one name, so a front end derives its type from the contract instead of transcribing the
+         *     shape by hand — and the transcription is the thing that drifts.
+         */
+        AlertsList: {
+            rules: components["schemas"]["AlertRule"][];
+            settings: components["schemas"]["NotificationSettings"];
+            /** @description the plan the channel checks read */
+            plan: string;
+            ruleCount: number;
+            note: string;
         };
     };
     responses: {
@@ -2080,6 +2693,7 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
+            402: components["responses"]["Denied"];
             403: components["responses"]["Denied"];
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
@@ -3174,6 +3788,443 @@ export interface operations {
                     };
                 };
             };
+            401: components["responses"]["Denied"];
+            422: components["responses"]["Validation"];
+            500: components["responses"]["Internal"];
+        };
+    };
+    listAutomations: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description this account's rules, the halt state, and the builder's vocabulary */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Stamped"] & components["schemas"]["AutomationList"];
+                };
+            };
+            401: components["responses"]["Denied"];
+            500: components["responses"]["Internal"];
+        };
+    };
+    createAutomation: {
+        parameters: {
+            query?: never;
+            header?: {
+                /**
+                 * @description 8-128 chars of [A-Za-z0-9_-]. Required on every mutating endpoint; the 400 for its absence is part
+                 *     of the contract so a client cannot "just try without it" once and conclude it is optional.
+                 */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @enum {string} */
+                    kind: "entry" | "exit" | "cancel" | "alert" | "scale_out" | "hedge" | "take_profit" | "stop_loss" | "auto_redeem";
+                    /** @description the user's own label; the engine never reads it */
+                    name?: string;
+                    /**
+                     * @description AND or OR across the trigger rows
+                     * @enum {string}
+                     */
+                    match?: "all" | "any";
+                    /** @description rows of {kind, ...fields}; a row may be a group of {group, rows} */
+                    triggers: unknown[];
+                    /** @description the engine executes the first executable row */
+                    actions: unknown[];
+                    /** @description markets to watch; the engine evaluates a rule once per target */
+                    targets: unknown[];
+                    maxPerDay?: number;
+                    minIntervalMs?: number;
+                    humanPriorityMs?: number;
+                    maxLossMicro?: number;
+                };
+            };
+        };
+        responses: {
+            /** @description the saved rule, in dry-run state */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Stamped"] & {
+                        rule: components["schemas"]["AutomationRule"];
+                        dryRunOnly: boolean;
+                        note: string;
+                    };
+                };
+            };
+            400: components["responses"]["Validation"];
+            401: components["responses"]["Denied"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Validation"];
+            500: components["responses"]["Internal"];
+        };
+    };
+    listAutomationRuns: {
+        parameters: {
+            query?: {
+                ruleId?: string;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description run rows, newest first */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Stamped"] & {
+                        rows: components["schemas"]["AutomationRunRow"][];
+                        counts: Record<string, never>;
+                        note: string;
+                    };
+                };
+            };
+            401: components["responses"]["Denied"];
+            404: components["responses"]["NotFound"];
+            500: components["responses"]["Internal"];
+        };
+    };
+    listAutomationTemplates: {
+        parameters: {
+            query?: {
+                feeType?: string;
+                feeRateBps?: number;
+                edgeAvailableBp?: number;
+                latencyMs?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description the catalog, the arithmetic, and whether the entry half ships */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Stamped"] & components["schemas"]["TemplateCatalog"];
+                };
+            };
+            401: components["responses"]["Denied"];
+            500: components["responses"]["Internal"];
+        };
+    };
+    previewAutomation: {
+        parameters: {
+            query?: never;
+            header?: {
+                /**
+                 * @description 8-128 chars of [A-Za-z0-9_-]. Required on every mutating endpoint; the 400 for its absence is part
+                 *     of the contract so a client cannot "just try without it" once and conclude it is optional.
+                 */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    ruleId?: string;
+                    kind?: string;
+                    /** @enum {string} */
+                    match?: "all" | "any";
+                    triggers?: unknown[];
+                    actions?: unknown[];
+                    targets?: unknown[];
+                    maxLossMicro?: number;
+                };
+            };
+        };
+        responses: {
+            /** @description the simulation, leaf by leaf, and the facts it read */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Stamped"] & {
+                        dryRun: boolean;
+                        /** @description fires, leaves, and the sentence naming each leaf */
+                        simulation: Record<string, never>;
+                        /** @description what the trigger read: prices, age, imbalance, position */
+                        facts?: Record<string, never>;
+                        dryRunCompleted?: boolean;
+                        rule?: components["schemas"]["AutomationRule"];
+                        note: string;
+                    };
+                };
+            };
+            400: components["responses"]["Validation"];
+            401: components["responses"]["Denied"];
+            404: components["responses"]["NotFound"];
+            422: components["responses"]["Validation"];
+            500: components["responses"]["Internal"];
+        };
+    };
+    setAutomationState: {
+        parameters: {
+            query?: never;
+            header?: {
+                /**
+                 * @description 8-128 chars of [A-Za-z0-9_-]. Required on every mutating endpoint; the 400 for its absence is part
+                 *     of the contract so a client cannot "just try without it" once and conclude it is optional.
+                 */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    ruleId: string;
+                    /** @enum {string} */
+                    state: "active" | "paused";
+                    /** @description why YOU paused it; recorded in the run log */
+                    reason?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description the rule in its new state */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Stamped"] & {
+                        rule: components["schemas"]["AutomationRule"];
+                        /** @enum {string} */
+                        state: "active" | "paused";
+                        note: string;
+                    };
+                };
+            };
+            400: components["responses"]["Validation"];
+            401: components["responses"]["Denied"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Validation"];
+            500: components["responses"]["Internal"];
+        };
+    };
+    listAlerts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description this account's alert rules and its notification settings */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Stamped"] & components["schemas"]["AlertsList"];
+                };
+            };
+            401: components["responses"]["Denied"];
+            500: components["responses"]["Internal"];
+        };
+    };
+    upsertAlert: {
+        parameters: {
+            query?: never;
+            header?: {
+                /**
+                 * @description 8-128 chars of [A-Za-z0-9_-]. Required on every mutating endpoint; the 400 for its absence is part
+                 *     of the contract so a client cannot "just try without it" once and conclude it is optional.
+                 */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    ruleId?: string;
+                    /** @enum {string} */
+                    kind: "price_level" | "spread_widen" | "whale_fill" | "resolve_lead" | "illiquid_top" | "new_market" | "manual";
+                    marketId?: string;
+                    eventId?: string;
+                    /** @enum {string} */
+                    channel?: "telegram" | "email" | "webhook";
+                    /** @enum {string} */
+                    severity?: "info" | "notice" | "urgent";
+                    firesPerWindow?: number;
+                    windowMs?: number;
+                    params?: Record<string, never>;
+                    enabled?: boolean;
+                };
+            };
+        };
+        responses: {
+            /** @description the rule as saved, with its cooldown stated as a rule */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Stamped"] & {
+                        rule: components["schemas"]["AlertRule"];
+                        /** @enum {string} */
+                        action: "created" | "updated";
+                        note: string;
+                    };
+                };
+            };
+            400: components["responses"]["Validation"];
+            401: components["responses"]["Denied"];
+            402: components["responses"]["Denied"];
+            404: components["responses"]["NotFound"];
+            422: components["responses"]["Validation"];
+            500: components["responses"]["Internal"];
+        };
+    };
+    testAlert: {
+        parameters: {
+            query?: never;
+            header?: {
+                /**
+                 * @description 8-128 chars of [A-Za-z0-9_-]. Required on every mutating endpoint; the 400 for its absence is part
+                 *     of the contract so a client cannot "just try without it" once and conclude it is optional.
+                 */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    ruleId: string;
+                    /** @description defaults to the rule's own channel */
+                    channels?: unknown[];
+                    title?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description the per-channel plan for this alert, right now */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Stamped"] & {
+                        ruleId: string;
+                        testSignalId?: number;
+                        plan: components["schemas"]["AlertPlan"][];
+                        summary: Record<string, never>;
+                        quietHours?: Record<string, never>;
+                        digest?: Record<string, never>;
+                        note: string;
+                    };
+                };
+            };
+            400: components["responses"]["Validation"];
+            401: components["responses"]["Denied"];
+            404: components["responses"]["NotFound"];
+            500: components["responses"]["Internal"];
+        };
+    };
+    listAlertDeliveries: {
+        parameters: {
+            query?: {
+                limit?: number;
+                channel?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description deliveries, newest first */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Stamped"] & {
+                        rows: components["schemas"]["AlertDelivery"][];
+                        counts: Record<string, never>;
+                        note: string;
+                    };
+                };
+            };
+            401: components["responses"]["Denied"];
+            500: components["responses"]["Internal"];
+        };
+    };
+    setAlertSettings: {
+        parameters: {
+            query?: never;
+            header?: {
+                /**
+                 * @description 8-128 chars of [A-Za-z0-9_-]. Required on every mutating endpoint; the 400 for its absence is part
+                 *     of the contract so a client cannot "just try without it" once and conclude it is optional.
+                 */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @description minutes past midnight, -1 = off */
+                    quietStartMin?: number;
+                    quietEndMin?: number;
+                    /** @description minutes EAST of UTC */
+                    tzOffsetMin?: number;
+                    /** @enum {string} */
+                    digestMode?: "off" | "hourly" | "daily";
+                    digestAtMin?: number;
+                    /** @enum {string} */
+                    defaultChannel?: "telegram" | "email" | "webhook";
+                };
+            };
+        };
+        responses: {
+            /** @description the settings as saved, with what they mean right now */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Stamped"] & components["schemas"]["NotificationSettings"];
+                };
+            };
+            400: components["responses"]["Validation"];
             401: components["responses"]["Denied"];
             422: components["responses"]["Validation"];
             500: components["responses"]["Internal"];

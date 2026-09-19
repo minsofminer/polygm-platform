@@ -25,6 +25,9 @@ from fastapi import Body, FastAPI, Header, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
+from polygm_core.automation import console as _au_console
+from polygm_core.automation import engine as _au
+from polygm_core.automation import facts as _au_facts
 from polygm_core.classify import labels as _labels
 from polygm_core.config.flags import FlagStore, Flags
 from polygm_core.ledger.ledger import IntentState
@@ -40,6 +43,8 @@ from polygm_core.security import redact as _redact
 from polygm_core.security import sanitise as _san
 from polygm_core.security import telegram as _tg
 from polygm_core.security import totp as _totp
+from polygm_core.signals import console as _sg
+from polygm_core.signals import engine as _sg_engine
 from polygm_core.security.store import ACCESS_TTL_MS, SecStore, hash_token as _hash_token, token_string as _token_string
 from polygm_core.terminal import metrics as _tm
 
@@ -92,6 +97,14 @@ CODES = {
     # narrow - `_PUBLIC_DETAIL_CODES` below lists exactly which codes may say something specific.
     "RADAR_SCOPE": ("the market selection is outside what a radar scan accepts", 422, False),
     "QUOTA_EXCEEDED": ("this account's budget for that operation is spent", 429, True),
+    # P10-D8/D9. Four refusals whose whole value is that they tell a user what to do next, which is why each one
+    # has its own code rather than a widened REFUSED: "run it in dry mode first", "acknowledge the halt", "delete
+    # a rule", "this channel needs Pro". A user who meets a refusal they cannot act on learns to distrust the
+    # screen, and an automation rule is exactly the place that matters.
+    "HALTED": ("trading is stopped for this account until the daily-loss halt is acknowledged", 409, False),
+    "RULE_CAP": ("this account already holds as many automation rules as it may", 409, False),
+    "DRY_RUN_REQUIRED": ("this rule has no completed dry run, so it cannot be armed", 409, False),
+    "PLAN_REQUIRED": ("the plan on this account does not include that", 402, True),
     # P07. Each of these is a *user-safe* sentence: the detail a client needs is here, and the detail an
     # attacker would like is in the log line, behind the request id.
     "UNAUTHENTICATED": ("a session is required", 401, False),
@@ -233,7 +246,11 @@ del _t
 #: user unable to tell whether a repeat scan is free (it is), and the numbers in the sentence come from the
 #: plan and the audit count, never from the request body. `BAD_FIELD` deliberately stays OUT: its message is
 #: generic and its detail goes to the log, because that is the path a request's own content could reach.
-_PUBLIC_DETAIL_CODES = frozenset({"REFUSED", "QUOTA_EXCEEDED", "RADAR_SCOPE"})
+_PUBLIC_DETAIL_CODES = frozenset({"REFUSED", "QUOTA_EXCEEDED", "RADAR_SCOPE",
+                                # P10-D8/D9: the four refusals above are sentences written for the user
+                                # (which plan, which limit, which next step) and contain nothing from the
+                                # request, so they are safe to say out loud.
+                                "HALTED", "RULE_CAP", "DRY_RUN_REQUIRED", "PLAN_REQUIRED"})
 
 
 def err(code: str, request_id: str, *, detail: str | None = None, where: list[str] | None = None,
@@ -3989,6 +4006,947 @@ def get_radar_run(job_id: str, request: Request):
                     as_of_ms=_tm._int(job["atMs"]))
 
 
+
+
+def _json_any(text, default):
+    """A JSON column that may hold an object OR an array. `_json_load` is object-only by design — it parses
+    request bodies, whose shape is known — and `automation_rule_policy.actions_json` is a list, so the two
+    need different readers. A loader that returned `{}` for a list would turn every rule's actions into a dict
+    and every run log into a lie."""
+    if not isinstance(text, str) or not text:
+        return default
+    try:
+        out = json.loads(text)
+    except ValueError:
+        return default
+    return out
+
+
+def _json_list(text) -> list:
+    """A list column, and only a list. An object here means the row was written by something that did not read
+    this function; an empty list plus the run log's own text is a better answer than a `for` loop over a dict's
+    keys."""
+    out = _json_any(text, [])
+    return out if isinstance(out, list) else []
+
+
+def _rows(cur) -> list[dict]:
+    """Rows as dicts, keyed by the SELECT's own column names.
+
+    `dict(row)` looks like the same thing and is not, anywhere in this file: the API's connection returns plain
+    tuples (`_db` never sets `row_factory`, because the rest of the file reads columns positionally), so a dict
+    built from one is a dict over its FIRST value — which for a rule id is a fifteen-character string, and the
+    failure reads like a parse bug rather than the adapter mistake it is. Reading the names off the cursor's
+    `description` also means a SELECT's own column order stays the single source of truth, so adding a column
+    cannot silently shift a field into the wrong key.
+    """
+    cols = [str(c[0]) for c in (cur.description or [])]
+    return [dict(zip(cols, r)) for r in cur.fetchall()]
+
+# ============================================================================== P10 · D8 automation ==
+# D8's surface is a *view* over P06's engine, not a second engine: the rules, their policy, their state and their
+# run log are P06's tables, and every document this file writes is validated by `automation.engine.validate_rule`
+# before it is stored. Two things are the API's own job and nothing else's:
+#
+#   * **a rule cannot be created live.** There is no `enabled` in the create schema, exactly as there is no
+#     `dryRun` in the copy config's, and the only path to `enabled` refuses until the rule has been evaluated
+#     against live data at least once. The dry run is not a checkbox; it is a row in `automation_runs`.
+#   * **the run log is readable.** "Why did the bot do that" is answered from `automation_runs`, including the
+#     leaf values of the trigger that was read, which is why the engine evaluates every leaf eagerly.
+
+AUTOMATION_CREATE_RESPONSES = {400: {"description": "missing Idempotency-Key; a malformed one is a 422 naming "
+                                                  "the field"},
+                              401: {"description": "a session is required"},
+                              404: {"description": "a target market is not one we know"},
+                              409: {"description": "refused: the rule cannot be saved as asked (a halted account, "
+                                                   "or the concurrent-rule cap)"},
+                              422: {"description": "the builder payload does not compile, or the engine refuses "
+                                                   "the rule it compiles to"}}
+AUTOMATION_GUARD_RESPONSES = {400: {"description": "missing Idempotency-Key; a malformed one is a 422 naming "
+                                                 "the field"},
+                             401: {"description": "a session is required"},
+                             404: {"description": "no such rule for this account"},
+                             409: {"description": "refused: no completed dry run, or the daily-loss halt is on"},
+                             422: {"description": "missing field or an unknown state"}}
+AUTOMATION_LIST_RESPONSES = {401: {"description": "a session is required"}}
+AUTOMATION_RUNS_RESPONSES = {401: {"description": "a session is required"},
+                             404: {"description": "no such rule for this account"}}
+AUTOMATION_TEMPLATES_RESPONSES = {401: {"description": "a session is required"}}
+AUTOMATION_PREVIEW_RESPONSES = {400: {"description": "missing Idempotency-Key; a malformed one is a 422 naming "
+                                                   "the field"},
+                                401: {"description": "a session is required"},
+                                404: {"description": "no such rule for this account"},
+                                422: {"description": "the payload neither names a saved rule nor compiles to one"}}
+
+AUTOMATION_CREATE_REQUIRED = ("kind", "triggers", "actions", "targets")
+AUTOMATION_CREATE_PROPS = {"kind": {"type": "string",
+                                    "enum": ["entry", "exit", "cancel", "alert", "scale_out", "hedge",
+                                             "take_profit", "stop_loss", "auto_redeem"]},
+                           "name": {"type": "string", "maxLength": 80},
+                           "match": {"type": "string", "enum": ["all", "any"]},
+                           "triggers": {"type": "array", "minItems": 1},
+                           "actions": {"type": "array", "minItems": 1},
+                           "targets": {"type": "array", "minItems": 1},
+                           "maxPerDay": {"type": "integer", "minimum": 1, "maximum": 288},
+                           "minIntervalMs": {"type": "integer", "minimum": 1000},
+                           "humanPriorityMs": {"type": "integer", "minimum": 0},
+                           "maxLossMicro": {"type": "integer", "minimum": 0}}
+AUTOMATION_GUARD_REQUIRED = ("ruleId", "state")
+AUTOMATION_GUARD_PROPS = {"ruleId": {"type": "string", "minLength": 1, "maxLength": 64},
+                          "state": {"type": "string", "enum": ["active", "paused"]},
+                          "reason": {"type": "string", "maxLength": 200}}
+AUTOMATION_PREVIEW_REQUIRED: tuple = ()
+AUTOMATION_PREVIEW_PROPS = {"ruleId": {"type": "string", "minLength": 1, "maxLength": 64},
+                            "kind": {"type": "string"},
+                            "match": {"type": "string", "enum": ["all", "any"]},
+                            "triggers": {"type": "array"},
+                            "actions": {"type": "array"},
+                            "targets": {"type": "array"},
+                            "maxLossMicro": {"type": "integer", "minimum": 0}}
+
+
+def _automation_rows(uid: str) -> list[dict]:
+    """This account's rules, with policy, state, label, targets and the last run already joined in.
+
+    One query per table and a dict per rule id rather than a query per rule: the list is capped at ten rules, but
+    the pattern is what matters — an N+1 here would be copied into the run-history read, where N is 200.
+    """
+    rows = _rows(_db.execute(
+        "SELECT r.id, r.user_id, r.kind, r.trigger_json, r.max_loss_micro, r.enabled, r.last_run_ms, "
+        "       p.trigger_json AS p_trigger, p.actions_json, p.dry_run_completed_ms, p.max_per_day, "
+        "       p.min_interval_ms, p.human_priority_ms, p.last_fire_ms, "
+        "       s.paused_reason, s.failure_count, s.last_error, l.name AS label "
+        "FROM automation_rules r LEFT JOIN automation_rule_policy p ON p.rule_id = r.id "
+        "LEFT JOIN automation_rule_state s ON s.rule_id = r.id "
+        "LEFT JOIN automation_rule_labels l ON l.rule_id = r.id "
+        "WHERE r.user_id = ? ORDER BY r.id", (uid,)))
+    if not rows:
+        return []
+    ids = [str(r["id"]) for r in rows]
+    marks = ",".join("?" * len(ids))
+    targets: dict[str, list[dict]] = {}
+    for t in _db.execute("SELECT rule_id, market_id, token_id FROM automation_rule_targets "
+                         "WHERE rule_id IN (%s) ORDER BY market_id" % marks, tuple(ids)).fetchall():
+        targets.setdefault(str(t[0]), []).append({"marketId": str(t[1]), "tokenId": str(t[2] or "")})
+    last: dict[str, dict] = {}
+    for run in _db.execute("SELECT rule_id, mode, outcome, reason, deny_code, intent_id, detail_json, at_ms "
+                           "FROM automation_runs WHERE rule_id IN (%s) ORDER BY at_ms DESC, id DESC" % marks,
+                           tuple(ids)).fetchall():
+        rid = str(run[0])
+        if rid in last:
+            continue
+        detail = _json_any(run[6], {})
+        last[rid] = {"outcome": str(run[2] or ""), "mode": str(run[1] or ""), "reason": str(run[3] or ""),
+                     "deny_code": str(run[4] or ""), "intentId": str(run[5] or ""),
+                     "atMs": int(run[7] or 0), "leaves": _au_console.leaves_sentence(detail.get("leaves"))}
+    since = _now_ms() - 86_400_000
+    today: dict[str, int] = {}
+    for c in _db.execute("SELECT rule_id, COUNT(*) FROM automation_runs WHERE rule_id IN (%s) AND at_ms >= ? "
+                         "AND mode = 'live' AND outcome = 'placed' GROUP BY rule_id" % marks,
+                         tuple(ids) + (since,)).fetchall():
+        today[str(c[0])] = int(c[1])
+    halt = _halt_for(uid)
+    out = []
+    for r in rows:
+        rid = str(r["id"])
+        policy = {"max_per_day": r.get("max_per_day"), "min_interval_ms": r.get("min_interval_ms"),
+                  "human_priority_ms": r.get("human_priority_ms"), "last_fire_ms": r.get("last_fire_ms")}
+        view = dict(r)
+        view["policy"] = policy
+        view["actions"] = _json_list(r.get("actions_json"))
+        view["trigger"] = _json_any(r.get("p_trigger"), _json_any(r.get("trigger_json"), {}))
+        view["runs_today"] = today.get(rid, 0)
+        out.append(_au_console.rule_summary(row=view,
+                                            state={"paused_reason": r.get("paused_reason"),
+                                                   "failure_count": r.get("failure_count"),
+                                                   "last_error": r.get("last_error")},
+                                            targets=targets.get(rid, []), label=str(r.get("label") or ""),
+                                            last_run=last.get(rid), halt=halt, at_ms=_now_ms()))
+    return out
+
+
+def _halt_for(uid: str) -> dict | None:
+    """The daily-loss halt, as the banner and the status field both need it.
+
+    Read rather than recomputed: `loss_halts` is written by the risk gate at the moment it tripped, and a second
+    derivation of "is this account halted" is a second answer to a question that decides whether money moves.
+    """
+    row = _db.execute("SELECT threshold_micro, realized_micro, tripped_ms, acknowledged_ms FROM loss_halts "
+                      "WHERE user_id = ?", (uid,)).fetchone()
+    if not row or row[3]:
+        return None
+    return {"halted": True, "thresholdMicro": int(row[0] or 0), "realizedMicro": int(row[1] or 0),
+            "trippedMs": int(row[2] or 0),
+            "lossMicro": max(0, int(row[0] or 0) - max(0, -int(row[1] or 0))) if row[1] and row[1] < 0 else 0,
+            "acknowledgeHint": "acknowledge in the risk panel: acknowledging is a record, not a reset",
+            "note": ("the daily loss limit tripped, so every money-moving path for this account is stopped until "
+                     "you acknowledge it — including automation, which is why the rule list shows halted")}
+
+
+def _facts_for(uid: str, market_id: str, token_id: str, at: int):
+    """Everything a trigger may read, from our own tables, shaped as the engine's `Facts`.
+
+    One delegation, on purpose: this is `automation.facts.facts_for`, which is exactly what the executor's engine
+    calls. It used to be a second copy of the same five reads here, and the copies had already drifted — this one
+    asked `tape_fills` for a `market_id` column that does not exist (the tape keys on `condition_id`), so every
+    preview of a rule with a price trigger was a 500 while the live engine had a last price all along. A preview
+    that reads different numbers than the live pass is a preview of a different rule, which is why there is now
+    one reader.
+
+    `token_id` is accepted and unused for the same reason the engine documents: our schema's book is per market,
+    and a token-shaped signature that silently queried the wrong side would be worse than an unused argument.
+    """
+    return _au_facts.facts_for(_db, uid, market_id, at=at)
+
+
+def _known_markets(ids: list[str]) -> set:
+    if not ids:
+        return set()
+    marks = ",".join("?" * len(ids))
+    return {str(r[0]) for r in _db.execute("SELECT id FROM markets WHERE id IN (%s)" % marks,
+                                           tuple(ids)).fetchall()}
+
+
+@app.get("/v1/automations", responses=AUTOMATION_LIST_RESPONSES)
+def list_automations(request: Request):
+    """The rule list: status, why, last fired, next evaluation, caps — and the halt banner's own data.
+
+    `status` is derived (`automation.console.rule_status`) rather than stored, because the four states a user
+    cares about are a function of three columns the engine writes plus the risk service's halt. Storing it would
+    mean a fourth write path that can disagree with the three that matter.
+    """
+    uid, _row, e = _principal(request)
+    if e:
+        return e
+    rules = _automation_rows(str(uid))
+    halt = _halt_for(str(uid))
+    return _stamped({"rules": rules, "halt": halt, "caps": _au_console.caps_view(rules=rules),
+                     "vocabulary": _au_console.builder_vocabulary(),
+                     "note": ("a rule runs in simulation until you switch it on, and every evaluation — including "
+                              "the ones that did nothing — is in its run history")},
+                    ttl_ms=0, stale_ms=0)
+
+
+@app.get("/v1/automations/runs", responses=AUTOMATION_RUNS_RESPONSES)
+def list_automation_runs(request: Request, ruleId: str | None = Query(default=None, max_length=64),
+                         limit: int = Query(default=50, ge=1, le=200)):
+    """Every evaluation of a rule, newest first, with the reason and — where the trigger was read — its leaves.
+
+    The counts are the answer to "is this rule doing anything": a rule with 400 skips and no fires is a rule
+    whose trigger is wrong, and a rule with no rows at all is a rule the engine has never seen.
+    """
+    uid, _row, e = _principal(request)
+    if e:
+        return e
+    args: list = [str(uid)]
+    where = "r.user_id = ?"
+    if ruleId:
+        if not _db.execute("SELECT 1 FROM automation_rules WHERE id = ? AND user_id = ?",
+                           (ruleId, str(uid))).fetchone():
+            return err("NOT_FOUND", request.state.request_id,
+                       detail="no rule %s for this account" % ruleId)
+        where += " AND a.rule_id = ?"
+        args.append(ruleId)
+    rows = []
+    for r in _db.execute("SELECT a.rule_id, a.mode, a.outcome, a.reason, a.deny_code, a.intent_id, a.detail_json, "
+                         "       a.at_ms FROM automation_runs a JOIN automation_rules r ON r.id = a.rule_id "
+                         "WHERE %s ORDER BY a.at_ms DESC, a.id DESC LIMIT ?" % where,
+                         tuple(args) + (limit,)).fetchall():
+        detail = _json_any(r[6], {})
+        rows.append({"ruleId": str(r[0]), "mode": str(r[1]), "outcome": str(r[2]), "reason": str(r[3]),
+                     "denyCode": str(r[4]), "intentId": str(r[5] or ""), "atMs": int(r[7] or 0),
+                     "leaves": _au_console.leaves_sentence(detail.get("leaves")),
+                     "sentence": _au_console.reason_sentence({"outcome": r[2], "reason": r[3], "deny_code": r[4]})})
+    counts = {"placed": 0, "would_place": 0, "skipped": 0, "failed": 0}
+    for row in rows:
+        if row["outcome"] in counts:
+            counts[row["outcome"]] += 1
+    return _stamped({"rows": rows, "counts": counts, "ruleId": ruleId, "limit": limit,
+                     "note": ("skips carry their reason: a rule that did nothing and a rule nobody looked at are "
+                              "different facts")}, ttl_ms=0, stale_ms=0)
+
+
+@app.get("/v1/automations/templates", responses=AUTOMATION_TEMPLATES_RESPONSES)
+def list_automation_templates(request: Request, feeType: str = Query(default="taker", max_length=16),
+                              feeRateBps: int = Query(default=200, ge=0, le=10_000),
+                              edgeAvailableBp: int | None = Query(default=None, ge=0, le=10_000),
+                              latencyMs: int | None = Query(default=None, ge=0, le=600_000)):
+    """D8's templates, with the 5-minute crypto entry shown only when its fee arithmetic actually works.
+
+    `edgeAvailableBp` is a *measurement*, so it defaults to absent rather than to a flattering number: with no
+    measured edge, no entry template can be offered, and the response says so in the arithmetic rather than
+    hiding the template. The protective templates ship unconditionally — they can only reduce a loss.
+    """
+    uid, _row, e = _principal(request)
+    if e:
+        return e
+    cat = _au_console.template_catalog(fee_type=feeType, fee_rate_bps=feeRateBps, edge_available_bp=edgeAvailableBp,
+                                       latency_ms=latencyMs)
+    return _stamped(cat, ttl_ms=0, stale_ms=0)
+
+
+@app.post("/v1/automations", status_code=200, responses=AUTOMATION_CREATE_RESPONSES,
+          openapi_extra=_body_schema(AUTOMATION_CREATE_REQUIRED, AUTOMATION_CREATE_PROPS))
+def create_automation(request: Request, body: dict = Body(...),
+                      idempotency_key: str | None = Header(default=None, alias="Idempotency-Key")):
+    """Create a rule from the visual builder's rows. Always a dry run — there is no field that makes it live.
+
+    The payload is rows and a joiner, never an expression: `compile_builder` turns them into the engine's own
+    document and `validate_rule` is the authority on whether that document may exist. Both run before anything
+    is written, so a rule that the engine would refuse at fire time cannot be saved at all.
+    """
+    rid = request.state.request_id
+    bad_key = _idem_shape(idempotency_key)
+    if bad_key is not None:
+        return bad_key
+    bad = _check_body(body, AUTOMATION_CREATE_REQUIRED, rid, allowed=tuple(AUTOMATION_CREATE_PROPS))
+    if bad is not None:
+        return bad
+    bad = _check_props(body, AUTOMATION_CREATE_PROPS, rid)
+    if bad is not None:
+        return bad
+    uid, _row, e = _principal(request)
+    if e:
+        return e
+    return _idem_run(str(uid), str(idempotency_key), body, rid,
+                     lambda: _create_automation_work(rid, uid, body))
+
+
+def _create_automation_work(rid: str, uid: str, body: dict):
+    compiled, errs = _au_console.compile_builder(body)
+    halt = _halt_for(str(uid))
+    if halt:
+        return err("HALTED", rid, detail=halt["note"], where=["acknowledge the daily-loss halt first"])
+    existing = _automation_rows(str(uid))
+    cap = _au_console.caps_view(rules=existing)["concurrentRuleCap"]
+    if len(existing) >= cap:
+        return err("RULE_CAP", rid, detail="this account already has %d rules, which is the cap; delete one first"
+                   % cap)
+    target_ids = [t["marketId"] for t in compiled["targets"]]
+    unknown = [m for m in target_ids if m not in _known_markets(target_ids)]
+    if unknown:
+        return err("NOT_FOUND", rid, detail="unknown market(s): %s" % ", ".join(unknown[:3]))
+    if errs:
+        return err("VALIDATION", rid, detail="; ".join(errs[:4]), where=errs[:4])
+    rule_id = "rule-" + uuid.uuid4().hex[:12]
+    at = _now_ms()
+    doc = compiled["rule"]
+    # The rule's own loss ceiling. Checked here rather than left to the insert, because `automation_rule_policy`
+    # refuses a money-moving rule with no ceiling (`redemption_needs_no_ceiling`, where only `auto_redeem` is
+    # exempt) and a CHECK violation five layers down arrives as a 500 — which tells the builder user nothing about
+    # the field they left empty. The P10 gate found this by saving the smallest legal rule it could; the form
+    # already refuses a zero ceiling client-side, so the server was the looser of the two, which is backwards.
+    ceiling = int(body.get("maxLossMicro") or doc.get("max_loss_micro") or 0)
+    if ceiling <= 0 and str(body["kind"]) != "auto_redeem":
+        return err("VALIDATION", rid,
+                   detail="a rule that can move money needs its own loss ceiling in micro-USDC; only auto_redeem "
+                          "may hold a position with no ceiling, because redeeming cannot add risk",
+                   where=["maxLossMicro"])
+    _db.execute("INSERT INTO automation_rules (id, user_id, kind, trigger_json, max_loss_micro, enabled, "
+                " last_run_ms) VALUES (?,?,?,?,?,0,NULL)",
+                (rule_id, str(uid), str(body["kind"]), json.dumps(doc["trigger"]), ceiling))
+    _db.execute("INSERT INTO automation_rule_policy (rule_id, trigger_json, actions_json, "
+                "dry_run_completed_ms, max_per_day, min_interval_ms, human_priority_ms, last_fire_ms, updated_ms) "
+                "VALUES (?,?,?,NULL,?,?,?,0,?)",
+                (rule_id, json.dumps(doc["trigger"]), json.dumps(doc["actions"]),
+                 int(body.get("maxPerDay") or 24),
+                 max(int(body.get("minIntervalMs") or 60_000), _au.MIN_INTERVAL_MS),
+                 int(body.get("humanPriorityMs") if body.get("humanPriorityMs") is not None else 120_000), at))
+    _db.execute("INSERT INTO automation_rule_state (rule_id, paused_reason, armed_market_id, armed_token_id, "
+                "failure_count, last_error, updated_ms) VALUES (?,'','','',0,'',?)", (rule_id, at))
+    for t in compiled["targets"]:
+        _db.execute("INSERT INTO automation_rule_targets (rule_id, market_id, token_id, created_ms) "
+                    "VALUES (?,?,?,?)", (rule_id, t["marketId"], t["tokenId"], at))
+    label = str(body.get("name") or "").strip()
+    if label:
+        _db.execute("INSERT INTO automation_rule_labels (rule_id, name, updated_ms) VALUES (?,?,?)",
+                    (rule_id, label[:80], at))
+    _db.commit()
+    rules = _automation_rows(str(uid))
+    created = next((r for r in rules if r["ruleId"] == rule_id), None)
+    return _stamped({"rule": created, "dryRunOnly": True, "halt": _halt_for(str(uid)),
+                     "note": ("saved as a dry run: nothing can be sent until you run it in simulation and switch "
+                              "it on")}, ttl_ms=0, stale_ms=0)
+
+
+@app.post("/v1/automations/preview", status_code=200, responses=AUTOMATION_PREVIEW_RESPONSES,
+          openapi_extra=_body_schema(AUTOMATION_PREVIEW_REQUIRED, AUTOMATION_PREVIEW_PROPS))
+def preview_automation(request: Request, body: dict = Body(...),
+                       idempotency_key: str | None = Header(default=None, alias="Idempotency-Key")):
+    """Evaluate a rule against live facts, in dry-run mode, and record it.
+
+    Two callers, one path. With `ruleId`, this is a saved rule's dry run: the evaluation is written to
+    `automation_runs` and the first one marks `dry_run_completed_ms`, which is the only thing that lets the rule
+    go live. Without it, the payload is compiled and evaluated without being saved — the builder's "show me what
+    this would have done" step, which must work before the rule exists.
+
+    The facts are the same ones the executor's engine reads (`_facts_for`): a preview that fed a rule different
+    numbers than the live pass would be a preview of a different rule.
+    """
+    rid = request.state.request_id
+    bad_key = _idem_shape(idempotency_key)
+    if bad_key is not None:
+        return bad_key
+    uid, _row, e = _principal(request)
+    if e:
+        return e
+    rule_id = str(body.get("ruleId") or "").strip()
+    if not rule_id and not body.get("triggers"):
+        return err("VALIDATION", rid, detail="send either a ruleId or a builder payload",
+                   where=["ruleId", "triggers"])
+    if rule_id:
+        row = next((r for r in _automation_rows(str(uid)) if r["ruleId"] == rule_id), None)
+        if row is None:
+            return err("NOT_FOUND", rid, detail="no rule %s for this account" % rule_id)
+        return _idem_run(str(uid), str(idempotency_key), body, rid,
+                         lambda: _dry_run_work(rid, uid, rule_id))
+    compiled, errs = _au_console.compile_builder(body)
+    if errs:
+        return err("VALIDATION", rid, detail="; ".join(errs[:4]), where=errs[:4])
+    target = (compiled["targets"] or [{}])[0]
+    at = _now_ms()
+    facts = _facts_for(str(uid), str(target.get("marketId") or ""), str(target.get("tokenId") or ""), at)
+    sim = _au_console.simulation(compiled["rule"]["trigger"], facts)
+    return _stamped({"rule": compiled["rule"], "targets": compiled["targets"], "dryRun": True,
+                     "simulation": sim, "facts": _facts_view(facts),
+                     "note": ("this is the trigger read against the numbers we hold now; saving it starts a dry "
+                              "run that the engine keeps evaluating")}, ttl_ms=0, stale_ms=0)
+
+
+def _facts_view(facts) -> dict:
+    return {"lastPriceMicro": facts.last_price_micro, "bestBidMicro": facts.best_bid_micro,
+            "bestAskMicro": facts.best_ask_micro, "midMicro": facts.mid_micro,
+            "quoteAgeMs": facts.quote_age_ms, "staleMs": facts.stale_ms,
+            "acceptingOrders": facts.accepting_orders, "imbalanceBps": facts.imbalance_bps,
+            "positionSharesMicro": facts.position_shares_micro,
+            "secondsToResolution": facts.seconds_to_resolution}
+
+
+def _dry_run_work(rid: str, uid: str, rule_id: str):
+    """One dry-run evaluation of a saved rule: evaluate, record the run, complete the dry run if it is the first.
+
+    `outcome` is `would_place` when the trigger was met and `skipped` when it was not — both are recorded, and
+    both complete the dry run, because "it did nothing all afternoon" is a result a user should be able to read
+    before deciding. Only the live path needs a *fired* dry run, and the engine enforces that separately.
+    """
+    row = next((r for r in _automation_rows(str(uid)) if r["ruleId"] == rule_id), None)
+    if row is None:
+        return err("NOT_FOUND", rid, detail="no rule %s for this account" % rule_id)
+    at = _now_ms()
+    target = (row["targets"] or [{}])[0]
+    facts = _facts_for(str(uid), str(target.get("marketId") or ""), str(target.get("tokenId") or ""), at)
+    sim = _au_console.simulation(row["trigger"], facts)
+    outcome = "would_place" if sim["fires"] else "skipped"
+    reason = "dry run: no order sent" if sim["fires"] else "trigger not met"
+    _db.execute("INSERT INTO automation_runs (rule_id, user_id, mode, outcome, reason, deny_code, intent_id, "
+                "detail_json, at_ms) VALUES (?,?,'dry_run',?,?,'','',?,?)",
+                (rule_id, str(uid), outcome, reason, json.dumps({"leaves": sim["leaves"]}), at))
+    first = not row.get("dryRunCompletedMs")
+    if first:
+        _db.execute("UPDATE automation_rule_policy SET dry_run_completed_ms = ?, updated_ms = ? WHERE rule_id = ?",
+                    (at, at, rule_id))
+    _db.commit()
+    updated = next((r for r in _automation_rows(str(uid)) if r["ruleId"] == rule_id), None)
+    return _stamped({"rule": updated, "dryRun": True, "dryRunCompleted": first,
+                     "simulation": sim, "facts": _facts_view(facts),
+                     "note": ("dry run complete: this rule can go live when you switch it on" if first else
+                              "another dry-run evaluation recorded")}, ttl_ms=0, stale_ms=0)
+
+
+@app.post("/v1/automations/guards", status_code=200, responses=AUTOMATION_GUARD_RESPONSES,
+          openapi_extra=_body_schema(AUTOMATION_GUARD_REQUIRED, AUTOMATION_GUARD_PROPS))
+def set_automation_state(request: Request, body: dict = Body(...),
+                         idempotency_key: str | None = Header(default=None, alias="Idempotency-Key")):
+    """Pause a rule, or arm it — the only path to `enabled`, and it refuses without a completed dry run.
+
+    Pausing is always allowed and takes effect immediately, because the safe direction must never be blocked by
+    a precondition. Arming checks the two things the engine will check at fire time — a completed dry run and no
+    active loss halt — and refuses with the reason, so the user meets the refusal while they can still act on it
+    instead of discovering a rule that never fired.
+    """
+    rid = request.state.request_id
+    bad_key = _idem_shape(idempotency_key)
+    if bad_key is not None:
+        return bad_key
+    bad = _check_body(body, AUTOMATION_GUARD_REQUIRED, rid, allowed=tuple(AUTOMATION_GUARD_PROPS))
+    if bad is not None:
+        return bad
+    bad = _check_props(body, AUTOMATION_GUARD_PROPS, rid)
+    if bad is not None:
+        return bad
+    uid, _row, e = _principal(request)
+    if e:
+        return e
+    return _idem_run(str(uid), str(idempotency_key), body, rid,
+                     lambda: _guard_automation_work(rid, uid, body))
+
+
+def _guard_automation_work(rid: str, uid: str, body: dict):
+    rule_id = str(body["ruleId"])
+    state = str(body["state"])
+    row = next((r for r in _automation_rows(str(uid)) if r["ruleId"] == rule_id), None)
+    if row is None:
+        return err("NOT_FOUND", rid, detail="no rule %s for this account" % rule_id)
+    at = _now_ms()
+    if state == "paused":
+        reason = str(body.get("reason") or "paused by you")
+        _db.execute("UPDATE automation_rules SET enabled = 0 WHERE id = ?", (rule_id,))
+        _db.execute("UPDATE automation_rule_state SET paused_reason = ?, updated_ms = ? WHERE rule_id = ?",
+                    (reason[:200], at, rule_id))
+        _db.execute("INSERT INTO automation_runs (rule_id, user_id, mode, outcome, reason, deny_code, intent_id, "
+                    "detail_json, at_ms) VALUES (?,?,'live','skipped',?,'','','{}',?)",
+                    (rule_id, str(uid), "paused by the user: %s" % reason[:120], at))
+        _db.commit()
+        updated = next((r for r in _automation_rows(str(uid)) if r["ruleId"] == rule_id), None)
+        return _stamped({"rule": updated, "state": "paused", "note": "paused: nothing fires until you arm it"},
+                        ttl_ms=0, stale_ms=0)
+    halt = _halt_for(str(uid))
+    if halt:
+        return err("HALTED", rid, detail=halt["note"], where=["acknowledge the daily-loss halt first"])
+    if not row.get("dryRunCompletedMs"):
+        return err("DRY_RUN_REQUIRED", rid,
+                   detail=("this rule has never been evaluated, so nothing is known about what it would do; "
+                           "run it in dry mode first"),
+                   where=["run POST /v1/automations/preview with this ruleId"])
+    _db.execute("UPDATE automation_rules SET enabled = 1 WHERE id = ?", (rule_id,))
+    _db.execute("UPDATE automation_rule_state SET paused_reason = '', failure_count = 0, last_error = '', "
+                "updated_ms = ? WHERE rule_id = ?", (at, rule_id))
+    _db.execute("INSERT INTO automation_runs (rule_id, user_id, mode, outcome, reason, deny_code, intent_id, "
+                "detail_json, at_ms) VALUES (?,?,'live','skipped',?,'','','{}',?)",
+                (rule_id, str(uid), "armed by the user after %d dry-run evaluation(s)" % 1, at))
+    _db.commit()
+    updated = next((r for r in _automation_rows(str(uid)) if r["ruleId"] == rule_id), None)
+    return _stamped({"rule": updated, "state": "active",
+                     "note": ("armed: every fire still goes through the same pre-flight and risk gate as a "
+                              "manual order")}, ttl_ms=0, stale_ms=0)
+
+
+# ================================================================================== P10 · D9 alerts ==
+ALERT_UPSERT_RESPONSES = {400: {"description": "missing Idempotency-Key; a malformed one is a 422 naming the "
+                                             "field"},
+                          401: {"description": "a session is required"},
+                          402: {"description": "the channel needs a plan the account does not have"},
+                          404: {"description": "no such rule, market or event for this account"},
+                          422: {"description": "missing field or an out-of-range cap/window"}}
+ALERT_TEST_RESPONSES = {400: {"description": "missing Idempotency-Key; a malformed one is a 422 naming the "
+                                             "field"},
+                        401: {"description": "a session is required"},
+                        404: {"description": "no such rule for this account"}}
+ALERT_LIST_RESPONSES = {401: {"description": "a session is required"}}
+ALERT_DELIVERIES_RESPONSES = {401: {"description": "a session is required"}}
+ALERT_SETTINGS_RESPONSES = {400: {"description": "missing Idempotency-Key; a malformed one is a 422 naming the "
+                                                 "field"},
+                            401: {"description": "a session is required"},
+                            422: {"description": "a quiet window with one end, an offset outside ±14h, or a "
+                                                 "digest time outside the day"}}
+
+ALERT_UPSERT_REQUIRED = ("kind",)
+ALERT_UPSERT_PROPS = {"ruleId": {"type": "string", "maxLength": 64},
+                      "kind": {"type": "string",
+                               "enum": ["price_level", "spread_widen", "whale_fill", "resolve_lead",
+                                        "illiquid_top", "new_market", "manual"]},
+                      "marketId": {"type": "string", "maxLength": 64},
+                      "eventId": {"type": "string", "maxLength": 64},
+                      "channel": {"type": "string", "enum": ["telegram", "email", "webhook"]},
+                      "severity": {"type": "string", "enum": ["info", "notice", "urgent"]},
+                      "firesPerWindow": {"type": "integer", "minimum": 1, "maximum": 24},
+                      "windowMs": {"type": "integer", "minimum": 60000},
+                      "params": {"type": "object"},
+                      "enabled": {"type": "boolean"}}
+ALERT_TEST_REQUIRED = ("ruleId",)
+ALERT_TEST_PROPS = {"ruleId": {"type": "string", "minLength": 1, "maxLength": 64},
+                    "channels": {"type": "array"}, "title": {"type": "string", "maxLength": 160}}
+ALERT_SETTINGS_PROPS = {"quietStartMin": {"type": "integer", "minimum": -1, "maximum": 1439},
+                        "quietEndMin": {"type": "integer", "minimum": -1, "maximum": 1439},
+                        "tzOffsetMin": {"type": "integer", "minimum": -840, "maximum": 840},
+                        "digestMode": {"type": "string", "enum": ["off", "hourly", "daily"]},
+                        "digestAtMin": {"type": "integer", "minimum": 0, "maximum": 1439},
+                        "defaultChannel": {"type": "string", "enum": ["telegram", "email", "webhook"]}}
+
+
+#: Engine kind -> the alert kind the screen uses. The history renders the user's word, not the engine's.
+ALERT_KIND_OF: dict[str, str] = {v: k for k, v in _sg_engine.ALERT_KIND_MAP.items() if v}
+
+
+def _target_conditions(market_id: str | None, event_id: str | None) -> list[str]:
+    """The venue condition ids an alert's target covers — the key the engine's events carry.
+
+    An event target covers every market in it, and the filter carries all of them: a rule that matched only the
+    first leg would be quietly wrong on the others, which is the sort of gap nobody reports because the alert
+    simply does not arrive.
+    """
+    if market_id:
+        row = _db.execute("SELECT condition_id FROM markets WHERE id = ?", (market_id,)).fetchone()
+        return [str(row[0])] if row and row[0] else []
+    if event_id:
+        return [str(r[0]) for r in _db.execute("SELECT condition_id FROM markets WHERE event_id = ?",
+                                               (event_id,)).fetchall() if r[0]]
+    return []
+
+
+def _alert_view(rule: dict, **kw) -> dict:
+    """`alert_summary` plus the two facts this build has to state about itself: which loop evaluates the rule,
+    and — for a manual one — that no loop does."""
+    out = _sg.alert_summary(rule=rule, **kw)
+    engine = _sg.engine_kind(str(rule.get("kind") or ""))
+    out["engineKind"] = engine
+    out["evaluated"] = engine is not None
+    out["evaluator"] = ("the ingest engine evaluates this rule and records every fire in the history below"
+                        if engine else
+                        "manual: this rule fires only when you test it — no loop is watching it")
+    return out
+
+
+def _plan_of(uid: str) -> str:
+    row = _db.execute("SELECT tier FROM users WHERE id = ?", (uid,)).fetchone()
+    tier = str(row[0]) if row and row[0] else "free"
+    return "trial" if tier not in _sg.PLAN_RANK else tier
+
+
+def _settings_view(uid: str, at: int) -> dict:
+    """The settings block as the SCREEN reads it: the stored row plus what it means right now.
+
+    Both endpoints answer with the same shape, because both are read by the same component: a list that carried
+    the raw row and a settings write that carried the row *plus* the two computed blocks would make
+    `settings.quietHours` a property that exists only after a write — a crash on the first paint, and only for
+    users who had not yet touched the form.
+    """
+    fresh = _settings_for(str(uid))
+    view = _sg.settings_view(fresh)
+    view["quietHours"] = _sg.quiet_hours_state(fresh, at)
+    view["digestNow"] = _sg.digest_state(fresh, at_ms=at, severity="notice")
+    return view
+
+
+def _settings_for(uid: str) -> dict:
+    """The account's notification settings, materialised on first read.
+
+    Reading is not a mutation: the row is created with the schema's own defaults the first time anyone asks, so
+    a client never has to know them and `quiet_start_min = -1` (off) is a fact in the database rather than an
+    absence a reader has to interpret.
+    """
+    row = _db.execute("SELECT quiet_start_min, quiet_end_min, tz_offset_min, digest_mode, digest_at_min, "
+                      "default_channel FROM notification_settings WHERE user_id = ?", (uid,)).fetchone()
+    if row is None:
+        at = _now_ms()
+        _db.execute("INSERT INTO notification_settings (user_id, quiet_start_min, quiet_end_min, tz_offset_min, "
+                    "digest_mode, digest_at_min, default_channel, updated_ms) VALUES (?,-1,-1,0,'off',480,"
+                    "'telegram',?)", (uid, at))
+        _db.commit()
+        return {"quiet_start_min": -1, "quiet_end_min": -1, "tz_offset_min": 0, "digest_mode": "off",
+                "digest_at_min": 480, "default_channel": "telegram"}
+    return {"quiet_start_min": int(row[0]), "quiet_end_min": int(row[1]), "tz_offset_min": int(row[2]),
+            "digest_mode": str(row[3]), "digest_at_min": int(row[4]), "default_channel": str(row[5])}
+
+
+def _alert_rules(uid: str) -> list[dict]:
+    """This account's rules, as dicts. `test:` ids are the test-fire rows and the real list never shows them."""
+    return _rows(_db.execute(
+        "SELECT id, kind, market_id, event_id, fires_per_window, window_ms, params_json, enabled, created_ms "
+        "FROM alert_rules WHERE user_id = ? AND id NOT LIKE 'test:%' ORDER BY created_ms DESC, id", (uid,)))
+
+
+def _fires_in_window(rule_id: str, window_ms: int, at: int) -> list[int]:
+    """This rule's fires inside its own window, from the alerts it actually produced."""
+    return [int(r[0] or 0) for r in _db.execute(
+        "SELECT fired_ms FROM signals WHERE rule_id = ? AND fired_ms > ? ORDER BY fired_ms DESC LIMIT 50",
+        (rule_id, at - int(window_ms))).fetchall()]
+
+
+def _last_delivery(rule_id: str, uid: str) -> dict | None:
+    row = _db.execute("SELECT d.channel, d.status, d.reason, COALESCE(d.sent_ms, d.queued_ms), s.title "
+                      "FROM alert_deliveries d JOIN signals s ON s.id = d.signal_id "
+                      "WHERE s.rule_id = ? AND d.user_id = ? ORDER BY d.queued_ms DESC, d.id DESC LIMIT 1",
+                      (rule_id, uid)).fetchone()
+    if not row:
+        return None
+    return {"channel": str(row[0]), "status": str(row[1]), "reason": str(row[2] or ""), "atMs": int(row[3] or 0),
+            "title": str(row[4] or "")}
+
+
+@app.get("/v1/alerts", responses=ALERT_LIST_RESPONSES)
+def list_alerts(request: Request):
+    """The alert list: every rule with its budget, its cooldown, what quiet hours and digest would do to it now,
+    and what actually happened last time it fired.
+
+    `wouldDoNow` is the honest part. A rule list that shows a rule as "on" while the user's quiet hours are
+    holding it is a list that will be described as broken at 2am; the plan is computed on read so the screen can
+    say "held until 07:00" before the user has to guess.
+    """
+    uid, _row, e = _principal(request)
+    if e:
+        return e
+    plan = _plan_of(str(uid))
+    settings = _settings_for(str(uid))
+    at = _now_ms()
+    rules = []
+    for r in _alert_rules(str(uid)):
+        rules.append(_alert_view(rule={"id": r["id"], "kind": r["kind"], "market_id": r["market_id"],
+                                       "event_id": r["event_id"], "enabled": r["enabled"],
+                                       "fires_per_window": r["fires_per_window"], "window_ms": r["window_ms"],
+                                       "params": _json_any(r["params_json"], {}), "created_ms": r["created_ms"]},
+                                 settings=settings, at_ms=at,
+                                 fires_in_window=_fires_in_window(str(r["id"]), int(r["window_ms"]), at),
+                                 last_delivery=_last_delivery(str(r["id"]), str(uid)), plan=plan))
+    return _stamped({"rules": rules, "settings": _settings_view(str(uid), at), "plan": plan,
+                     "ruleCount": len(rules),
+                     "note": ("a rule fires at most `firesPerWindow` times per window; quiet hours hold "
+                              "everything (urgent included) and the list says so before it happens")},
+                    ttl_ms=0, stale_ms=0)
+
+
+@app.post("/v1/alerts", status_code=200, responses=ALERT_UPSERT_RESPONSES,
+          openapi_extra=_body_schema(ALERT_UPSERT_REQUIRED, ALERT_UPSERT_PROPS))
+def create_alert(request: Request, body: dict = Body(...),
+                 idempotency_key: str | None = Header(default=None, alias="Idempotency-Key")):
+    """Create or edit one alert rule inline. The channel's plan is checked at save time, not at fire time.
+
+    A free account saving a webhook rule would be a rule that can never deliver, and finding that out when the
+    alert was supposed to arrive is worse than being told now — so the entitlement check is a 402 with the
+    upgrade named.
+    """
+    rid = request.state.request_id
+    bad_key = _idem_shape(idempotency_key)
+    if bad_key is not None:
+        return bad_key
+    bad = _check_body(body, ALERT_UPSERT_REQUIRED, rid, allowed=tuple(ALERT_UPSERT_PROPS))
+    if bad is not None:
+        return bad
+    bad = _check_props(body, ALERT_UPSERT_PROPS, rid)
+    if bad is not None:
+        return bad
+    uid, _row, e = _principal(request)
+    if e:
+        return e
+    return _idem_run(str(uid), str(idempotency_key), body, rid, lambda: _upsert_alert_work(rid, uid, body))
+
+
+def _upsert_alert_work(rid: str, uid: str, body: dict):
+    plan = _plan_of(str(uid))
+    fields, errs = _sg.validate_alert_payload(body, plan=plan)
+    if errs:
+        code = "PLAN_REQUIRED" if any("plan" in e for e in errs) else "VALIDATION"
+        return err(code, rid, detail="; ".join(errs[:3]), where=errs[:3])
+    market_id = fields["market_id"]
+    event_id = fields["event_id"]
+    if market_id and market_id not in _known_markets([market_id]):
+        return err("NOT_FOUND", rid, detail="unknown market %s" % market_id)
+    at = _now_ms()
+    params = dict(fields["params"])
+    params.update({"channel": fields["channel"], "severity": fields["severity"], "source": "console"})
+    rule_id = fields["rule_id"]
+    if rule_id:
+        if not _db.execute("SELECT 1 FROM alert_rules WHERE id = ? AND user_id = ?", (rule_id, str(uid))).fetchone():
+            return err("NOT_FOUND", rid, detail="no alert rule %s for this account" % rule_id)
+        _db.execute("UPDATE alert_rules SET kind = ?, market_id = ?, event_id = ?, fires_per_window = ?, "
+                    "window_ms = ?, params_json = ?, enabled = ? WHERE id = ? AND user_id = ?",
+                    (fields["kind"], market_id, event_id, fields["fires_per_window"], fields["window_ms"],
+                     json.dumps(params), 1 if fields["enabled"] else 0, rule_id, str(uid)))
+        action = "updated"
+    else:
+        rule_id = "al-" + uuid.uuid4().hex[:12]
+        _db.execute("INSERT INTO alert_rules (id, user_id, market_id, event_id, kind, fires_per_window, "
+                    "window_ms, params_json, enabled, created_ms) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                    (rule_id, str(uid), market_id, event_id, fields["kind"], fields["fires_per_window"],
+                     fields["window_ms"], json.dumps(params), 1 if fields["enabled"] else 0, at))
+        action = "created"
+    # The rule the user keeps, and the rule the ENGINE evaluates. `alert_rules` holds the user's own words;
+    # `signal_rules` is the only table the ingest plane reads. A rule that existed in the first and not the
+    # second would be listed, would show a cooldown, and could never fire — the failure this whole screen is
+    # supposed to make visible, hiding inside it.
+    engine_row = _sg.signal_rule_row(rule_id=rule_id, owner=str(uid),
+                                     alert={**fields, "params": params}, condition_ids=_target_conditions(market_id, event_id))
+    if engine_row is None:
+        # A manual alert: it fires when its owner asks it to, and there is no rule for a loop to read.
+        _db.execute("UPDATE signal_rules SET enabled = 0, updated_ms = ? WHERE id = ?", (at, rule_id))
+    else:
+        _db.execute("INSERT INTO signal_rules (id, owner, kind, params_json, market_filter_json, cooldown_s,"
+                    " severity, channels_json, enabled, created_ms, updated_ms)"
+                    " VALUES (?,?,?,?,?,?,?,?,?,?,?)"
+                    " ON CONFLICT(id) DO UPDATE SET owner=excluded.owner, kind=excluded.kind,"
+                    " params_json=excluded.params_json, market_filter_json=excluded.market_filter_json,"
+                    " cooldown_s=excluded.cooldown_s, severity=excluded.severity,"
+                    " channels_json=excluded.channels_json, enabled=excluded.enabled, updated_ms=excluded.updated_ms",
+                    (rule_id, str(uid), engine_row["kind"], json.dumps(engine_row["params"]),
+                     json.dumps(engine_row["market_filter"]), engine_row["cooldown_s"], engine_row["severity"],
+                     json.dumps(engine_row["channels"]), 1 if engine_row["enabled"] else 0, at, at))
+    _db.commit()
+    settings = _settings_for(str(uid))
+    row = _db.execute("SELECT id, kind, market_id, event_id, fires_per_window, window_ms, params_json, enabled, "
+                      "created_ms FROM alert_rules WHERE id = ?", (rule_id,)).fetchone()
+    summary = _alert_view({"id": row[0], "kind": row[1], "market_id": row[2], "event_id": row[3],
+                                "enabled": row[7], "fires_per_window": row[4], "window_ms": row[5],
+                                "params": _json_any(row[6], {}), "created_ms": row[8]},
+                               settings=settings, at_ms=at, fires_in_window=_fires_in_window(rule_id, int(row[5]), at),
+                               last_delivery=_last_delivery(rule_id, str(uid)), plan=plan)
+    return _stamped({"rule": summary, "action": action,
+                     "note": "the cooldown below is the window budget made explicit, not a separate setting"},
+                    ttl_ms=0, stale_ms=0)
+
+
+@app.post("/v1/alerts/test", status_code=200, responses=ALERT_TEST_RESPONSES,
+          openapi_extra=_body_schema(ALERT_TEST_REQUIRED, ALERT_TEST_PROPS))
+def test_alert(request: Request, body: dict = Body(...),
+               idempotency_key: str | None = Header(default=None, alias="Idempotency-Key")):
+    """Fire a rule on purpose and record what WOULD happen, without spending the rule's real budget.
+
+    The test writes its own `signals` row under a `test:` rule id, so the rule's window, cooldown and delivery
+    history are untouched — a test that consumes the budget it is testing poisons the feature it validates. What
+    it returns is the plan: sent now / held for quiet hours / batched for the digest / refused by the plan. The
+    delivery rows are real rows with the plan's own status, and the response says plainly that no transport runs
+    in this build, so a `queued` row is a record of what would be sent rather than a claim that it was.
+    """
+    rid = request.state.request_id
+    bad_key = _idem_shape(idempotency_key)
+    if bad_key is not None:
+        return bad_key
+    bad = _check_body(body, ALERT_TEST_REQUIRED, rid, allowed=tuple(ALERT_TEST_PROPS))
+    if bad is not None:
+        return bad
+    uid, _row, e = _principal(request)
+    if e:
+        return e
+    return _idem_run(str(uid), str(idempotency_key), body, rid, lambda: _test_alert_work(rid, uid, body))
+
+
+def _test_alert_work(rid: str, uid: str, body: dict):
+    rule_id = str(body["ruleId"])
+    row = _db.execute("SELECT id, kind, market_id, event_id, fires_per_window, window_ms, params_json, enabled "
+                      "FROM alert_rules WHERE id = ? AND user_id = ?", (rule_id, str(uid))).fetchone()
+    if row is None:
+        return err("NOT_FOUND", rid, detail="no alert rule %s for this account" % rule_id)
+    plan = _plan_of(str(uid))
+    settings = _settings_for(str(uid))
+    params = _json_any(row[6], {})
+    channels = [str(c) for c in (body.get("channels") or [params.get("channel") or
+                                                          settings.get("default_channel") or "telegram"])]
+    severity = str(params.get("severity") or "notice")
+    at = _now_ms()
+    plan_rows = _sg.delivery_plan(rule={"id": rule_id, "enabled": bool(row[7]),
+                                        "fires_per_window": int(row[4]), "window_ms": int(row[5])},
+                                  settings=settings, at_ms=at, severity=severity, fired_ms=[],
+                                  channels=channels, plan=plan, is_test=True)
+    # The test's own signal, under a rule id that cannot collide with the real one. `fired_ms` is now, and the
+    # row is written so the delivery history has something true to point at.
+    #
+    # The dedupe key carries the signal's own id: `signals` is UNIQUE on (rule_id, dedupe_key, fired_bucket),
+    # which is what makes "one alert per window" a database property rather than a code path someone has to
+    # remember to call — and that constraint applies to test fires too. Two tests in the same minute are two
+    # rows, because a test button that refuses the second press is a test button that looks broken.
+    test_rule_id = "test:" + rule_id
+    sig = _db.execute("SELECT COALESCE(MAX(id), 0) + 1 FROM signals").fetchone()
+    signal_id = int(sig[0])
+    title = str(body.get("title") or ("test fire of %s" % str(params.get("severity") or "notice")))
+    _db.execute("INSERT INTO signals (id, rule_id, kind, condition_id, token_id, severity, title, body_json, "
+                "dedupe_key, fired_bucket, fired_ms) VALUES (?,?,?,?,'',?,?,?,?,?,?)",
+                (signal_id, test_rule_id, str(row[1]), str(row[2] or ""), severity, title[:160],
+                 json.dumps({"test": True, "ruleId": rule_id, "channels": channels}),
+                 "test-%d" % signal_id, at // 60_000, at))
+    delivery_ids = []
+    for pr in plan_rows:
+        cur = _db.execute("INSERT INTO alert_deliveries (signal_id, user_id, channel, priority, queued_ms, "
+                          "sent_ms, status, reason) VALUES (?,?,?,?,?,NULL,?,?)",
+                          (signal_id, str(uid), pr["channel"], _sg.PLAN_RANK.get(plan, 2), at, pr["status"],
+                           pr["sentence"]))
+        delivery_ids.append(cur.lastrowid if cur is not None else None)
+    _db.commit()
+    return _stamped({"ruleId": rule_id, "testSignalId": signal_id, "plan": plan_rows,
+                     "summary": _sg.plan_summary(plan_rows), "severity": severity,
+                     "quietHours": _sg.quiet_hours_state(settings, at),
+                     "digest": _sg.digest_state(settings, at_ms=at, severity=severity),
+                     "deliveryIds": delivery_ids,
+                     "note": ("these rows are the record of what would be sent: no delivery transport runs in "
+                              "this build, so a `queued` row is a plan, not a notification — and the rule's own "
+                              "window was not spent")}, ttl_ms=0, stale_ms=0)
+
+
+@app.get("/v1/alerts/deliveries", responses=ALERT_DELIVERIES_RESPONSES)
+def list_alert_deliveries(request: Request, limit: int = Query(default=50, ge=1, le=200),
+                          channel: str | None = Query(default=None, max_length=16)):
+    """Delivery history, with the status each channel reached and the reason it did not reach a later one.
+
+    `latencyMs` is `sent - queued` where it was sent and null where it never was: a latency of zero on a row that
+    was never delivered is the kind of number that makes a dashboard lie with a straight face.
+    """
+    uid, _row, e = _principal(request)
+    if e:
+        return e
+    args: list = [str(uid)]
+    where = "d.user_id = ?"
+    if channel:
+        where += " AND d.channel = ?"
+        args.append(channel)
+    rows = []
+    for r in _db.execute("SELECT d.id, s.rule_id, s.kind, d.channel, d.status, d.reason, d.queued_ms, d.sent_ms, "
+                         "s.severity, s.title FROM alert_deliveries d JOIN signals s ON s.id = d.signal_id "
+                         "WHERE %s ORDER BY d.queued_ms DESC, d.id DESC LIMIT ?" % where,
+                         tuple(args) + (limit,)).fetchall():
+        queued, sent = int(r[6] or 0), (int(r[7]) if r[7] is not None else None)
+        rows.append({"deliveryId": int(r[0]), "ruleId": str(r[1] or ""),
+                     "kind": ALERT_KIND_OF.get(str(r[2] or ""), str(r[2] or "")),
+                     "engineKind": str(r[2] or ""),
+                     "channel": str(r[3]), "status": str(r[4]), "reason": str(r[5] or ""),
+                     "queuedMs": queued, "sentMs": sent, "latencyMs": (sent - queued) if sent else None,
+                     "severity": str(r[8] or ""), "title": str(r[9] or ""),
+                     "isTest": str(r[1] or "").startswith("test:")})
+    counts: dict[str, int] = {}
+    for row in rows:
+        counts[row["status"]] = counts.get(row["status"], 0) + 1
+    return _stamped({"rows": rows, "counts": counts, "limit": limit, "channel": channel,
+                     "note": ("`digest_scheduled` is held (quiet hours or digest) and `dropped_rate_limited` is "
+                              "refused by the rule's own cap: two different facts")}, ttl_ms=0, stale_ms=0)
+
+
+@app.post("/v1/alerts/settings", status_code=200, responses=ALERT_SETTINGS_RESPONSES,
+          openapi_extra=_body_schema((), ALERT_SETTINGS_PROPS))
+def set_alert_settings(request: Request, body: dict = Body(...),
+                       idempotency_key: str | None = Header(default=None, alias="Idempotency-Key")):
+    """Quiet hours, digest mode and the default channel.
+
+    Every field is optional and an absent field means "leave it": a settings form that requires the whole object
+    overwrites what it does not know, which is how a quiet window disappears when somebody changes their
+    digest time.
+    """
+    rid = request.state.request_id
+    bad_key = _idem_shape(idempotency_key)
+    if bad_key is not None:
+        return bad_key
+    bad = _check_props(body, ALERT_SETTINGS_PROPS, rid)
+    if bad is not None:
+        return bad
+    uid, _row, e = _principal(request)
+    if e:
+        return e
+    return _idem_run(str(uid), str(idempotency_key), body, rid, lambda: _settings_work(rid, uid, body))
+
+
+def _settings_work(rid: str, uid: str, body: dict):
+    current = _settings_for(str(uid))
+    merged = dict(current)
+    for key in ("quietStartMin", "quietEndMin", "tzOffsetMin", "digestMode", "digestAtMin", "defaultChannel"):
+        if key in body and body[key] is not None:
+            merged[{"quietStartMin": "quiet_start_min", "quietEndMin": "quiet_end_min",
+                    "tzOffsetMin": "tz_offset_min", "digestMode": "digest_mode",
+                    "digestAtMin": "digest_at_min", "defaultChannel": "default_channel"}[key]] = body[key]
+    start, end = int(merged["quiet_start_min"]), int(merged["quiet_end_min"])
+    if (start == -1) != (end == -1):
+        return err("VALIDATION", rid, detail="a quiet window needs both ends, or neither (send -1 for both to "
+                                             "turn it off)", where=["quietStartMin", "quietEndMin"])
+    if start != -1 and start == end:
+        return err("VALIDATION", rid, detail="a quiet window that starts and ends at the same minute is a window "
+                                             "that never closes", where=["quietStartMin", "quietEndMin"])
+    allowed, why = _sg.channel_entitlement(str(merged["default_channel"]), _plan_of(str(uid)))
+    if not allowed:
+        return err("PLAN_REQUIRED", rid, detail=why, where=["defaultChannel"])
+    at = _now_ms()
+    _db.execute("UPDATE notification_settings SET quiet_start_min = ?, quiet_end_min = ?, tz_offset_min = ?, "
+                "digest_mode = ?, digest_at_min = ?, default_channel = ?, updated_ms = ? WHERE user_id = ?",
+                (start, end, int(merged["tz_offset_min"]), str(merged["digest_mode"]),
+                 int(merged["digest_at_min"]), str(merged["default_channel"]), at, str(uid)))
+    _db.commit()
+    return _stamped(_settings_view(str(uid), at), ttl_ms=0, stale_ms=0)
+
+
 # The P10 routes' auth levels. Every served route needs a row here or the request fails closed with
 # `AUTHZ_UNDECLARED`, which is the correct default and an infuriating one to debug — so the four public reads
 # (a tape, its facets, the whale feed and a pseudonymous dossier: all of them reveal only what the venue
@@ -4008,11 +4966,28 @@ _levels_p10 = {
     "POST /v1/whale-views": (_authz.USER, ""),
     "POST /v1/radar/runs": (_authz.USER, ""),
     "GET /v1/radar/runs/{job_id}": (_authz.USER, ""),
+    # P10 D8/D9. Every one of these is USER and none is scoped: an automation rule and an alert rule both belong
+    # to the account that made them, and the reads are already filtered by the *session's* user id rather than
+    # by anything the client sends — which is the property that makes a scoped level unnecessary here.
+    "GET /v1/automations": (_authz.USER, ""),
+    "POST /v1/automations": (_authz.USER, ""),
+    "POST /v1/automations/preview": (_authz.USER, ""),
+    "POST /v1/automations/guards": (_authz.USER, ""),
+    "GET /v1/automations/runs": (_authz.USER, ""),
+    "GET /v1/automations/templates": (_authz.USER, ""),
+    "GET /v1/alerts": (_authz.USER, ""),
+    "POST /v1/alerts": (_authz.USER, ""),
+    "POST /v1/alerts/test": (_authz.USER, ""),
+    "GET /v1/alerts/deliveries": (_authz.USER, ""),
+    "POST /v1/alerts/settings": (_authz.USER, ""),
 }
 for _t in (TAPE_FILLS_RESPONSES, FACETS_RESPONSES, WHALES_RESPONSES, TRADER_RESPONSES, COPY_CREATE_RESPONSES,
            COPY_GUARD_RESPONSES, COPY_MONITOR_RESPONSES, PORTFOLIO_RESPONSES, WHALE_VIEW_RESPONSES,
            RADAR_RESPONSES, RADAR_JOB_RESPONSES, COPY_LIST_RESPONSES, WHALE_VIEW_LIST_RESPONSES,
-           COPY_SOURCES_RESPONSES):
+           COPY_SOURCES_RESPONSES, AUTOMATION_CREATE_RESPONSES, AUTOMATION_GUARD_RESPONSES,
+           AUTOMATION_LIST_RESPONSES, AUTOMATION_RUNS_RESPONSES, AUTOMATION_TEMPLATES_RESPONSES,
+           AUTOMATION_PREVIEW_RESPONSES, ALERT_UPSERT_RESPONSES, ALERT_TEST_RESPONSES, ALERT_LIST_RESPONSES,
+           ALERT_DELIVERIES_RESPONSES, ALERT_SETTINGS_RESPONSES):
     _t.update(_INTERNAL)                       # every route can 500 through the app-wide handler
 del _t
 _authz.LEVELS_TABLE.update(_levels_p10)

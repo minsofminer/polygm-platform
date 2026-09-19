@@ -129,6 +129,11 @@ class Store:
     def __init__(self, conn: sqlite3.Connection) -> None:
         self.conn = conn
         self.statement_count = 0
+        #: Markets this Store's last `upsert_universe` saw for the first time. A mailbox rather than a return
+        #: value: the tuple it already returns is read by callers and tests, and the one thing that consumes
+        #: this — the daemon, which turns it into `new_market` events for P10 D9's alert kind — is not a
+        #: database concern. An event nothing emits is a rule that can never fire, and nothing in the UI says so.
+        self.new_markets: list[dict] = []
 
     @classmethod
     def open(cls, path: str) -> "Store":
@@ -190,6 +195,7 @@ class Store:
         arrived would be rejected on Postgres and silently accepted on a dev database with the pragma off,
         which is the worst possible pair of behaviours.
         """
+        self.new_markets = []
         now_ms = int(time.time() * 1000)
         events_new = new = changed = 0
         resolved_at: dict[str, int] = {}
@@ -217,6 +223,12 @@ class Store:
                     1 if m["neg_risk"] else 0, m.get("neg_risk_group_id"), m.get("end_ts"),
                     json.dumps(m["outcomes"]), now_ms, now_ms)
             if old is None:
+                # This is the only place that knows a market is NEW (the alternative — inferring it downstream
+                # from `first_seen_ms` — is a second source of truth for "new", and the two would disagree
+                # exactly when it matters). The daemon turns this into a `new_market` event for D9's alert kind.
+                self.new_markets.append({"market": m["condition_id"], "question": m["question"],
+                                         "slug": m.get("slug") or "",
+                                         "tags": list(m.get("tags") or [])})
                 self._run("INSERT INTO markets (id, condition_id, event_id, question, slug, accepting_orders,"
                           " seconds_delay, enable_order_book, minimum_tick_size, minimum_order_size, fee_type,"
                           " neg_risk, neg_risk_group_id, end_ts, outcomes_json, first_seen_ms, updated_ms)"
@@ -730,6 +742,11 @@ class Daemon:
         # must not inherit each other's "previous imbalance".
         self.prev_imbalance: dict[str, object] = {}
         self.last_mid: dict[str, int] = {}
+        # P10 D9: the spread and the top-of-book depth are the other two differences an alert can be about
+        # ("tell me when the spread widens past 3 cents", "tell me when the book goes thin"), and both need the
+        # same baseline treatment as the imbalance.
+        self.prev_spread: dict[str, object] = {}
+        self.prev_depth: dict[str, object] = {}
         self.resolving: dict[str, bool] = {}
         self.event_errors: list[str] = []
         self.tape_from_ms, self.resume_note = self._resume()
@@ -795,6 +812,8 @@ class Daemon:
             for ch in self.meta.diff(old, fresh_view):
                 diffs.append(dict(ch, market_id=m["id"]))
         new, changed, events_new = self.store.upsert_universe(markets, by_condition)
+        for fresh in self.store.new_markets:
+            self.events.append(dict(fresh, type="new_market"))
         self.store.meta_versions(diffs)
         self.cid_to_mid.update({m["condition_id"]: m["id"] for m in markets})
         expired = 0
@@ -1044,21 +1063,42 @@ class Daemon:
 
     def note_book(self, bk: B.Book, now_ms: int) -> None:
         """Emit the two book-derived events. Both need a PREVIOUS value, so the first frame after a boot
-        establishes a baseline and fires nothing — the alternative is an "imbalance flip" alert on startup."""
+        establishes a baseline and fires nothing — the alternative is an "imbalance flip" alert on startup.
+
+        The `book` event carries the imbalance AND the spread AND the top-of-book depth, because three of the
+        alert kinds P10 D9 offers are read from it, and it is emitted when any of the three moved rather than on
+        every frame."""
         cid = self.watch.get(bk.token_id, {}).get("condition", "")
         imb = bk.imbalance(DEPTH_CENTS)
         prev = self.prev_imbalance.get(bk.token_id, "__unset__")
         self.prev_imbalance[bk.token_id] = imb
-        if prev != "__unset__" and imb is not None and prev is not None:
-            self.events.append({"type": "book", "market": cid, "token_id": bk.token_id,
-                                "imbalance": imb, "imbalance_prev": prev})
         mid = bk.mid_micro()          # a method, not a property: `depth_at`-style args are why
+        spread = bk.spread_micro()
+        prev_spread = self.prev_spread.get(bk.token_id)
+        self.prev_spread[bk.token_id] = spread
+        depth_usd = (sum(bk.depth_at(DEPTH_CENTS)) * mid // 10 ** 6) if mid else 0
+        prev_depth = self.prev_depth.get(bk.token_id)
+        self.prev_depth[bk.token_id] = depth_usd
+        # One `book` event per FRAME would be 15-33/s of events to say nothing changed, so it is emitted when one
+        # of the three numbers a book alert can be about actually moved. `spread_widen` and `illiquid_top` (P10 D9)
+        # read the same event as `imbalance_flip`, which is why the condition covers all three: a kind whose event
+        # is never emitted is a rule that can never fire, and nothing in the UI would say so.
+        imb_moved = prev != "__unset__" and imb is not None and prev is not None and imb != prev
+        spread_moved = prev_spread is not None and spread is not None and spread != prev_spread
+        depth_moved = prev_depth is not None and depth_usd != prev_depth
+        if imb_moved or spread_moved or depth_moved:
+            self.events.append({"type": "book", "market": cid, "token_id": bk.token_id,
+                                "imbalance": imb,
+                                "imbalance_prev": (None if prev == "__unset__" else prev),
+                                "spread_micro": spread, "spread_prev_micro": prev_spread,
+                                "mid_micro": mid, "usd_depth_micro": depth_usd,
+                                "usd_depth_prev_micro": prev_depth})
         if mid is not None:
             old = self.last_mid.get(bk.token_id)
             if old is not None:
                 self.events.append({"type": "price_move", "market": cid, "token_id": bk.token_id,
                                     "old_micro": old, "new_micro": mid,
-                                    "usd_depth_micro": sum(bk.depth_at(DEPTH_CENTS)) * mid // 10 ** 6,
+                                    "usd_depth_micro": depth_usd,
                                     # a resolution moves a price to 0/1 and is not a market event; suppressing
                                     # here is what stops every resolution looking like a whale attack
                                     "resolution_event": bool(self.resolving.get(cid, False))})

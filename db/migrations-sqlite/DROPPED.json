@@ -36,6 +36,7 @@
     "audit_log",
     "auth_events",
     "auth_sessions",
+    "automation_rule_labels",
     "automation_rule_policy",
     "automation_rule_state",
     "automation_rule_targets",
@@ -81,6 +82,7 @@
     "market_rollups",
     "market_stats",
     "markets",
+    "notification_settings",
     "order_attempts",
     "order_directives",
     "order_intents",
@@ -265,6 +267,13 @@
         "PG-only statement: CREATE TRIGGER append_only_wallet_pseudonyms BEFORE UPDATE OR DELETE ON wallet"
       ],
       "check_clauses_reordered": []
+    },
+    "0012_notifications.sql": {
+      "dropped": [],
+      "check_clauses_reordered": [
+        "automation_rule_labels",
+        "notification_settings"
+      ]
     }
   }
 }

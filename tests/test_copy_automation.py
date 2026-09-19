@@ -869,8 +869,25 @@ class TestAutomationEngine(Harness):
         self.assertFalse(au.run_row_is_retriable({"outcome": "failed", "deny_code": "RULE_INVALID"}))
         self.assertFalse(au.run_row_is_retriable({"outcome": "skipped", "deny_code": "AUTOMATION_DAY_CAP"}))
 
+    def test_the_signal_trigger_reads_real_labels_rather_than_an_empty_tuple(self):
+        """P06 shipped the `signal` trigger and nothing filled `Facts.labels`, so a signal rule could only ever
+        write "trigger not met" — the protective "cancel the entry on a volume spike" template included. The
+        wiring landed with P10 D8 (`automation/facts.market_labels`), and this is the test that fails if it is
+        ever removed: the seed carries a `smart_money` wallet that traded `0xM1`, so the label must arrive."""
+        facts = self.eng.facts_for(user_id=self.user, market_id=self.market, token_id=self.token, at=self.at)
+        self.assertIn("smart_money", facts.labels)
+        rule = {"trigger": {"kind": "signal", "label": "smart_money"},
+                "actions": [{"kind": "set_alert", "message": "hi"}]}
+        self.assertEqual([l["ok"] for l in au.evaluate(rule["trigger"], facts)["leaves"]], [True])
+        # And a market with no labelled trader carries no labels at all, so the rule above is not firing on an
+        # empty-set accident.
+        bare = self.eng.facts_for(user_id=self.user, market_id="0xM-none", token_id="t-none", at=self.at)
+        self.assertEqual(bare.labels, ())
+
     def test_skips_are_rows_too_because_absence_is_not_an_explanation(self):
-        self.save(rule={"trigger": {"kind": "signal", "label": "smart_money"},
+        # `wash_like`: a label `validate_rule` accepts and no wallet in the seed carries, so this test is about
+        # the skip being recorded and not about the label path (which has its own test above).
+        self.save(rule={"trigger": {"kind": "signal", "label": "wash_like"},
                        "actions": [{"kind": "set_alert", "message": "hi"}]})
         self.arm()
         before = len(self.rows("SELECT id FROM automation_runs"))

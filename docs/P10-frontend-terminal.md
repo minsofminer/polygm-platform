@@ -1,10 +1,12 @@
 # P10 — Frontend: the terminal (tape, dossiers, whales, radar, portfolio, copy, automation, alerts)
 
-Status: **D1–D7 built and pushed; D8 and D9 are P11's subject** (the kit's own order — there is no automation or
-alert endpoint in the P10 contract, and inventing one here would put the rules in the wrong phase). Every screen
-in D1–D7 is reachable: `/terminal`, `/trader/[anon]`, `/whales`, `/radar`, `/portfolio`, `/copy`. This file is
-written as the phase is built, so what follows states what exists and what does not, and the "open" list at the
-end is the working list rather than a retrospective.
+Status: **D1–D9 built; all nine surfaces reachable** — `/terminal`, `/trader/[anon]`, `/whales`,
+`/radar`, `/portfolio`, `/copy`, `/automation`, `/alerts`. D8 and D9 were built last, as this phase's closing
+work, because the P10 screen list names them and a screen shipped against an API that does not exist is not a
+screen. The earlier reading that put them in P11 was a misread of the kit: `prompts/P11-leaderboard.md` is the
+leaderboard, rankings and referrals, and §5.1 below records that reconciliation. This file is written as the
+phase is built, so what follows states what exists and what does not, and the "open" list at the end is the
+working list rather than a retrospective.
 
 The phase's acceptance sentence, from the kit, is the thing everything below is arranged around:
 
@@ -26,8 +28,8 @@ verified one endpoint at a time is a chain nobody has ever walked.
 | D5 | Wallet Radar: ≤10 markets, four rankings, row = wallet + matched markets + bought/sold + realised PnL + win rate + classification, one-click track/follow/copy/open, cost control | **built** (`src/terminal/{radar.ts,RadarView.tsx}`, `app/(app)/radar/page.tsx`), 14 unit + 4 render tests, on the gated API (25 API tests) |
 | D6 | portfolio: positions with mark and unrealised, negRisk groups, order history with `unknown` rows marked, PnL curve + benchmark, CSV export, empty state | **built** (`src/terminal/{portfolio.ts,PortfolioView.tsx}`, `app/(app)/portfolio/page.tsx`), 17 unit + 6 render tests |
 | D7 | copy trading: risk-adjusted discovery (and saying so), the config panel, the slip warning **before** confirm, monitor with skip reasons, pause/stop | **built** (`src/terminal/{copy.ts,CopyView.tsx}`, `app/(app)/copy/page.tsx`, `GET /v1/copy/sources` added for the sort D7 demands), 20 unit + 5 render tests |
-| D8 | automation: rule list, visual builder, templates, mandatory dry-run, run history, daily-loss banner | pending (P11's subject in the kit's own order; the API surface is not in the P10 contract) |
-| D9 | alerts: rule list, inline editor, test-fire, delivery history, quiet hours, digest, per-rule cooldown | pending (same as D8) |
+| D8 | automation: rule list, visual builder, templates, mandatory dry-run, run history, daily-loss banner | **built** (`src/terminal/{automation.ts,AutomationView.tsx}`, `app/(app)/automation/page.tsx`), 14 unit + 4 render tests, on `GET/POST /v1/automations`, `/preview`, `/guards`, `/runs`, `/templates` (18 API tests) |
+| D9 | alerts: rule list, inline editor, test-fire, delivery history, quiet hours, digest, per-rule cooldown | **built** (`src/terminal/{alerts.ts,AlertsView.tsx}`, `app/(app)/alerts/page.tsx`), 26 unit + 4 render tests, on `GET/POST /v1/alerts`, `/test`, `/deliveries`, `/settings` (20 API tests) |
 
 ## 2. Decisions taken here, and why
 
@@ -212,6 +214,32 @@ text, and the gate's new `c11` parses the caveat: an artefact with numbers but n
 quietly upgrade itself into a rendering claim. `src/terminal/perf.test.ts` asserts the same budgets inside
 `npm run test`, which is what makes a regression fail a build rather than a review.
 
+### 2.13 D8/D9: the four decisions the closing work turned on
+
+**A rule is saved as a dry run and there is no field that makes it live.** `POST /v1/automations` writes
+`enabled = 0` and the API's create response says `dryRunOnly: true`; arming is a second endpoint
+(`POST /v1/automations/guards`) that refuses without a `dry_run_completed_ms` the engine itself wrote, with
+`DRY_RUN_REQUIRED` and the next step named. Pausing is always allowed, because the safe direction must never sit
+behind a precondition. The kit's "dry-run mandatory" is therefore not a UI convention that a client could skip:
+the only path to `enabled = 1` runs through an evaluation that was actually recorded.
+
+**The status order is the product decision.** A halted rule reads `halted` even when its `enabled` flag is 1 —
+the risk service stopped the account, and rendering that as "active" would hide the one state D8 asks to be loud
+about. A rule with no completed dry run reads `dry_run` whatever the flag says, because that is the flag the
+engine reads before it will fire. `paused` names who parked it. Every one of the four carries its own sentence,
+and a rule that has never been evaluated says so rather than showing a zero.
+
+**The cooldown is the window budget, not a second setting.** `3 per 1h` and "one every 20m at most" are the same
+fact stated twice from one source (`window_ms / fires_per_window`), the list shows both plus how many fires the
+current window has spent, and the gate asserts the sentence is on every rule. A separate "cooldown" field would
+be a second authority over the same number, and the first disagreement would be invisible.
+
+**Quiet hours are the user's instruction; a digest is our batching — and only an `urgent` alert outranks them.**
+Held (`quiet_hours`), batched (`digest`) and refused by the rule's own cap (`rate_limited`) are three different
+rows in the delivery history with three different sentences, and a row that was never sent has no latency. The
+test-fire path writes its rows under `test:<ruleId>` and spends nothing, which the artefact says in as many
+words: a test that consumed the budget it was testing would poison the feature it validates.
+
 ## 3. What the phase's own tools caught
 
 * **`_market_rows()` returns a dict keyed by condition id.** The radar iterated it as a list and every scan was a
@@ -234,30 +262,91 @@ quietly upgrade itself into a rendering claim. `src/terminal/perf.test.ts` asser
   nine checks. `c10` now exists and is about the radar's cost control; the comment says what the gate actually
   does, and the web half is named as `npm run test` / `npm run build`.
 
+* **A rule with no loss ceiling was a 500, not a refuse.** The new gate check (`c12`) saved the smallest legal
+  rule it could, left `maxLossMicro` out, and got `INTERNAL` — because `automation_rule_policy` has a CHECK
+  (`redemption_needs_no_ceiling`, exempting only `auto_redeem`) and the ceiling was being read after the insert
+  path had already begun. The form refused a zero ceiling client-side, so the *server* was the looser of the two,
+  which is backwards: the write now refuses with `VALIDATION` naming `maxLossMicro`, and
+  `test_a_rule_with_no_loss_ceiling_is_refused_not_saved_with_zero` pins both directions (refused for an exit
+  rule, saved for `auto_redeem`).
+* **Two D9 paths were in the contract but outside the status-set table.** `c1` compares the phase's paths against
+  `tools/check-openapi.py`'s `TABLE_FOR_PATH`, and its membership test only recognised the bare-key spelling —
+  the alerts paths are keyed `("POST", "/v1/alerts")` because a GET and a POST on one path answer different
+  status sets, so two paths read as unguarded. The test now accepts either spelling; the paths were always
+  guarded, the check was wrong about how to tell.
+* **The D9 list and the D9 write disagreed about the settings shape.** The list returned the raw row while the
+  write returned the row plus `quietHours`/`digestNow`, and the screen reads `settings.quietHours.note` on both.
+  One `_settings_view(uid, at)` now serves both reads, with `test_the_list_carries_the_settings_shape_the_screen_reads`
+  as the regression — found by a render test, which is the argument for having render tests.
+* **A probability was being rendered through the money helpers.** `formatCents(microToCents(620000))` produced
+  `0.0062`: cents are hundredths of a dollar, and a price of 0.62 is not money. `priceMicroText`/
+  `priceMicroFromText` do the integer arithmetic instead and return `null` on garbage; no probability may go
+  through the cents path again.
+
 ## 4. Where the numbers come from
 
-* `docs/verification/P10-gate.txt` — the recorded gate run (11/11).
-* `python3 -m unittest discover -s tests` — 783 tests, 25 of them the radar's, 54 the terminal API's (7 of those
-  the discovery endpoint, 5 the idempotency record half).
-* `cd web && npx vitest run` — 291 tests (33 files), three of them the tape's frame budget; the terminal owns 73 of
-  them, file by file: `tape.test.ts` 21,
-  `dossier.test.ts` 21, `whales.test.ts` 17, `DossierView.test.tsx` 7, `WhaleTracker.test.tsx` 4.
-  `npm run i18n:check` — `ok (664 keys, 621 used, 43 unused-advisory)` over the two dictionaries, with the
-  route-family rule in force.
-* `python3 tools/check-openapi.py` — 293 passed, 0 failed, over a 37-path contract.
-* `cd web && npm run measure` — first-load 188.5 / 199.1 / 191.6 / 191.6 KB, `status: pass`, route-level splitting
-  proven; `npm run measure:tape` — 2.134 ms per second of load at 200 fills/s, `status: pass`.
+* `docs/verification/P10-gate.txt` — the recorded gate run, **15/15**, `--self-test` **12/12 canaries fired**.
+* `docs/verification/P08-gate.txt` — **15/15** (the bundle and money-path checks over the same tree);
+  `docs/verification/P09-gate.txt` — **7/7**.
+* `python3 -m unittest discover -s tests` — **822 tests, OK**, of which the terminal's are 25 (radar), 54
+  (terminal API), 18 (automation API), 20 (alerts API) and 88 (copy automation), plus the engine's own automation and
+  signal tests under `packages/polygm_core`.
+* `cd web && npm test` — **339 tests in 37 files**: `tape.test.ts` 21, `dossier.test.ts` 21, `whales.test.ts` 17,
+  `radar.test.ts` 14, `portfolio.test.ts` 17, `copy.test.ts` 20, `automation.test.ts` 14, `alerts.test.ts` 26,
+  `watchlist.test.ts` 7, `perf.test.ts` 3, plus the render tests `DossierView` 7, `WhaleTracker` 4, `RadarView` 4,
+  `PortfolioView` 6, `CopyView` 5, `AutomationView` 4, `AlertsView` 4. `npm run typecheck` — clean.
+  `npm run i18n:check` — `ok (825 keys, 782 used, 43 unused-advisory)`.
+* `python3 tools/check-openapi.py` — **365 passed, 0 failed** — 365 comparisons over a 46-path / 50-operation contract, every D8/D9 path
+  among them (`TABLE_FOR_PATH` keys the alerts pair by verb, because a GET and a POST on one path answer
+  different status sets).
+* `cd web && npm run measure` — first-load 188.5 / **199.6** / 191.6 / 191.6 KB, `status: pass`, route-level
+  splitting proven (the landing document does not fetch the money module; `/markets` does). Budget 200 KB, so
+  `/markets` is 0.4 KB under it — worth knowing before the next surface adds a chart library.
+* `cd web && npm run measure:tape` — `status: pass`; the gate's own re-read of it: **1.729 ms per second of load
+  at 200 fills/s**, worst single batch release 0.133 ms, against a 16.7 ms frame.
 * Seeded tape (post `make migrate && make seed`): 159 markets, 1,090 fills, four wallets, 133 markets with ≥4
   fills.
 
 ## 5. Open, in the order it should be closed
 
-1. **D8, D9** (automation and alerts) — the kit puts the rule engine in P11's scope; the P10 screens depend on
-   that API, so they land with it rather than against a surface that does not exist.
-2. **The pixel half of the 60fps line, and the rest of the browser pass.** `c11` reads a measured budget for the
-   tape's own JavaScript, and `vitest` fails when it regresses. Paint, layout and compositing are still
+1. **The pixel half of the 60fps line, and the rest of the browser pass.** `c11` reads a measured budget for the
+   tape's own JavaScript and `vitest` fails when it regresses. Paint, layout and compositing are still
    **`[UNVERIFIED]`**: the sandbox cannot run a browser (Playwright's host requirements fail to validate), so
    resize persistence, mobile tab parity and the perceived frame rate are claims about code, not measurements.
    The first machine with a browser closes this; nothing else in P10 does.
-3. **The bundle hash in `docs/verification/P08-build.txt`** predates D1–D7; it needs one line re-recorded so the
-   P08 record and the shipped web build are the same artifact.
+2. **The bundle record and the shipped web build are one artefact again**. `docs/verification/P08-bundle.txt` is
+   re-measured against the current tree (it was stale for D8/D9 for exactly the reason the check exists: the
+   measurement described a build that no longer existed) and `P08-gate.txt` is re-recorded at 15/15.
+3. **A real transport for the alert channels.** No delivery transport runs in this build, and the API says so on
+   every surface that could imply one (`the rule's own window was not spent`, `no delivery transport runs in this
+   build`). The Telegram bot plumbing is P06's and is verified there; wiring it to `alert_deliveries` rows is the
+   step that turns `queued` into `sent`, and it belongs with the executor's live path.
+4. **The line-by-line reviewer's pass over D8/D9's copy.** Every rule this phase states in words — the cooldown
+   sentence, the fee arithmetic, the halt banner, the "would" language of a test fire — is asserted by a test, but
+   the *tone* is not something a test can hold.
+
+### 5.1 The reconciliation owed against the kit's P11
+
+D8 and D9 were built here as P10's closing work, and that needs to be said plainly rather than left as a note in
+a status line, because a phase boundary that moves without a reason is how two phases end up half-built.
+
+* `prompts/P10-frontend-terminal.md` lists **eight** deliverables, D8 (automation) and D9 (alerts) among them,
+  and its screen list names the two routes. `prompts/P11-leaderboard.md` is titled **"Leaderboard, Rankings &
+  Referrals"** and asks for six boards, integrity rules, self-rank, referrals and public shareable pages. There is
+  no automation or alert deliverable in it.
+* So the earlier reading — "D8/D9 are P11's subject, do not invent the API here" — was wrong twice over: wrong
+  about the kit, and wrong about the consequence. Deferring them would have left P10 with two screens missing and
+  P11 with two deliverables it never asked for.
+* What P11 now is, unchanged by that: risk-adjusted PnL as the default board with the formula stated, win rate
+  behind a sample gate, volume, rising 7d, category specialists, copied; integrity work (wash and copy-farm
+  filtering, a provisional label under 7 days, blown-up accounts shown rather than dropped, the lucky-gambler
+  share, UMA-disputed markets excluded); a rank badge and a 30-day sparkline; a private self-rank; referrals with
+  a first-matched-order trigger, device/IP/funding dedupe, clawback and a hard self-referral block; SSR
+  `/trader/<handle>`, `/market/<slug>` and `/leaderboard/<board>` with OG tags; and an anti-gaming dashboard.
+  Its gate is to explain why rank 47 with fewer resolved markets is correct above rank 12, and to catch a
+  second-wallet referral.
+* Two things in this phase's own table are load-bearing for P11 and already exist because of it: the gate's
+  `win_rate_findings`/`threshold_findings` scanners (a board that prints a win rate under the sample gate fails
+  the gate that P11 will be held to as well), and `GET /v1/radar/...`'s row shape — wallet, matched markets,
+  bought/sold, realised PnL, win rate with its gate, classification with its rule — which is the same row a
+  leaderboard needs and should be extended rather than re-derived.

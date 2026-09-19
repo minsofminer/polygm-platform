@@ -3,7 +3,7 @@ Numbers are gzipped bytes the browser fetches for that document, not a build-log
 
 budget for the initial route: 200 KB of JS
   /          http 200 · 12 chunk(s) · JS 188.5 KB · CSS 5.0 KB · money layer absent
-  /markets   http 200 · 15 chunk(s) · JS 199.1 KB · CSS 5.0 KB · money layer present
+  /markets   http 200 · 15 chunk(s) · JS 199.6 KB · CSS 5.0 KB · money layer present
   /tma       http 200 · 13 chunk(s) · JS 191.6 KB · CSS 5.0 KB · money layer absent
   /profile   http 200 · 13 chunk(s) · JS 191.6 KB · CSS 5.0 KB · money layer absent
 

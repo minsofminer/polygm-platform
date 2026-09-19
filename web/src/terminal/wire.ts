@@ -7,6 +7,13 @@
  * `src/screens/terminal/` converts through `@/money/cents`, never through `Number(...)`.
  */
 
+import type { components, paths } from "@/api/schema.gen";
+
+/** One named schema from the generated contract, by its `components.schemas` key. */
+type Schema<K extends keyof components["schemas"]> = components["schemas"][K];
+/** The envelope every read carries: `asOf` is the data's clock, `staleAfter` is when it stops being true. */
+type StampFields = components["schemas"]["Stamped"];
+
 /** One classification label with the rule that produced it and its disclaimer (contract: `LabelFact`). */
 export type LabelFact = {
   label: string;
@@ -383,3 +390,43 @@ export type RadarResult = {
   quota: RadarQuota;
   costNote: string;
 };
+
+/**
+ * D8's payloads, derived from the contract for the same reason D9's are: the builder's vocabulary is a served
+ * shape with fifteen field types inside it, and a transcription of it is a transcription that goes stale the
+ * first time the engine learns a new trigger.
+ *
+ * `HaltState` keeps its old name because the daily-loss halt is what the banner reads: it is `loss_halts` as the
+ * API reports it, read once, never recomputed.
+ */
+export type BuilderField = Schema<"BuilderField">;
+export type BuilderKind = Schema<"BuilderKind">;
+export type BuilderVocabulary = Schema<"BuilderVocabulary">;
+export type AutomationRule = Schema<"AutomationRule">;
+export type AutomationRunRow = Schema<"AutomationRunRow">;
+export type AutomationTemplate = Schema<"AutomationTemplate">;
+export type FeeArithmetic = Schema<"FeeArithmetic">;
+export type HaltState = Schema<"LossHalt">;
+/** The console's read, stamped. */
+export type AutomationList = components["schemas"]["AutomationList"] & StampFields;
+/** The template catalog, stamped. */
+export type TemplateCatalog = components["schemas"]["TemplateCatalog"] & StampFields;
+
+/**
+ * D9's payloads, DERIVED from the contract rather than transcribed.
+ *
+ * The rest of this file is a transcription (P10's D1–D7 predate the schemas they read), and that is the reason
+ * these three are not: the P08 gate refuses a hand-typed body by name, and the honest fix is not a rename — it is
+ * to read the shape the contract already publishes, so a field added to the API cannot go missing here without
+ * `npm run check:api` failing first.
+ */
+export type AlertPlanRow = Schema<"AlertPlan">;
+export type AlertRule = Schema<"AlertRule">;
+export type AlertDeliveryRow = Schema<"AlertDelivery">;
+export type NotificationSettings = Schema<"NotificationSettings">;
+/** The list read: the contract's own `AlertsList`, stamped. */
+export type AlertsPayload = components["schemas"]["AlertsList"] & StampFields;
+/** The delivery read, whose `rows` are the same `AlertDelivery` rows the rule list links to. */
+export type DeliveryPage = paths["/v1/alerts/deliveries"]["get"]["responses"][200]["content"]["application/json"];
+/** The test-fire read: the plan rows, per channel. */
+export type AlertTestResult = paths["/v1/alerts/test"]["post"]["responses"][200]["content"]["application/json"];

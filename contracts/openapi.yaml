@@ -655,6 +655,7 @@ paths:
         "403": {$ref: "#/components/responses/Denied"}
         "404": {$ref: "#/components/responses/NotFound"}
         "409": {$ref: "#/components/responses/Conflict"}
+        "402": {$ref: "#/components/responses/Denied"}
         "422": {$ref: "#/components/responses/Validation"}
         # A 500 on THIS endpoint is the one status whose handling a client must not guess: it means "the write
         # may have landed", so the correct move is to retry with the SAME Idempotency-Key. That is why
@@ -1776,6 +1777,490 @@ paths:
         "401": {$ref: "#/components/responses/Denied"}
         "422": {$ref: "#/components/responses/Validation"}
         "500": {$ref: "#/components/responses/Internal"}
+  /v1/automations:
+    get:
+      tags: [trading]
+      summary: Automation rules with their derived status, the halt state and the builder's vocabulary (P10 D8)
+      description: |-
+        `status` is derived rather than stored: it is a function of the rule's `enabled` flag, the engine's
+        `paused_reason`, whether a dry run has completed, and whether the risk service has stopped this account —
+        and a stored copy of it is a fifth field that can disagree with the four that decide.
+
+        `halt` is the daily-loss halt when it is unacknowledged, and every rule reads `halted` while it is set,
+        even a rule that is still `enabled`. That is the one state D8 asks to be loud about.
+
+        `vocabulary` is the engine's own trigger and action kinds, with the limits it enforces (8 leaves, 60s
+        minimum interval). A builder that offers a row the engine refuses would save rules that can never fire.
+      operationId: listAutomations
+      x-auth: user
+      x-rate-class: authed-read
+      x-cache: no-store
+      responses:
+        "200":
+          description: this account's rules, the halt state, and the builder's vocabulary
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Stamped"
+                  - $ref: "#/components/schemas/AutomationList"
+        "401": {$ref: "#/components/responses/Denied"}
+        "500": {$ref: "#/components/responses/Internal"}
+    post:
+      tags: [trading]
+      summary: Save an automation rule from the builder's rows - ALWAYS a dry run (P10 D8)
+      description: |-
+        There is no field that arms a rule, exactly as there is no field that turns copy trading live. The rows
+        are literals (a price, a level, a duration) joined by `AND`/`OR`; there is no expression syntax, and the
+        engine's own validator is the authority on whether the compiled document may exist — an unknown field is
+        a 422 naming it, not a rule that fails later at fire time.
+
+        Arming is a separate call that refuses until a dry run has actually been observed.
+      operationId: createAutomation
+      x-auth: user
+      x-rate-class: authed-write
+      x-cache: no-store
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [kind, triggers, actions, targets]
+              properties:
+                kind: {type: string, enum: [entry, exit, cancel, alert, scale_out, hedge, take_profit, stop_loss,
+                                            auto_redeem]}
+                name: {type: string, maxLength: 80, description: "the user's own label; the engine never reads it"}
+                match: {type: string, enum: [all, any], description: "AND or OR across the trigger rows"}
+                triggers:
+                  type: array
+                  minItems: 1
+                  description: "rows of {kind, ...fields}; a row may be a group of {group, rows}"
+                actions: {type: array, minItems: 1, description: "the engine executes the first executable row"}
+                targets:
+                  type: array
+                  minItems: 1
+                  description: "markets to watch; the engine evaluates a rule once per target"
+                maxPerDay: {type: integer, minimum: 1, maximum: 288}
+                minIntervalMs: {type: integer, minimum: 1000}
+                humanPriorityMs: {type: integer, minimum: 0}
+                maxLossMicro: {type: integer, minimum: 0}
+      responses:
+        "200":
+          description: the saved rule, in dry-run state
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Stamped"
+                  - type: object
+                    required: [rule, dryRunOnly, note]
+                    properties:
+                      rule: {$ref: "#/components/schemas/AutomationRule"}
+                      dryRunOnly: {type: boolean}
+                      note: {type: string}
+        "400": {$ref: "#/components/responses/Validation"}
+        "401": {$ref: "#/components/responses/Denied"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/Validation"}
+        "500": {$ref: "#/components/responses/Internal"}
+  /v1/automations/runs:
+    get:
+      tags: [trading]
+      summary: Every evaluation of a rule, with the reason it acted or did not (P10 D8)
+      description: |-
+        "Why did the bot do that" is answered here and nowhere else, so every evaluation is a row — including the
+        ones that did nothing. `sentence` is the engine's own reason with a next step where one exists, and
+        `leaves` names the parts of the trigger that were true when it was read: the engine evaluates every leaf
+        eagerly rather than short-circuiting precisely so a skip can be explained with the whole picture.
+      operationId: listAutomationRuns
+      x-auth: user
+      x-rate-class: authed-read
+      x-cache: no-store
+      parameters:
+        - {name: ruleId, in: query, required: false, schema: {type: string, maxLength: 64}}
+        - {name: limit, in: query, required: false, schema: {type: integer, minimum: 1, maximum: 200, default: 50}}
+      responses:
+        "200":
+          description: run rows, newest first
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Stamped"
+                  - type: object
+                    required: [rows, counts, note]
+                    properties:
+                      rows:
+                        type: array
+                        items: {$ref: "#/components/schemas/AutomationRunRow"}
+                      counts: {type: object}
+                      note: {type: string}
+        "401": {$ref: "#/components/responses/Denied"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "500": {$ref: "#/components/responses/Internal"}
+  /v1/automations/templates:
+    get:
+      tags: [trading]
+      summary: The rule templates, with the fee arithmetic that can withhold one (P10 D8)
+      description: |-
+        The 5-minute crypto entry template ships only if its fee arithmetic clears at current fees, and when it
+        does not, it is still LISTED with `available: false` and the numbers that withheld it. Hiding it would
+        leave a user guessing whether the feature is missing or the maths said no, and the second is worth
+        reading.
+
+        The protective half — exit before resolution, size cap, cancel on a one-sided book, the loss alert —
+        ships unconditionally, because it can only reduce a loss the user was already risking and its value does
+        not depend on any fee measurement.
+
+        `edgeAvailableBp` is a measurement, so it defaults to ABSENT: with no measured edge no entry template can
+        be offered, and the response says so rather than inventing a flattering number.
+      operationId: listAutomationTemplates
+      x-auth: user
+      x-rate-class: authed-read
+      x-cache: no-store
+      parameters:
+        - {name: feeType, in: query, required: false, schema: {type: string, default: taker}}
+        - {name: feeRateBps, in: query, required: false, schema: {type: integer, minimum: 0, maximum: 10000,
+                                                                   default: 200}}
+        - {name: edgeAvailableBp, in: query, required: false, schema: {type: integer, minimum: 0, maximum: 10000}}
+        - {name: latencyMs, in: query, required: false, schema: {type: integer, minimum: 0, maximum: 600000}}
+      responses:
+        "200":
+          description: the catalog, the arithmetic, and whether the entry half ships
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Stamped"
+                  - $ref: "#/components/schemas/TemplateCatalog"
+        "401": {$ref: "#/components/responses/Denied"}
+        "500": {$ref: "#/components/responses/Internal"}
+  /v1/automations/preview:
+    post:
+      tags: [trading]
+      summary: Dry-run a rule against live facts - the only door to arming it (P10 D8)
+      description: |-
+        Two callers, one path. With `ruleId` this is a saved rule's dry run: the evaluation is written to
+        `automation_runs`, and the first one completes the rule's dry run, which is the only thing that lets it
+        arm. Without `ruleId` the builder's rows are compiled and evaluated and NOTHING is saved — the "show me
+        what this would have done" step has to work before the rule exists.
+
+        The facts are the engine's own (`automation.facts`), read from our tables: a preview that fed a rule
+        different numbers than the live pass would be a preview of a different rule.
+      operationId: previewAutomation
+      x-auth: user
+      x-rate-class: authed-write
+      x-cache: no-store
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                ruleId: {type: string, maxLength: 64}
+                kind: {type: string}
+                match: {type: string, enum: [all, any]}
+                triggers: {type: array}
+                actions: {type: array}
+                targets: {type: array}
+                maxLossMicro: {type: integer, minimum: 0}
+      responses:
+        "200":
+          description: the simulation, leaf by leaf, and the facts it read
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Stamped"
+                  - type: object
+                    required: [dryRun, simulation, note]
+                    properties:
+                      dryRun: {type: boolean}
+                      simulation: {type: object, description: "fires, leaves, and the sentence naming each leaf"}
+                      facts: {type: object, description: "what the trigger read: prices, age, imbalance, position"}
+                      dryRunCompleted: {type: boolean}
+                      rule: {$ref: "#/components/schemas/AutomationRule"}
+                      note: {type: string}
+        "400": {$ref: "#/components/responses/Validation"}
+        "401": {$ref: "#/components/responses/Denied"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "422": {$ref: "#/components/responses/Validation"}
+        "500": {$ref: "#/components/responses/Internal"}
+  /v1/automations/guards:
+    post:
+      tags: [trading]
+      summary: Arm or pause a rule - arming needs a completed dry run (P10 D8)
+      description: |-
+        Pausing is always allowed and takes effect immediately: the safe direction must never be blocked by a
+        precondition. Arming refuses twice over — `DRY_RUN_REQUIRED` until a dry run has been observed, and
+        `HALTED` while the daily-loss halt stands — and each refusal names the next step, because a user meets a
+        refusal like this while they can still act on it.
+      operationId: setAutomationState
+      x-auth: user
+      x-rate-class: authed-write
+      x-cache: no-store
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [ruleId, state]
+              properties:
+                ruleId: {type: string, minLength: 1, maxLength: 64}
+                state: {type: string, enum: [active, paused]}
+                reason: {type: string, maxLength: 200, description: "why YOU paused it; recorded in the run log"}
+      responses:
+        "200":
+          description: the rule in its new state
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Stamped"
+                  - type: object
+                    required: [rule, state, note]
+                    properties:
+                      rule: {$ref: "#/components/schemas/AutomationRule"}
+                      state: {type: string, enum: [active, paused]}
+                      note: {type: string}
+        "400": {$ref: "#/components/responses/Validation"}
+        "401": {$ref: "#/components/responses/Denied"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/Validation"}
+        "500": {$ref: "#/components/responses/Internal"}
+  /v1/alerts:
+    get:
+      tags: [trading]
+      summary: Alert rules with their window budget, cooldown and what they would do right now (P10 D9)
+      description: |-
+        The cooldown is not a separate setting: `firesPerWindow` per `windowMs` *is* one fire per
+        `windowMs/firesPerWindow`, and `cooldownRule` states that arithmetic in words so a user can check it.
+
+        `wouldDoNow` is the honest part — the plan for this rule at this instant: sent now, held for quiet hours,
+        batched into the digest, held by the rule's own cap, or refused because the plan does not cover the
+        channel. A list that showed "on" while quiet hours were holding everything is a list that gets called
+        broken at 2am.
+      operationId: listAlerts
+      x-auth: user
+      x-rate-class: authed-read
+      x-cache: no-store
+      responses:
+        "200":
+          description: this account's alert rules and its notification settings
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Stamped"
+                  - $ref: "#/components/schemas/AlertsList"
+        "401": {$ref: "#/components/responses/Denied"}
+        "500": {$ref: "#/components/responses/Internal"}
+    post:
+      tags: [trading]
+      summary: Create or edit one alert rule inline (P10 D9)
+      description: |-
+        The channel's plan is checked at SAVE time, not at fire time: a free account holding a webhook rule is a
+        rule that can never deliver, and finding that out when the alert was supposed to arrive is worse than a
+        402 that names the plan now. `ruleId` edits in place; without it a new rule is created.
+
+        Telegram is the default channel; email and webhook are the paid ones.
+      operationId: upsertAlert
+      x-auth: user
+      x-rate-class: authed-write
+      x-cache: no-store
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [kind]
+              properties:
+                ruleId: {type: string, maxLength: 64}
+                kind: {type: string, enum: [price_level, spread_widen, whale_fill, resolve_lead, illiquid_top,
+                                            new_market, manual]}
+                marketId: {type: string, maxLength: 64}
+                eventId: {type: string, maxLength: 64}
+                channel: {type: string, enum: [telegram, email, webhook]}
+                severity: {type: string, enum: [info, notice, urgent]}
+                firesPerWindow: {type: integer, minimum: 1, maximum: 24}
+                windowMs: {type: integer, minimum: 60000}
+                params: {type: object}
+                enabled: {type: boolean}
+      responses:
+        "200":
+          description: the rule as saved, with its cooldown stated as a rule
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Stamped"
+                  - type: object
+                    required: [rule, action, note]
+                    properties:
+                      rule: {$ref: "#/components/schemas/AlertRule"}
+                      action: {type: string, enum: [created, updated]}
+                      note: {type: string}
+        "400": {$ref: "#/components/responses/Validation"}
+        "401": {$ref: "#/components/responses/Denied"}
+        "402": {$ref: "#/components/responses/Denied"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "422": {$ref: "#/components/responses/Validation"}
+        "500": {$ref: "#/components/responses/Internal"}
+  /v1/alerts/test:
+    post:
+      tags: [trading]
+      summary: Fire a rule on purpose and record what WOULD happen (P10 D9)
+      description: |-
+        The test writes its own signal under a `test:` rule id, so the rule's real window, cooldown and delivery
+        history are untouched: a test that consumed the budget it is testing would poison the feature it
+        validates. What comes back is the plan — sent now, held for quiet hours, batched into the digest, or
+        refused by the plan — plus the `alert_deliveries` rows that record it.
+
+        No delivery transport runs in this build, so a `queued` row is the record of what would be sent, and the
+        response says so in `note` rather than implying a notification went out.
+      operationId: testAlert
+      x-auth: user
+      x-rate-class: authed-write
+      x-cache: no-store
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [ruleId]
+              properties:
+                ruleId: {type: string, minLength: 1, maxLength: 64}
+                channels: {type: array, description: "defaults to the rule's own channel"}
+                title: {type: string, maxLength: 160}
+      responses:
+        "200":
+          description: the per-channel plan for this alert, right now
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Stamped"
+                  - type: object
+                    required: [ruleId, plan, summary, note]
+                    properties:
+                      ruleId: {type: string}
+                      testSignalId: {type: integer}
+                      plan:
+                        type: array
+                        items: {$ref: "#/components/schemas/AlertPlan"}
+                      summary: {type: object}
+                      quietHours: {type: object}
+                      digest: {type: object}
+                      note: {type: string}
+        "400": {$ref: "#/components/responses/Validation"}
+        "401": {$ref: "#/components/responses/Denied"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "500": {$ref: "#/components/responses/Internal"}
+  /v1/alerts/deliveries:
+    get:
+      tags: [trading]
+      summary: Delivery history with per-channel status and the reason for anything held (P10 D9)
+      description: |-
+        `digest_scheduled` is HELD — quiet hours or a digest window — and `dropped_rate_limited` is REFUSED by the
+        rule's own cap. Two different facts, and a screen that renders them the same way sends a user looking for
+        a broken channel. `latencyMs` is null where nothing was sent: a zero on a row that never went out is the
+        kind of number that makes a dashboard lie with a straight face.
+
+        Test fires are present and flagged `isTest`, so a history can show them apart from real alerts.
+      operationId: listAlertDeliveries
+      x-auth: user
+      x-rate-class: authed-read
+      x-cache: no-store
+      parameters:
+        - {name: limit, in: query, required: false, schema: {type: integer, minimum: 1, maximum: 200, default: 50}}
+        - {name: channel, in: query, required: false, schema: {type: string, maxLength: 16}}
+      responses:
+        "200":
+          description: deliveries, newest first
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Stamped"
+                  - type: object
+                    required: [rows, counts, note]
+                    properties:
+                      rows:
+                        type: array
+                        items: {$ref: "#/components/schemas/AlertDelivery"}
+                      counts: {type: object}
+                      note: {type: string}
+        "401": {$ref: "#/components/responses/Denied"}
+        "500": {$ref: "#/components/responses/Internal"}
+  /v1/alerts/settings:
+    post:
+      tags: [trading]
+      summary: Quiet hours, digest mode and the default channel (P10 D9)
+      description: |-
+        Every field is optional and an absent field means "leave it": a settings form that required the whole
+        object would overwrite what it does not know, which is how a quiet window disappears when somebody
+        changes their digest time.
+
+        A quiet window needs both ends or neither, and a window that starts and ends at the same minute is
+        refused rather than treated as closed. Quiet hours hold everything, urgent included — a digest is our
+        batching, quiet hours are the user's instruction — and the response says so in `note` so the screen can
+        repeat it next to the control.
+      operationId: setAlertSettings
+      x-auth: user
+      x-rate-class: authed-write
+      x-cache: no-store
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                quietStartMin: {type: integer, minimum: -1, maximum: 1439, description: "minutes past midnight, -1 = off"}
+                quietEndMin: {type: integer, minimum: -1, maximum: 1439}
+                tzOffsetMin: {type: integer, minimum: -840, maximum: 840, description: "minutes EAST of UTC"}
+                digestMode: {type: string, enum: [off, hourly, daily]}
+                digestAtMin: {type: integer, minimum: 0, maximum: 1439}
+                defaultChannel: {type: string, enum: [telegram, email, webhook]}
+      responses:
+        "200":
+          description: the settings as saved, with what they mean right now
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Stamped"
+                  - $ref: "#/components/schemas/NotificationSettings"
+        "400": {$ref: "#/components/responses/Validation"}
+        "401": {$ref: "#/components/responses/Denied"}
+        "422": {$ref: "#/components/responses/Validation"}
+        "500": {$ref: "#/components/responses/Internal"}
+
   /v1/copy/configs:
     get:
       tags: [trading]
@@ -3142,10 +3627,436 @@ components:
                      OFF_TICK, BAD_MARKET_META, BELOW_MIN_SIZE, ZERO_SIZE, BAD_AMOUNT, OVER_ORDER_CAP,
                      PRICE_FAR_FROM_MID, TOO_MANY_OPEN, DAILY_CAP, IDEM_CONFLICT, IDEM_IN_PROGRESS,
                      IDEM_KEY_REQUIRED, RISK_UNAVAILABLE, SIGNER_UNAVAILABLE, BAD_REASON, NOT_FOUND, REFUSED,
+                     HALTED, RULE_CAP, DRY_RUN_REQUIRED, PLAN_REQUIRED,
                      VALIDATION, INTERNAL, UNAUTHENTICATED, SESSION_STALE, SESSION_REVOKED, SESSION_MISMATCH, ADMIN_REQUIRED, LOGIN_FAILED, ACCOUNT_LOCKED, TOTP_REQUIRED, TOTP_INVALID, TOTP_LOCKED, ADDRESS_COOLDOWN, ADDRESS_LIMIT, REMOVE_DURING_COOLDOWN, NO_SUCH_RESOURCE, REFRESH_UNKNOWN, REFRESH_REUSED, REFRESH_EXPIRED, TELEGRAM_REPLAY, TELEGRAM_INVALID, SECURITY_ENV_MISSING, KEYSTORE_TAMPER, BREAK_GLASS_DENIED, AUTHZ_UNDECLARED, BAD_FIELD, QUOTA_EXCEEDED, RADAR_SCOPE]
             message: {type: string, description: "user-safe by construction"}
             retryable: {type: boolean}
             requestId: {type: string}
+
+    AutomationRule:
+      type: object
+      required: [ruleId, name, kind, status, statusWhy, enabled, nextEvaluationMs, runsToday, maxPerDay,
+                 minIntervalMs, targets, trigger, actions]
+      description: |-
+        One rule as the console shows it. `status` is derived (active/paused/dry_run/halted) and `statusWhy` is
+        the sentence beside the badge: "why is this not firing" is a question about a sentence, and a badge with
+        a colour and no sentence is a badge nobody can act on.
+      properties:
+        ruleId: {type: string}
+        name: {type: string}
+        kind: {type: string}
+        status: {type: string, enum: [active, paused, dry_run, halted]}
+        statusWhy: {type: string}
+        mode: {type: string, enum: [dry_run, live]}
+        enabled: {type: boolean}
+        pausedReason: {type: string}
+        failureCount: {type: integer}
+        lastError: {type: string}
+        dryRunCompletedMs: {type: ["integer", "null"]}
+        lastFiredMs: {type: ["integer", "null"]}
+        lastEvaluationMs: {type: ["integer", "null"]}
+        nextEvaluationMs: {type: integer}
+        runsToday: {type: integer}
+        maxPerDay: {type: integer}
+        minIntervalMs: {type: integer}
+        humanPriorityMs: {type: integer}
+        maxLossMicro: {type: integer}
+        targets:
+          type: array
+          description: "the markets this rule watches; the engine evaluates the rule once per target"
+          items:
+            type: object
+            additionalProperties: true
+            properties:
+              marketId: {type: string}
+              tokenId: {type: string}
+        trigger:
+          type: object
+          additionalProperties: true
+          description: |-
+            The compiled trigger tree as the engine stores it: `all`/`any` wrapping rows of literals, or a single
+            leaf. Opaque here on purpose — the builder is the only thing that edits it, and the run log is what
+            explains it — but `additionalProperties: true` is stated so a client may read a leaf's own fields.
+        actions:
+          type: array
+          description: "the engine executes the first executable row"
+          items:
+            type: object
+            additionalProperties: true
+            required: [kind]
+            properties:
+              kind: {type: string}
+        lastRun:
+          oneOf:
+            - type: "null"
+            - $ref: "#/components/schemas/AutomationRunRow"
+
+    AutomationTemplate:
+      type: object
+      required: [templateId, name, kind, trigger, actions, available, verdict, blockingReason, why, feeArithmetic]
+      description: |-
+        A template with the decision it carries. `available: false` is not an omission — the withheld entry
+        template is listed WITH the arithmetic that withheld it, because a user deserves to read the numbers
+        rather than wonder whether the feature is missing.
+      properties:
+        templateId: {type: string}
+        name: {type: string}
+        kind: {type: string}
+        trigger:
+          type: object
+          additionalProperties: true
+          description: "the template's own trigger tree, in the same shape a saved rule stores"
+        actions:
+          type: array
+          description: "what the template does when it fires"
+          items:
+            type: object
+            additionalProperties: true
+            required: [kind]
+            properties:
+              kind: {type: string}
+        available: {type: boolean}
+        verdict: {type: string}
+        blockingReason: {type: string}
+        why: {type: string}
+        feeArithmetic:
+          oneOf:
+            - type: "null"
+            - $ref: "#/components/schemas/FeeArithmetic"
+
+    LossHalt:
+      type: object
+      required: [halted, thresholdMicro, realizedMicro, trippedMs, acknowledgeHint, note]
+      description: |-
+        The daily-loss halt, as the banner shows it. Read from `loss_halts` rather than recomputed: a second
+        derivation of "is this account halted" is a second answer to a question that decides whether money moves.
+      properties:
+        halted: {type: boolean}
+        thresholdMicro: {type: integer}
+        realizedMicro: {type: integer, description: "signed"}
+        lossMicro: {type: integer}
+        trippedMs: {type: integer}
+        acknowledgeHint: {type: string}
+        note: {type: string}
+
+    AlertRule:
+      type: object
+      required: [ruleId, kind, target, enabled, severity, channel, channelAllowed, channelNote, firesPerWindow,
+                 windowMs, cooldownMs, cooldownRule, cooldownNote, firesInWindow, remainingInWindow, nextAllowedMs,
+                 quietHours, digest, wouldDoNow, lastDelivery, params, engineKind, evaluated, evaluator, createdMs]
+      description: |-
+        One alert rule with its budget made explicit: `cooldownRule` states `firesPerWindow` per `windowMs` as
+        a sentence ("3 per 1h = one every 20m at most"), and `wouldDoNow` is the plan for this instant.
+      properties:
+        ruleId: {type: string}
+        kind: {type: string, enum: [price_level, spread_widen, whale_fill, resolve_lead, illiquid_top, new_market,
+                                    manual]}
+        target:
+          type: object
+          required: [marketId, eventId]
+          description: "marketId and/or eventId; a rule with neither cannot fire"
+          properties:
+            marketId: {type: ["string", "null"]}
+            eventId: {type: ["string", "null"]}
+        enabled: {type: boolean}
+        severity: {type: string, enum: [info, notice, urgent]}
+        channel: {type: string, enum: [telegram, email, webhook]}
+        channelAllowed: {type: boolean}
+        channelNote: {type: string}
+        firesPerWindow: {type: integer}
+        windowMs: {type: integer}
+        cooldownMs: {type: integer}
+        cooldownRule: {type: string}
+        cooldownNote: {type: string}
+        firesInWindow: {type: integer}
+        remainingInWindow: {type: integer}
+        nextAllowedMs: {type: ["integer", "null"]}
+        params:
+          type: object
+          additionalProperties: true
+          description: "the user's own params, as saved — what the inline editor reopens on"
+        engineKind:
+          type: ["string", "null"]
+          description: "the engine kind this rule is evaluated by; null means no loop is watching it"
+        evaluated: {type: boolean}
+        evaluator: {type: string, description: "the sentence that says whether a loop reads this rule, and which"}
+        quietHours: {$ref: "#/components/schemas/QuietState"}
+        digest: {$ref: "#/components/schemas/DigestState"}
+        wouldDoNow: {$ref: "#/components/schemas/AlertPlan"}
+        lastDelivery:
+          oneOf:
+            - type: "null"
+            - $ref: "#/components/schemas/LastDelivery"
+        createdMs: {type: integer}
+
+    QuietState:
+      type: object
+      required: [configured, active, untilMs, note]
+      description: |-
+        Quiet hours as a state: whether a window is configured at all, whether it is holding RIGHT NOW, and the
+        sentence the list shows. `configured` is a separate field from `active` because "off" and "in a window that
+        has not started yet" are different answers, and a screen that conflated them would tell a user their alerts
+        are being held when they are not.
+      properties:
+        configured: {type: boolean}
+        active: {type: boolean}
+        untilMs: {type: ["integer", "null"]}
+        note: {type: string}
+
+    DigestState:
+      type: object
+      required: [mode, deferred, atMs, note]
+      description: |-
+        Whether this alert would be batched rather than sent, and when it would go out. `deferred` is true only when
+        the digest is what holds it: an urgent alert breaches a digest, and `deferred` stays false.
+      properties:
+        mode: {type: string, enum: [off, hourly, daily]}
+        deferred: {type: boolean}
+        atMs: {type: ["integer", "null"]}
+        note: {type: string}
+
+    LastDelivery:
+      type: object
+      required: [channel, status, reason, atMs, title]
+      description: "the newest delivery for a rule, so the list can show what happened last without a second read"
+      properties:
+        channel: {type: string}
+        status: {type: string}
+        reason: {type: string}
+        atMs: {type: integer}
+        title: {type: string}
+
+    AlertDelivery:
+      type: object
+      required: [deliveryId, ruleId, kind, engineKind, channel, status, reason, queuedMs, sentMs, latencyMs,
+                 severity, title, isTest]
+      description: |-
+        One channel attempt. `digest_scheduled` is held and `dropped_rate_limited` is refused by the rule's own
+        cap: two different facts, kept apart so a user does not go looking for a broken channel. `isTest` marks a
+        test fire, which is recorded but never counted as a real alert.
+      properties:
+        deliveryId: {type: integer}
+        ruleId: {type: string}
+        kind: {type: string, description: "the SCREEN's word for the kind, which is the vocabulary the user chose"}
+        engineKind: {type: string, description: "the engine's own kind, kept beside it so a log line matches a row"}
+        channel: {type: string}
+        status: {type: string, enum: [queued, sent, digest_scheduled, dropped_rate_limited, failed]}
+        reason: {type: string}
+        queuedMs: {type: integer}
+        sentMs: {type: ["integer", "null"]}
+        latencyMs: {type: ["integer", "null"]}
+        severity: {type: string}
+        title: {type: string}
+        isTest: {type: boolean}
+
+    NotificationSettings:
+      type: object
+      required: [quietStartMin, quietEndMin, tzOffsetMin, digestMode, digestAtMin, defaultChannel, channels, note,
+                 quietHours, digestNow]
+      description: |-
+        One row per account, materialised with these defaults on first read: Telegram, quiet hours OFF (-1 for
+        both ends — 0 would mean midnight-to-midnight, a mute button wearing a time window's clothes), digest OFF,
+        UTC until the client says where the user is. The offset is sent by the client and never guessed: a quiet
+        window evaluated in the wrong timezone is a setting that silently does not work.
+      properties:
+        quietStartMin: {type: integer, description: "minutes past midnight in the user's offset; -1 = off"}
+        quietEndMin: {type: integer}
+        tzOffsetMin: {type: integer, description: "minutes east of UTC"}
+        digestMode: {type: string, enum: [off, hourly, daily]}
+        digestAtMin: {type: integer}
+        defaultChannel: {type: string, enum: [telegram, email, webhook]}
+        channels:
+          type: array
+          description: "each channel with the plan it needs, so a plan check is data rather than a client constant"
+          items:
+            type: object
+            required: [channel, plan, isDefault]
+            properties:
+              channel: {type: string}
+              plan: {type: string}
+              isDefault: {type: boolean}
+        quietHours: {$ref: "#/components/schemas/QuietState"}
+        digestNow: {$ref: "#/components/schemas/DigestState"}
+        note: {type: string}
+
+    AlertPlan:
+      type: object
+      required: [channel, decision, status, sentence]
+      description: |-
+        What one channel would do with one alert, decided now: sent, held for quiet hours, batched into the digest,
+        held by the rule's own cap, or refused because the plan does not cover the channel. One name, used both by
+        the list's `wouldDoNow` and by a test fire's rows, because they are the same answer asked twice.
+      properties:
+        channel: {type: string}
+        decision: {type: string, enum: [send_now, quiet_hours, digest, rate_limited, refused]}
+        status: {type: string}
+        reason: {type: string}
+        atMs: {type: ["integer", "null"]}
+        sentence: {type: string}
+
+    BuilderField:
+      type: object
+      required: [name, label, type]
+      description: |-
+        One field of one trigger or action row. The builder renders these and nothing else: a row is a set of
+        literals, there is no expression syntax, and this is the list of what the engine will accept.
+      properties:
+        name: {type: string}
+        label: {type: string, description: "the word the form shows; the engine's own name is in `name`"}
+        type: {type: string, description: "select | price | shares | notional | time_ms | integer | bool | text"}
+        options: {type: array, items: {type: string}, description: "present on a select, and the only values it takes"}
+        default: {description: "the value the row starts on, so a saved rule is never an empty string"}
+        min: {type: integer}
+        max: {type: integer}
+        required: {type: boolean}
+        help: {type: string}
+
+    BuilderKind:
+      type: object
+      required: [kind, label, fields]
+      properties:
+        kind: {type: string}
+        label: {type: string}
+        fields:
+          type: array
+          items: {$ref: "#/components/schemas/BuilderField"}
+
+    BuilderVocabulary:
+      type: object
+      required: [triggers, actions, joiners, limits, note]
+      description: |-
+        Everything the visual builder needs to render itself, including the limits it enforces. Both halves of the
+        form are here — "when" and "then" — because the builder is one form and a vocabulary split across two
+        reads is a form that can render half of itself.
+      properties:
+        triggers:
+          type: array
+          items: {$ref: "#/components/schemas/BuilderKind"}
+        actions:
+          type: array
+          items: {$ref: "#/components/schemas/BuilderKind"}
+        joiners:
+          type: object
+          additionalProperties: {type: string}
+          description: |-
+            The AND/OR grouping the rows may use, as a map of the engine's own key to the word the form shows
+            (`{all: AND, any: OR}`). A map rather than a list because the word is copy and the key is the engine's:
+            a client that hard-coded "AND" would be a second place the vocabulary lives.
+        limits:
+          type: object
+          required: [maxLeaves, maxNestDepth, minIntervalMs, maxRunsPerDay]
+          properties:
+            maxLeaves: {type: integer}
+            maxNestDepth: {type: integer}
+            minIntervalMs: {type: integer}
+            maxRunsPerDay: {type: integer}
+        note: {type: string}
+
+    AutomationCaps:
+      type: object
+      required: [concurrentRuleCap, globalRunsPerDay, activeRules, note]
+      description: |-
+        The two caps a user meets: their own concurrent-rule cap and the platform's daily run budget. Both are
+        shown because a rule that cannot run because the PLATFORM is out of budget is a different fact from one
+        that hit its own cap, and a user who cannot tell them apart reports the wrong bug.
+      properties:
+        concurrentRuleCap: {type: integer}
+        globalRunsPerDay: {type: integer}
+        activeRules: {type: integer}
+        note: {type: string}
+
+    AutomationRunRow:
+      type: object
+      required: [ruleId, mode, outcome, reason, atMs, sentence]
+      description: |-
+        One evaluation. Every evaluation is a row, including the ones that did nothing: "why did the bot not act"
+        is the question this surface exists to answer, and a log that only holds the actions answers the other one.
+      properties:
+        ruleId: {type: string}
+        mode: {type: string, enum: [dry_run, live]}
+        outcome: {type: string, enum: [placed, would_place, skipped, failed]}
+        reason: {type: string}
+        denyCode: {type: string}
+        intentId: {type: string}
+        atMs: {type: integer}
+        leaves: {type: string, description: "the trigger's leaves with the values they held when they were read"}
+        sentence: {type: string}
+
+    AutomationList:
+      type: object
+      required: [rules, caps, vocabulary, note]
+      description: |-
+        The automation console's read: this account's rules, the halt state, the caps and the builder's vocabulary.
+        One read rather than four because the form cannot be rendered or the banner decided from a partial answer.
+      properties:
+        rules:
+          type: array
+          items: {$ref: "#/components/schemas/AutomationRule"}
+        halt:
+          oneOf:
+            - type: "null"
+            - $ref: "#/components/schemas/LossHalt"
+        caps: {$ref: "#/components/schemas/AutomationCaps"}
+        vocabulary: {$ref: "#/components/schemas/BuilderVocabulary"}
+        note: {type: string}
+
+    TemplateCatalog:
+      type: object
+      required: [templates, ships, verdict, why]
+      description: |-
+        The template catalog with the arithmetic that decides it. Kept as a name so the screen that renders it (the
+        "start from a template" panel) reads the same shape the API promises.
+      properties:
+        templates:
+          type: array
+          items: {$ref: "#/components/schemas/AutomationTemplate"}
+        feeArithmetic:
+          oneOf:
+            - type: "null"
+            - $ref: "#/components/schemas/FeeArithmetic"
+        ships: {type: boolean}
+        verdict: {type: string}
+        why: {type: string}
+        blockingReason: {type: string}
+
+    FeeArithmetic:
+      type: object
+      description: |-
+        The numbers behind the entry verdict: the fee actually charged per share, the cost of crossing the spread,
+        what our own latency adds, and the edge that has to clear all three. `edgeAvailableBp` is a MEASUREMENT, so
+        it is null when nothing measured it — the response says so rather than inventing a flattering number.
+      properties:
+        feeType: {type: ["string", "null"]}
+        feeRateBps: {type: ["integer", "null"]}
+        maker: {type: ["boolean", "null"]}
+        legs: {type: ["integer", "null"]}
+        priceMicro: {type: ["integer", "null"]}
+        breakEvenWinRateBp: {type: ["integer", "null"]}
+        impliedProbBp: {type: ["integer", "null"]}
+        feesPerShareMicro: {type: ["integer", "null"]}
+        spreadCostMicro: {type: ["integer", "null"]}
+        spreadCostBp: {type: ["integer", "null"]}
+        latencyMs: {type: ["integer", "null"]}
+        latencyCostBp: {type: ["integer", "null"]}
+        edgeNeededBp: {type: ["integer", "null"]}
+        edgeAvailableBp: {type: ["integer", "null"]}
+        builderBps: {type: ["integer", "null"]}
+        assumptions: {type: ["string", "null"]}
+
+    AlertsList:
+      type: object
+      required: [rules, settings, plan, ruleCount, note]
+      description: |-
+        The alert list as one name, so a front end derives its type from the contract instead of transcribing the
+        shape by hand — and the transcription is the thing that drifts.
+      properties:
+        rules:
+          type: array
+          items: {$ref: "#/components/schemas/AlertRule"}
+        settings: {$ref: "#/components/schemas/NotificationSettings"}
+        plan: {type: string, description: "the plan the channel checks read"}
+        ruleCount: {type: integer}
+        note: {type: string}
 
   responses:
     NotFound:

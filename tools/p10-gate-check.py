@@ -59,14 +59,19 @@ PY = sys.executable
 #: (`TABLE_FOR_PATH`), because a path missing from that table is a path whose status sets are never compared.
 P10_PATHS = ("/v1/tape/fills", "/v1/tape/facets", "/v1/whales", "/v1/traders/{anon}", "/v1/copy/configs",
              "/v1/copy/configs/guards", "/v1/copy/configs/monitor", "/v1/copy/sources", "/v1/me/portfolio",
-             "/v1/whale-views")
+             "/v1/whale-views", "/v1/automations", "/v1/automations/runs", "/v1/automations/templates",
+             "/v1/alerts", "/v1/alerts/deliveries")
 
 #: The four reads the phase's own doc calls public, and the seven that are the caller's own state.
 PUBLIC_OPS = ("GET /v1/tape/fills", "GET /v1/tape/facets", "GET /v1/whales", "GET /v1/traders/{anon}")
 USER_OPS = ("GET /v1/copy/configs", "POST /v1/copy/configs", "POST /v1/copy/configs/guards",
             "GET /v1/copy/sources",
             "GET /v1/copy/configs/monitor", "GET /v1/me/portfolio", "GET /v1/whale-views",
-            "POST /v1/whale-views")
+            "POST /v1/whale-views",
+            "GET /v1/automations", "POST /v1/automations", "POST /v1/automations/preview",
+            "POST /v1/automations/guards", "GET /v1/automations/runs", "GET /v1/automations/templates",
+            "GET /v1/alerts", "POST /v1/alerts", "POST /v1/alerts/test", "GET /v1/alerts/deliveries",
+            "POST /v1/alerts/settings")
 
 #: Anything that looks like an Ethereum address. Deliberately loose: 6+ hex chars after `0x` catches a
 #: truncated address too, and a false positive here is a sentence to rewrite, not a leak.
@@ -326,21 +331,26 @@ def float_findings(text: str, where: str) -> list:
 
 # ---------------------------------------------------------------------------------------------------- checks
 def c1_contract(p: Probe) -> tuple[str, bool, str]:
-    """The contract, the served routes and the authz table agree about P10's twelve operations."""
+    """The contract, the router and the authz table agree about P10's fifteen surfaces (D1-D9)."""
     rc, out = sh([PY, "tools/check-openapi.py"], timeout=600)
     tail = [l for l in out.splitlines() if l.startswith("check-openapi:")]
     ok_openapi = rc == 0 and any(" 0 failed" in l for l in tail)
     yaml_text = read(CONTRACT)
     checker = read(ROOT / "tools" / "check-openapi.py")
     missing_contract = [path for path in P10_PATHS if ("  %s:" % path) not in yaml_text]
-    missing_table = [path for path in P10_PATHS if ('"%s":' % path) not in checker]
+    # A path is in the table when it appears as its own key, either bare (`"/v1/x": ...` — one response set for
+    # every verb) or inside a verb-keyed tuple (`("POST", "/v1/x"): ...`, which exists because a GET and a POST on
+    # the same path answer different status sets). Both forms compare the served status sets; only a path absent
+    # from both is unguarded. The D9 paths are verb-keyed, which is why this accepts either spelling.
+    missing_table = [path for path in P10_PATHS
+                     if not any(('"%s"%s' % (path, tail)) in checker for tail in (":", ")", ","))]
     p.app()                     # app.py is what applies the P10 rows to the registry; import it first
     from polygm_core.security import authz                                        # noqa: PLC0415
     public = [op for op in PUBLIC_OPS if authz.LEVELS_TABLE.get(op, ("",))[0] == authz.PUBLIC]
     user = [op for op in USER_OPS if authz.LEVELS_TABLE.get(op, ("",))[0] == authz.USER]
     ok = (ok_openapi and not missing_contract and not missing_table
           and len(public) == len(PUBLIC_OPS) and len(user) == len(USER_OPS))
-    return ("the contract, the router and the authz table agree on P10's twelve operations", ok,
+    return ("the contract, the router and the authz table agree on P10's fifteen surfaces", ok,
             "%s; paths in the contract %d/%d, in TABLE_FOR_PATH %d/%d; public %d/%d, user %d/%d"
             % (tail[-1] if tail else out.strip()[-90:], len(P10_PATHS) - len(missing_contract), len(P10_PATHS),
                len(P10_PATHS) - len(missing_table), len(P10_PATHS), len(public), len(PUBLIC_OPS), len(user),
@@ -823,8 +833,387 @@ def c11_tape_frame_budget(p: Probe) -> tuple[str, bool, str]:
             not findings, detail)
 
 
+# ---------------------------------------------------------------------------------- D8/D9 scanners (canaried)
+def automation_findings(rules: list, catalog: dict | None = None, halt: dict | None = None) -> list:
+    """A rule list and a template catalog that a person can act on.
+
+    Four plantings this looks for: a rule whose badge carries no sentence, a rule that is `active` without a
+    completed dry run (the one state the whole feature exists to prevent), a withheld template with no reason
+    (the user cannot tell "broken" from "the maths said no"), and a halt banner with nothing to acknowledge.
+    """
+    out = []
+    for rule in rules or []:
+        rid = rule.get("ruleId") or "?"
+        if not rule.get("statusWhy"):
+            out.append("rule %s: no sentence beside the status badge" % rid)
+        if rule.get("status") not in ("active", "paused", "dry_run", "halted"):
+            out.append("rule %s: status %r is not one of the four" % (rid, rule.get("status")))
+        if rule.get("status") == "active" and not rule.get("dryRunCompletedMs"):
+            out.append("rule %s: armed with no completed dry run" % rid)
+        if halt and halt.get("halted") and rule.get("status") != "halted":
+            out.append("rule %s: shows %r while the account is halted" % (rid, rule.get("status")))
+    if catalog is not None:
+        for tpl in catalog.get("templates") or []:
+            tid = tpl.get("templateId") or "?"
+            if not tpl.get("available") and not (tpl.get("blockingReason") and tpl.get("why")):
+                out.append("template %s: withheld with no reason stated" % tid)
+            if tpl.get("available") and tpl.get("kind") == "entry" and not tpl.get("feeArithmetic"):
+                out.append("template %s: an entry rule offered with no fee arithmetic" % tid)
+    if halt and halt.get("halted") and not (halt.get("note") and halt.get("acknowledgeHint")):
+        out.append("a halt banner with no note and no way to acknowledge it")
+    return out
+
+
+def alert_findings(payload: dict) -> list:
+    """The alerts list as the screen reads it: every rule states its own fire budget and what would happen now."""
+    out = []
+    settings = payload.get("settings") or {}
+    for key in ("quietHours", "digestNow"):
+        if not isinstance(settings.get(key), dict) or not (settings.get(key) or {}).get("note"):
+            out.append("settings: %s is missing from the list read" % key)
+    for row in settings.get("channels") or []:
+        if not row.get("plan"):
+            out.append("channel %r states no plan" % row.get("channel"))
+    for rule in payload.get("rules") or []:
+        rid = rule.get("ruleId") or "?"
+        if not rule.get("cooldownRule"):
+            out.append("rule %s: no fire-budget sentence" % rid)
+        now = rule.get("wouldDoNow") or {}
+        if not now.get("sentence"):
+            out.append("rule %s: would-do-now with no sentence" % rid)
+        if rule.get("channelAllowed") is False and not rule.get("channelNote"):
+            out.append("rule %s: a channel the plan refuses, with no reason" % rid)
+    return out
+
+
+def delivery_findings(rows: list) -> list:
+    """A history where held, rate-limited and failed are different facts, and a row that was never sent has no
+    latency — a `latencyMs` on a `queued` row is a claim about a send that did not happen."""
+    out = []
+    for row in rows or []:
+        did = row.get("deliveryId")
+        if not row.get("status"):
+            out.append("delivery %s: no status" % did)
+        if not row.get("reason"):
+            out.append("delivery %s: no reason" % did)
+        if not row.get("channel"):
+            out.append("delivery %s: no channel" % did)
+        if row.get("status") in ("queued", "held", "digest_scheduled") and row.get("latencyMs") is not None:
+            out.append("delivery %s: %s row claims a latency" % (did, row.get("status")))
+        if row.get("sentMs") and not row.get("latencyMs") and row.get("latencyMs") != 0:
+            out.append("delivery %s: sent with no latency recorded" % did)
+    return out
+
+
+def c12_builder_safety(p: Probe) -> tuple[str, bool, str]:
+    """A rule cannot be saved armed, cannot be armed without an observed dry run, and every evaluation is a row.
+
+    The three refusals are the whole D8 safety story, so the gate walks them rather than reading about them:
+    `dryRunOnly` on the create, `DRY_RUN_REQUIRED` on the first arm attempt, then the preview that earns the arm.
+    """
+    from polygm_core.automation import engine as au_engine                            # noqa: PLC0415
+    findings = []
+    if p.client().get("/v1/automations").status_code != 401:
+        findings.append("the rule list answered an anonymous caller")
+    _c, listed = p.get("/v1/automations")
+    vocab = listed.get("vocabulary") or {}
+    kinds = sorted(str(x.get("kind")) for x in (vocab.get("triggers") or []))
+    if kinds != sorted(au_engine.TRIGGER_KINDS):
+        findings.append("the builder's triggers are not the engine's: %s" % kinds)
+    actions = sorted(str(x.get("kind")) for x in (vocab.get("actions") or []))
+    if actions != sorted(au_engine.ACTION_KINDS):
+        findings.append("the builder's actions are not the engine's: %s" % actions)
+    if (vocab.get("joiners") or {}) != {"all": "AND", "any": "OR"}:
+        findings.append("the joiner vocabulary is not AND/OR: %r" % (vocab.get("joiners"),))
+    limits = vocab.get("limits") or {}
+    if limits.get("maxLeaves") != au_engine.MAX_LEAVES or limits.get("minIntervalMs") != au_engine.MIN_INTERVAL_MS:
+        findings.append("the stated limits are not the engine's: %r" % (limits,))
+    cancel = next((x for x in (vocab.get("actions") or []) if x.get("kind") == "cancel_open"), None)
+    scope = next((f for f in (cancel or {}).get("fields") or [] if f.get("name") == "scope"), {})
+    if "all" in (scope.get("options") or []):
+        findings.append("the builder offers a scope the engine refuses (cancel everything)")
+
+    market = str((p.rows("SELECT id FROM markets ORDER BY id LIMIT 1") or [("",)])[0][0])
+    body = {"kind": "exit", "name": "gate exit-before-resolution", "match": "all",
+            "triggers": [{"kind": "time", "at_ms": p.app()._now_ms() + 600_000, "once": True}],
+            "actions": [{"kind": "close_position", "method": "market", "max_slippage_bps": 100}],
+            "targets": [{"marketId": market}], "maxPerDay": 12, "minIntervalMs": 60_000,
+            "maxLossMicro": 5_000_000}
+    code, created = p.post("/v1/automations", body)
+    rule = created.get("rule") or {}
+    rid = rule.get("ruleId") or ""
+    if code != 200 or not rid:
+        return ("a rule cannot be saved armed, and cannot be armed without an observed dry run", False,
+                "the create answered %d: %s" % (code, json.dumps(created)[:200]))
+    if not created.get("dryRunOnly") or rule.get("status") != "dry_run" or rule.get("enabled") is not False:
+        findings.append("a saved rule is not a dry run: status=%r enabled=%r" % (rule.get("status"), rule.get("enabled")))
+    if rule.get("dryRunCompletedMs"):
+        findings.append("a brand-new rule claims a completed dry run")
+    if not rule.get("statusWhy"):
+        findings.append("the new rule's status carries no sentence")
+
+    arm = p.post("/v1/automations/guards", {"ruleId": rid, "state": "active"})
+    if arm[0] != 409 or (arm[1].get("error") or {}).get("code") != "DRY_RUN_REQUIRED":
+        findings.append("arming without a dry run answered %d %s" % (arm[0], json.dumps(arm[1])[:90]))
+
+    prev = p.post("/v1/automations/preview", {"ruleId": rid})
+    if prev[0] != 200 or prev[1].get("dryRun") is not True:
+        findings.append("the dry run answered %d: %s" % (prev[0], json.dumps(prev[1])[:120]))
+
+    arm2 = p.post("/v1/automations/guards", {"ruleId": rid, "state": "active"})
+    armed_rule = arm2[1].get("rule") or {}
+    if arm2[0] != 200 or armed_rule.get("status") != "active" or armed_rule.get("enabled") is not True:
+        findings.append("arming after the dry run answered %d %s" % (arm2[0], json.dumps(arm2[1])[:120]))
+    pause = p.post("/v1/automations/guards", {"ruleId": rid, "state": "paused"})
+    if pause[0] != 200 or (pause[1].get("state") != "paused"):
+        findings.append("pausing answered %d %s" % (pause[0], json.dumps(pause[1])[:90]))
+
+    if p.client().post("/v1/automations", json=body, headers=p.user_headers()).status_code != 400:
+        findings.append("a write with no Idempotency-Key was accepted")
+
+    _rc, runs = p.get("/v1/automations/runs", ruleId=rid)
+    rows = runs.get("rows") or []
+    if not rows:
+        findings.append("the dry run was not recorded in the history")
+    for row in rows:
+        if not row.get("outcome") or not row.get("sentence"):
+            findings.append("run %s: outcome %r with sentence %r" % (row.get("atMs"), row.get("outcome"),
+                                                                    row.get("sentence")))
+    if sorted((runs.get("counts") or {}).keys()) != ["failed", "placed", "skipped", "would_place"]:
+        findings.append("the run counts do not separate placed/would-place/skipped/failed: %r" % (runs.get("counts"),))
+    modes = sorted({r.get("mode") for r in rows})
+    ok = not findings
+    return ("a rule cannot be saved armed, and cannot be armed without an observed dry run", ok,
+            "vocabulary %d triggers/%d actions matches the engine, create dryRunOnly, arm-before-dry-run %d, "
+            "arm-after %s, pause %s, %d run rows (%s), counts %s; %d findings%s"
+            % (len(kinds), len(actions), arm[0], armed_rule.get("status"), pause[1].get("state"), len(rows),
+               "/".join(str(m) for m in modes), json.dumps(runs.get("counts") or {}), len(findings),
+               ("; " + "; ".join(findings[:3])) if findings else ""))
+
+
+def c13_template_fees(p: Probe) -> tuple[str, bool, str]:
+    """The 5-minute crypto template is offered only when its own fee arithmetic works — shown in both states.
+
+    One catalog with no measured edge and one with an edge large enough to clear the break-even. The first must
+    withhold the entry half *and say why*; the second must offer it. A gate that only ever saw the withheld state
+    could not tell "correctly withheld" from "hard-coded off".
+    """
+    _c, bare = p.get("/v1/automations/templates")
+    _c2, edged = p.get("/v1/automations/templates", edgeAvailableBp=900)
+    findings = automation_findings([], catalog=bare) + automation_findings([], catalog=edged)
+    five = next((t for t in (bare.get("templates") or []) if t.get("templateId") == "entry-momentum-5m"), None)
+    five_e = next((t for t in (edged.get("templates") or []) if t.get("templateId") == "entry-momentum-5m"), None)
+    if five is None or five_e is None:
+        return ("the crypto 5-minute template is offered only when its fee arithmetic works", False,
+                "the catalog does not list the 5-minute template")
+    if five.get("available") is not False or bare.get("ships") is not False:
+        findings.append("with no measured edge the entry template was offered anyway")
+    if five.get("blockingReason") != "no_measured_edge":
+        findings.append("the withheld template's blocking reason is %r" % five.get("blockingReason"))
+    if five_e.get("available") is not True or edged.get("ships") is not True:
+        findings.append("an edge above break-even did not release the entry template")
+    arith = five.get("feeArithmetic") or {}
+    if not (isinstance(arith.get("breakEvenWinRateBp"), int) and isinstance(arith.get("impliedProbBp"), int)):
+        findings.append("the fee arithmetic has no break-even vs implied comparison: %r" % (arith,))
+    elif arith["breakEvenWinRateBp"] <= arith["impliedProbBp"]:
+        findings.append("fees do not make the break-even harder than the implied probability")
+    if arith.get("feeType") != "taker" or not arith.get("legs"):
+        findings.append("the arithmetic does not state the fee type and the leg count: %r" % (arith,))
+    protective = [t for t in (bare.get("templates") or []) if t.get("templateId") != "entry-momentum-5m"]
+    if len(protective) < 3 or any(not t.get("available") for t in protective):
+        findings.append("the protective templates are not all offered: %r"
+                        % [(t.get("templateId"), t.get("available")) for t in protective])
+    if any(not t.get("why") for t in protective):
+        findings.append("a protective template is offered with no reason")
+    ok = not findings
+    return ("the crypto 5-minute template is offered only when its own fee arithmetic works", ok,
+            "no edge: %s (%s); edge %dbp: %s; break-even %s vs implied %s, %s fees, %d legs; %d protective "
+            "templates offered; %d findings%s"
+            % (five.get("verdict"), five.get("blockingReason"), 900, five_e.get("verdict"),
+               arith.get("breakEvenWinRateBp"), arith.get("impliedProbBp"), arith.get("feeType"),
+               arith.get("legs"), len(protective), len(findings),
+               ("; " + "; ".join(findings[:3])) if findings else ""))
+
+
+def c14_alert_plans(p: Probe) -> tuple[str, bool, str]:
+    """D9 end to end: the plan is stated before it happens, quiet hours hold even urgent, and a test costs nothing.
+
+    The order is the user's: save a rule -> read what it would do now -> turn quiet hours on -> see the plan change
+    -> test fire -> read the history. The last assertion is the one that makes the feature honest: the test fire
+    must leave the rule's own window untouched and appear in the history as a test.
+    """
+    findings = []
+    if p.client().get("/v1/alerts").status_code != 401:
+        findings.append("the alerts list answered an anonymous caller")
+    _c, listed = p.get("/v1/alerts")
+    findings += alert_findings(listed)
+
+    market = str((p.rows("SELECT id FROM markets ORDER BY id LIMIT 1") or [("",)])[0][0])
+    code, created = p.post("/v1/alerts", {"kind": "whale_fill", "marketId": market, "channel": "telegram",
+                                          "severity": "notice", "firesPerWindow": 3, "windowMs": 3_600_000})
+    rule = created.get("rule") or {}
+    rid = rule.get("ruleId") or ""
+    if code != 200 or not rid:
+        return ("the plan is stated before it happens, quiet hours hold even urgent, and a test costs nothing",
+                False, "the alert save answered %d: %s" % (code, json.dumps(created)[:200]))
+    if "3 per 1h" not in str(rule.get("cooldownRule") or ""):
+        findings.append("the rule's fire budget is not stated as a rule: %r" % rule.get("cooldownRule"))
+    if rule.get("firesInWindow") != 0:
+        findings.append("a brand-new rule already has fires in its window")
+    if (rule.get("wouldDoNow") or {}).get("decision") != "send_now":
+        findings.append("a free-plan telegram rule with quiet hours off would not send now: %r"
+                        % (rule.get("wouldDoNow"),))
+
+    webhook = p.post("/v1/alerts", {"kind": "whale_fill", "marketId": market, "channel": "webhook",
+                                    "severity": "notice", "firesPerWindow": 1, "windowMs": 3_600_000})
+    if webhook[0] != 402 or (webhook[1].get("error") or {}).get("code") != "PLAN_REQUIRED" \
+            or "pro" not in json.dumps(webhook[1]):
+        findings.append("a webhook rule on the free plan answered %d %s"
+                        % (webhook[0], json.dumps(webhook[1])[:90]))
+
+    # Quiet hours around the API's own "now", in its own local clock: a window that does not contain this moment
+    # would test nothing, and one that wraps midnight is refused by design.
+    local = (p.app()._now_ms() // 60_000) % 1440
+    start, end = (0, 60) if local < 60 else (local - 30, local + 30)
+    p.post("/v1/alerts/settings", {"quietStartMin": start, "quietEndMin": end, "tzOffsetMin": 0,
+                                   "digestMode": "off"})
+    _c2, quiet = p.get("/v1/alerts")
+    qstate = (quiet.get("settings") or {}).get("quietHours") or {}
+    if qstate.get("active") is not True:
+        findings.append("quiet hours covering now do not read as active: %r" % (qstate,))
+    held_rule = next((r for r in (quiet.get("rules") or []) if r.get("ruleId") == rid), {})
+    if (held_rule.get("wouldDoNow") or {}).get("decision") != "quiet_hours":
+        findings.append("a rule that would be held says %r" % ((held_rule.get("wouldDoNow") or {}).get("decision"),))
+
+    test = p.post("/v1/alerts/test", {"ruleId": rid})
+    plan = (test[1].get("plan") or [{}])[0]
+    if test[0] != 200 or plan.get("decision") != "quiet_hours" or not plan.get("sentence"):
+        findings.append("the test fire under quiet hours answered %d %r" % (test[0], plan))
+    summary = (test[1].get("summary") or {}).get("sentence") or ""
+    caveat = str(test[1].get("note") or "")
+    if "would" not in (summary + " " + caveat).lower():
+        findings.append("the test fire does not speak in the conditional: %r / %r" % (summary, caveat))
+    if not test[1].get("deliveryIds"):
+        findings.append("the test fire wrote no delivery row")
+    if "window was not spent" not in str(test[1].get("note") or ""):
+        findings.append("the test fire does not say it left the rule's budget alone")
+
+    # A digest batches a notice but never an urgent alert: the one thing the product refuses to batch.
+    p.post("/v1/alerts/settings", {"quietStartMin": -1, "quietEndMin": -1, "digestMode": "hourly", "tzOffsetMin": 0})
+    _c3, digest = p.get("/v1/alerts")
+    drows = next((r for r in (digest.get("rules") or []) if r.get("ruleId") == rid), {})
+    if ((drows.get("digest") or {}).get("deferred") is not True
+            or (drows.get("wouldDoNow") or {}).get("decision") != "digest"):
+        findings.append("a notice under an hourly digest is not batched: %r" % (drows.get("wouldDoNow"),))
+    urgent = p.post("/v1/alerts", {"kind": "whale_fill", "marketId": market, "channel": "telegram",
+                                   "severity": "urgent", "firesPerWindow": 1, "windowMs": 3_600_000})
+    urow = urgent[1].get("rule") or {}
+    if (urow.get("wouldDoNow") or {}).get("decision") != "send_now":
+        findings.append("an urgent alert was batched by the digest: %r" % (urow.get("wouldDoNow"),))
+    p.post("/v1/alerts/settings", {"quietStartMin": -1, "quietEndMin": -1, "digestMode": "off", "tzOffsetMin": 0})
+
+    _c4, after = p.get("/v1/alerts")
+    spent = next((r for r in (after.get("rules") or []) if r.get("ruleId") == rid), {})
+    if spent.get("firesInWindow") != 0:
+        findings.append("the test fire spent the rule's own window: %d fires" % spent.get("firesInWindow"))
+
+    _c5, hist = p.get("/v1/alerts/deliveries")
+    findings += delivery_findings(hist.get("rows") or [])
+    tests = [r for r in (hist.get("rows") or []) if r.get("isTest")]
+    if not tests:
+        findings.append("the test fire is not in the history as a test")
+
+    # The editor's own params reach the engine: a level rule with no level is refused at save time.
+    bad = p.post("/v1/alerts", {"kind": "price_level", "marketId": market, "channel": "telegram",
+                                "severity": "notice", "firesPerWindow": 1, "windowMs": 3_600_000, "params": {}})
+    if bad[0] != 422:
+        findings.append("a level rule with no level answered %d, not 422" % bad[0])
+    good = p.post("/v1/alerts", {"kind": "price_level", "marketId": market, "channel": "telegram",
+                                 "severity": "notice", "firesPerWindow": 1, "windowMs": 3_600_000,
+                                 "params": {"priceMicro": 620_000, "op": ">="}})
+    if good[0] != 200 or (good[1].get("rule") or {}).get("engineKind") != "price_level":
+        findings.append("a level rule with a level answered %d %s" % (good[0], json.dumps(good[1])[:90]))
+    ok = not findings
+    return ("the plan is stated before it happens, quiet hours hold even urgent, and a test costs nothing", ok,
+            "budget %r, webhook on free %d, quiet hours held the plan, digest batched a notice and not the urgent "
+            "one, test left the window at %s fires, %d delivery rows (%d test); %d findings%s"
+            % (rule.get("cooldownRule"), webhook[0], spent.get("firesInWindow"), len(hist.get("rows") or []),
+               len(tests), len(findings), ("; " + "; ".join(findings[:3])) if findings else ""))
+
+
+def c15_halt_banner(p: Probe) -> tuple[str, bool, str]:
+    """When the risk service has stopped the account, the halted state outranks `enabled` on every rule.
+
+    The halt is written the way the risk gate writes it, then every money-moving path is asked: the list, the
+    save, and the arm. Acknowledge is a record rather than a reset, so the gate checks the row survives with its
+    acknowledgement and that the banner clears on the acknowledge rather than on a delete.
+    """
+    findings = []
+    uid = "u-demo"
+    save_code = arm_code = 0
+    at = p.app()._now_ms()
+    market = str((p.rows("SELECT id FROM markets ORDER BY id LIMIT 1") or [("",)])[0][0])
+    p.post("/v1/automations", {"kind": "exit", "name": "gate halt fixture", "match": "all",
+                               "triggers": [{"kind": "time", "at_ms": at + 600_000, "once": True}],
+                               "actions": [{"kind": "close_position", "method": "market",
+                                            "max_slippage_bps": 100}],
+                               "targets": [{"marketId": market}], "maxLossMicro": 5_000_000,
+                               "maxPerDay": 12, "minIntervalMs": 60_000})
+    before = len(p.get("/v1/automations")[1].get("rules") or [])
+    p.app()._db.execute("DELETE FROM loss_halts WHERE user_id = ?", (uid,))
+    p.app()._db.execute("INSERT INTO loss_halts (user_id, threshold_micro, realized_micro, tripped_ms, "
+                        "acknowledged_ms) VALUES (?,?,?,?,NULL)", (uid, 50_000_000, -60_000_000, at))
+    p.app()._db.commit()
+    try:
+        _c, listed = p.get("/v1/automations")
+        halt = listed.get("halt") or {}
+        findings += automation_findings(listed.get("rules") or [], halt=halt)
+        if halt.get("halted") is not True:
+            findings.append("the halt is not on the banner: %r" % (halt,))
+        for rule in (listed.get("rules") or []):
+            if rule.get("status") != "halted":
+                findings.append("rule %s reads %r while the account is halted" % (rule.get("ruleId"), rule.get("status")))
+
+        body = {"kind": "exit", "name": "gate halted", "match": "all",
+                "triggers": [{"kind": "time", "at_ms": at + 600_000, "once": True}],
+                "actions": [{"kind": "close_position", "method": "market", "max_slippage_bps": 100}],
+                "targets": [{"marketId": market}], "maxLossMicro": 5_000_000}
+        save = p.post("/v1/automations", body)
+        save_code = save[0]
+        if save[0] != 409 or (save[1].get("error") or {}).get("code") != "HALTED":
+            findings.append("saving a rule while halted answered %d %s" % (save[0], json.dumps(save[1])[:90]))
+        rules = listed.get("rules") or []
+        if not rules:
+            findings.append("no rule exists for the arm test")
+        else:
+            arm = p.post("/v1/automations/guards", {"ruleId": rules[0].get("ruleId"), "state": "active"})
+            arm_code = arm[0]
+            if arm[0] != 409 or (arm[1].get("error") or {}).get("code") != "HALTED":
+                findings.append("arming while halted answered %d %s" % (arm[0], json.dumps(arm[1])[:90]))
+
+        p.app()._db.execute("UPDATE loss_halts SET acknowledged_ms = ? WHERE user_id = ?", (at + 1_000, uid))
+        p.app()._db.commit()
+        kept = p.rows("SELECT acknowledged_ms FROM loss_halts WHERE user_id = ?", (uid,))
+        if not kept or not kept[0][0]:
+            findings.append("acknowledging deleted the halt row instead of recording the acknowledgement")
+        cleared = p.get("/v1/automations")[1].get("halt")
+        if cleared:
+            findings.append("the banner survives the acknowledgement: %r" % (cleared,))
+    finally:
+        p.app()._db.execute("DELETE FROM loss_halts WHERE user_id = ?", (uid,))
+        p.app()._db.commit()
+    after = len(p.get("/v1/automations")[1].get("rules") or [])
+    if after != before:
+        findings.append("a refused save still created a rule: %d -> %d" % (before, after))
+    ok = not findings
+    return ("a halted account cannot save or arm, and every rule says halted until it is acknowledged", ok,
+            "%d rules all read halted while stopped, save %d, arm %d, acknowledgement recorded and the banner "
+            "cleared, rule count %d -> %d; %d findings%s"
+            % (before, save_code, arm_code, before, after, len(findings),
+               ("; " + "; ".join(findings[:3])) if findings else ""))
 CHECKS = (c1_contract, c2_no_addresses, c3_gate_and_drawdown, c4_whale_rule, c5_copy_safety, c6_views_and_alerts,
-          c7_integers_only, c8_freshness, c9_acceptance_path, c10_radar_cost, c11_tape_frame_budget)
+          c7_integers_only, c8_freshness, c9_acceptance_path, c10_radar_cost, c11_tape_frame_budget,
+          c12_builder_safety, c13_template_fees, c14_alert_plans, c15_halt_banner)
 
 
 # --------------------------------------------------------------------------------------------------- self-test
@@ -930,6 +1319,48 @@ def self_test() -> int:
                 "costNote": "cached for 60 seconds"}
         got = radar_findings(bad)
         return len(got) >= 4 and not radar_findings(good), got
+
+    # ------------------------------------------------------------- D8/D9 canaries (added with the closing work)
+    @canary
+    def automation_scanner():
+        """Three plantings: an armed rule with no dry run, a withheld template with no reason, a silent halt."""
+        bad = ([{"ruleId": "r1", "status": "active", "statusWhy": "", "dryRunCompletedMs": None}],)
+        catalog = {"templates": [{"templateId": "entry-momentum-5m", "kind": "entry", "available": False,
+                                  "blockingReason": "", "why": ""},
+                                 {"templateId": "protect-exit-before-resolution", "kind": "protect",
+                                  "available": True, "feeArithmetic": None}]}
+        got = automation_findings(*bad, catalog=catalog,
+                                 halt={"halted": True, "note": "", "acknowledgeHint": ""})
+        clean = ([{"ruleId": "r1", "status": "halted", "statusWhy": "stopped by the daily-loss halt",
+                   "dryRunCompletedMs": None}], {"templates": []},
+                 {"halted": True, "note": "the daily loss limit tripped", "acknowledgeHint": "acknowledge in the "
+                  "risk panel"})
+        return len(got) >= 4 and not automation_findings(*clean), got
+
+    @canary
+    def alert_scanner():
+        bad = {"settings": {"quietHours": {"note": ""}, "channels": [{"channel": "webhook"}]},
+               "rules": [{"ruleId": "a1", "cooldownRule": "", "wouldDoNow": {}, "channelAllowed": False,
+                          "channelNote": ""}]}
+        good = {"settings": {"quietHours": {"note": "off"}, "digestNow": {"note": "off"},
+                             "channels": [{"channel": "webhook", "plan": "pro"}]},
+                "rules": [{"ruleId": "a1", "cooldownRule": "3 per 1h = one every 20m at most",
+                           "wouldDoNow": {"sentence": "queued for telegram"}, "channelAllowed": False,
+                           "channelNote": "webhook needs the pro plan"}]}
+        got = alert_findings(bad)
+        return len(got) >= 5 and not alert_findings(good), got
+
+    @canary
+    def delivery_scanner():
+        bad = [{"deliveryId": 1, "status": "queued", "reason": "queued for telegram", "channel": "telegram",
+                "latencyMs": 120},
+               {"deliveryId": 2, "status": "queued", "reason": "", "channel": ""}]
+        good = [{"deliveryId": 1, "status": "queued", "reason": "queued for telegram", "channel": "telegram",
+                 "latencyMs": None, "sentMs": None},
+                {"deliveryId": 2, "status": "sent", "reason": "delivered", "channel": "telegram",
+                 "latencyMs": 240, "sentMs": 1}]
+        got = delivery_findings(bad)
+        return len(got) >= 3 and not delivery_findings(good), got
 
     for fn in cases:
         try:
