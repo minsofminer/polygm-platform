@@ -512,8 +512,6 @@ paths:
             "say why you pulled the switch" are different advice, and the app used to collapse them.
           content:
             application/json:
-          content:
-            application/json:
               schema: {$ref: "#/components/schemas/Error"}
         "503": {$ref: "#/components/responses/Denied"}
         "500": {$ref: "#/components/responses/Internal"}

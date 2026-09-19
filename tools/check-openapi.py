@@ -416,6 +416,47 @@ def unresolved_refs(spec: dict) -> list[str]:
     return sorted(set(out))
 
 
+def strict_yaml_defects(text: str) -> list[str]:
+    """Defects a permissive loader cannot see, read off the raw node graph.
+
+    PyYAML accepts a duplicated mapping key and silently keeps the last one, so every comparison in this file
+    reads a document in which the earlier key never existed. That is how a `content:` block naming a media
+    type with nothing under it survived the 176-row agreement check while `openapi-typescript` — which parses
+    strictly — refused to generate client types from the same file. A contract a code generator cannot read is
+    not a contract, it is a note to self.
+    """
+    defects: list[str] = []
+
+    def walk(node):
+        if isinstance(node, yaml.MappingNode):
+            seen: dict[str, int] = {}
+            for key, value in node.value:
+                if not isinstance(key, yaml.ScalarNode):
+                    continue
+                name = str(key.value)
+                if name in seen:
+                    defects.append("duplicate key %r at line %d (first at line %d)"
+                                   % (name, key.start_mark.line + 1, seen[name]))
+                else:
+                    seen[name] = key.start_mark.line + 1
+                if name == "content" and isinstance(value, yaml.MappingNode):
+                    for mkey, mval in value.value:
+                        # A key with nothing under it parses as an empty scalar with the null tag, not as
+                        # Python None — the first version tested for None and the canary stayed silent.
+                        if not isinstance(mval, yaml.MappingNode):
+                            defects.append("media type %r declares no schema (line %d)"
+                                           % (mkey.value, mkey.start_mark.line + 1))
+                        walk(mval)
+                else:
+                    walk(value)
+        elif isinstance(node, yaml.SequenceNode):
+            for item in node.value:
+                walk(item)
+
+    walk(yaml.compose(text, Loader=yaml.SafeLoader))
+    return defects
+
+
 def self_test(tables: dict, ops: dict) -> Report:
     """Prove the comparisons can fail. Each case plants one disagreement and requires a failure; without
     this, "0 failures" could equally mean "the checker lost the ability to fail"."""
@@ -442,6 +483,11 @@ def self_test(tables: dict, ops: dict) -> Report:
                                                                    "paths": {"/x": {"get": {"responses": {
                                                                        "200": {"content": {"application/json": {
                                                                            "schema": {"$ref": "#/components/schemas/Yes"}}}}}}}}}),
+        "a duplicate mapping key is caught": bool(strict_yaml_defects("a:\n  b: 1\n  b: 2\n")),
+        "a media type with no schema is caught": bool(strict_yaml_defects(
+            'responses:\n  "200":\n    content:\n      application/json:\n')),
+        "a well-formed document is NOT reported": not strict_yaml_defects(
+            'paths:\n  /x:\n    get:\n      responses:\n        "200":\n          content:\n            application/json:\n              schema: {type: object}\n'),
         "the app's response tables were found at all": len(tables) >= 9,
         "every documented operation maps to a table": all(p in TABLE_FOR_PATH for (_v, p) in ops),
         "the order table is non-trivial": len(tables.get("ORDER_RESPONSES", set())) >= 8,
@@ -475,10 +521,16 @@ def main() -> int:
         print("contract is not a mapping")
         return 2
     ops, tables = contract_ops(doc), app_tables()
+    strict = strict_yaml_defects(CONTRACT.read_text())
     if a.self_test:
         return finish(self_test(tables, ops))
     rep = Report()
     rep.check("contract parses", True)
+    # The strict pass is checked here rather than in `contract_rules` because it is the *generator's* view of
+    # the file: the day the contract stops being machine-portable, the frontend's typed client is the thing
+    # that breaks, and it breaks at build time in another directory if we do not catch it here.
+    rep.check("contract is machine-portable (no duplicate keys, no media type without a schema)", not strict,
+              "; ".join(strict) or "node graph clean; a permissive loader would not have seen these")
     contract_rules(rep, doc, ops)
     compare_tables(rep, ops, tables)
     compare_live(rep, doc, ops)

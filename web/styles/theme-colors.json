@@ -1,0 +1,5 @@
+{
+  "note": "generated from brand/tokens.css by tools/build-web-tokens.mjs — theme-color needs a literal, so this is the token, not a copy of it",
+  "light": "#ffffff",
+  "dark": "#ffffff"
+}

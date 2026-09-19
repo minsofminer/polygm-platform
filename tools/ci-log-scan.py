@@ -6,9 +6,15 @@ already left the process, and it ends up in whatever retention the log platform 
 credential's lifetime and readable by more people than the database. So CI reads the logs the same way an
 attacker would.
 
-Two modes:
+Three modes:
   stdin / --file            the log lines themselves (what a `make dev` run or a CI job produced)
   --sources                 the *rules* over tracked source, so a hard-coded secret cannot hide in a helper
+  --built PATH              generated build output (a file or a tree), e.g. `web/.next`. A value the product
+                            never intended to ship reaches a browser through a bundler, not through a log: the
+                            P08 design's whole env discipline is about what survives `next build`. Minified
+                            vendor code trips every heuristic that is merely *log-shaped* (that is why the
+                            first version of this mode used LOG_RULES and reported 13 findings, all in
+                            core-js), so a tree gets SOURCE_RULES: the shapes that are a secret anywhere.
 
 Exit 1 with the file:line and the rule name. The line text is re-printed through `redact.redact_text`, never
 raw: a tool that prints the secret it found is a tool that puts the secret in a new place.
@@ -102,6 +108,8 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--file", action="append", default=[], type=Path)
     ap.add_argument("--sources", action="store_true", help="scan tracked source files instead of stdin")
+    ap.add_argument("--built", action="append", default=[], type=Path,
+                    help="a generated build-output file or tree to scan (e.g. web/.next)")
     ap.add_argument("--self-test", action="store_true")
     ap.add_argument("--json", action="store_true")
     a = ap.parse_args()
@@ -134,6 +142,23 @@ def main() -> int:
             print("  ALLOWLIST does not honour a path-scoped exemption"); bad += 1
         if not findings("passphrase=hunter2xx", where="src/app.py"):
             print("  ALLOWLIST silences a real secret outside those paths"); bad += 1
+        # The modes are wiring, and wiring breaks silently: `--built` once failed as `unrecognized arguments`
+        # and the caller read that as "clean". So each mode is run for real over a temporary tree here, and a
+        # mode that cannot run is a failure of the scanner, not of the code under it.
+        import tempfile
+        with tempfile.TemporaryDirectory() as td:
+            d = Path(td)
+            (d / "chunk.js").write_text("var u={k:\"0x" + "ab" * 32 + "\"};\n")
+            (d / "vendor.js").write_text('var a={token:"abc"};if(trimStart in String.prototype){}\n')
+            for mode, expect in ((["--built", str(d)], 1), (["--file", str(d / "chunk.js")], 1),
+                                 (["--file", str(d / "vendor.js")], None)):
+                r = subprocess.run([sys.executable, str(Path(__file__).resolve())] + mode,
+                                   capture_output=True, text=True)
+                hit = r.returncode == 1
+                if expect == 1 and not hit:
+                    print("  MODE %s did not run or did not find the planted key" % mode[0]); bad += 1
+                if expect is None and hit:
+                    print("  MODE %s is noisy on ordinary code" % mode[0]); bad += 1
         print("log-scan self-test: %d pattern(s) failed" % bad)
         return 1 if bad else 0
 
@@ -152,6 +177,14 @@ def main() -> int:
             if "/fixtures/" in "/" + rel or rel.endswith((".min.js", ".min.css")):
                 continue
             texts.append((rel, p.read_text(errors="replace")))
+    elif a.built:
+        # 25 MB is well above the largest chunk a Next build writes; past that a file is an image or an
+        # artefact of another tool, and reading it to grep it is just slow.
+        for root in a.built:
+            for f in ([root] if root.is_file() else sorted(x for x in root.rglob("*") if x.is_file())):
+                if f.suffix in (".js", ".mjs", ".cjs", ".css", ".html", ".json", ".txt", ".map") and \
+                        f.stat().st_size <= 25_000_000:
+                    texts.append((str(f), f.read_text(errors="replace")))
     elif a.file:
         texts = [(str(p), p.read_text(errors="replace")) for p in a.file]
     else:
@@ -159,7 +192,7 @@ def main() -> int:
 
     total = []
     for name, text in texts:
-        for no, rule, shown in findings(text, SOURCE_RULES if a.sources else None, where=name):
+        for no, rule, shown in findings(text, SOURCE_RULES if (a.sources or a.built) else None, where=name):
             total.append({"file": name, "line": no, "rule": rule, "excerpt": shown})
     if a.json:
         import json

@@ -203,6 +203,23 @@ gate-p07-mutate:    ## prove the P07 checks can fail, one inverted security rule
 seed-rules:         ## write the default alert rules for one owner (P09 owns the UI for this table)
 	$(PY) tools/p05-seed-rules.py --owner $${OWNER:-demo}
 
+# P08 · the frontend shell. `p08` is the 15 checks, and unlike every earlier phase it cannot be satisfied by
+# a recorded artefact: c11 boots the real pair (uvicorn under `next start`, one shared SQLite file) because the
+# cookie flags, the CSRF hop, the refresh race and the logged-out flash are properties of a *served* response.
+# So the target builds first — and `npm run measure` re-writes docs/verification/P08-bundle.txt in the same
+# breath, because a budget number older than the tree it describes is a number nobody should read.
+p08: web-build
+	$(PY) tools/p08-gate-check.py --record docs/verification/P08-gate.txt
+
+p08-offline:        ## the 14 checks that need neither a build nor a booted server
+	$(PY) tools/p08-gate-check.py --fast
+
+p08-selftest:       ## prove the 15 checks can fail, one planted violation at a time
+	$(PY) tools/p08-gate-check.py --self-test
+
+web-build:
+	@cd web && { [ -d node_modules ] || npm ci --no-audit --no-fund; } && npm run build && npm run measure
+
 p01:
 	$(PY) tools/p01-gate-check.py
 p02:
@@ -211,7 +228,7 @@ p03:
 	$(PY) tools/p03-gate-check.py
 	$(PY) tools/p03-mutation-test.py
 
-check: test lint lint-canary openapi-selftest sql-sqlite-check gate gate-mutate p01 p02 p03 p04 p05 p06 p07 probe-fresh
+check: test lint lint-canary openapi-selftest sql-sqlite-check gate gate-mutate p01 p02 p03 p04 p05 p06 p07 p08 probe-fresh
 	@echo "ALL GREEN"
 
 # ------------------------------------------------------------------ diagnostics

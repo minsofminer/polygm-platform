@@ -211,16 +211,28 @@
 :root { --pgm-cols: 1; --pgm-tape-rows: 4; }
 @media (min-width: 640px) {
   :root { --pgm-cols: 1; --pgm-tape-rows: 6; } /* sm: single column + persistent topbar; ticket beco… */
+}
 @media (min-width: 768px) {
   :root { --pgm-cols: 1; --pgm-tape-rows: 8; } /* md: two columns: chart+book left, tape right… */
+}
 @media (min-width: 1024px) {
   :root { --pgm-cols: 3; --pgm-tape-rows: 12; } /* lg: two columns with a rail for watchlist… */
+}
 @media (min-width: 1280px) {
   :root { --pgm-cols: 3; --pgm-tape-rows: 16; } /* xl: full terminal: 3 columns (watchlist | market+c… */
+}
 @media (min-width: 1536px) {
   :root { --pgm-cols: 4; --pgm-tape-rows: 20; } /* 2xl: same as xl, wider tape and 12 book levels… */
+}
 @media (min-width: 1680px) {
   :root { --pgm-cols: 4; --pgm-tape-rows: 24; } /* 3xl: wide: 4 columns — watchlist rail can collapse … */
+}
+
+/* breakpoint widths, as custom properties, so a component can ask which breakpoint it is
+   in without a second copy of the numbers in JS. They belong *inside* a selector: at top level they are
+   not declarations at all, they are a parse error — and until P08 ran this file through a real CSS parser
+   (Turbopack, via the stylesheet import), the unclosed @media blocks above made the loose text look fine. */
+:root {
   --pgm-bp-xs: 639px; /* max-width breakpoint */
   --pgm-bp-sm: 640px;
   --pgm-bp-md: 768px;
@@ -228,6 +240,7 @@
   --pgm-bp-xl: 1280px;
   --pgm-bp-2xl: 1536px;
   --pgm-bp-3xl: 1680px;
+}
 
 /* NEVER put .pgm-outcome--no and .pgm-severity--critical in the same row (see tokens.json rules) */
 .pgm-outcome--yes { color: var(--pgm-outcome-yes); }

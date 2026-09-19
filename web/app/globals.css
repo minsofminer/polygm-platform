@@ -1,0 +1,3 @@
+/* The one stylesheet the root layout imports. The rules live in src/globals.css, so the P08 gate can scan
+   the src tree for the literal ban without special-casing this one-line pointer. */
+@import "../src/globals.css";

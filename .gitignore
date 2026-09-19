@@ -16,3 +16,10 @@ coverage/
 
 # scratch: temp DBs and executor child logs from the P06 harnesses when TMPDIR points in here
 .tmp/
+
+# P08 frontend
+web/node_modules/
+web/.next/
+web/.next-build.log
+web/tsconfig.tsbuildinfo
+web/next-env.d.ts

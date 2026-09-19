@@ -1,0 +1,389 @@
+/**
+ * The shell's own stylesheet. It contains no colour, no size and no duration literal: every value is a
+ * `--pgm-*` custom property from brand/tokens.css (P03's generated layer), because `tools/p03-gate-check.py`
+ * G6.8 scans `web/**` for colour literals and this file is the one a designer would otherwise quietly edit.
+ * `tools/p08-gate-check.py` c5 extends the same discipline to px/ms/z-index/radius/font-size in this file.
+ */
+
+/* The token layer: light is :root, dark is [data-theme="dark"], and the shell sets that attribute to
+   "dark" by default on <html>. A colour added by hand to a component is a second design system.
+   web/styles/tokens.css is a generated mirror of brand/tokens.css — `node tools/build-web-tokens.mjs --check`
+   runs before the build, so the mirror cannot go stale, and a token added only here is a gate failure. */
+@import "../styles/tokens.css";
+
+html,
+body {
+  margin: 0;
+  background: var(--pgm-bg-base);
+  color: var(--pgm-text-primary);
+  /* Font family comes from the Tailwind `font-body` class (the preset's stack, generated from tokens.json);
+     the size is the *active density's* size, which is what [data-density] switches. */
+  font-size: var(--pgm-font-active);
+  /* The webview viewport problem: 100vh is the *large* viewport on mobile Safari and the small one in
+     some Android WebViews. dvh is the honest unit; the fallback is for a browser with no dvh, where the
+     chrome cannot resize under us anyway. The keyboard opening is what makes 100vh a lie. */
+  min-height: 100vh;
+  min-height: 100dvh;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+:focus-visible {
+  outline: var(--pgm-border-w-strong) solid var(--pgm-brand-primary);
+  outline-offset: var(--pgm-space-off-2);
+}
+
+/* Numbers: tabular figures so a live update does not shove its neighbours sideways. Tabular digits make a
+   same-magnitude change shift-free; a change in digit count is a real width change and is not hidden. */
+.num {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--pgm-space-1);
+  font-variant-numeric: tabular-nums lining-nums;
+  font-feature-settings: "tnum" 1;
+  text-align: right;
+  padding: 0 var(--pgm-space-1);
+  border-radius: var(--pgm-radius-xs);
+}
+
+.num--stale {
+  color: var(--pgm-text-muted);
+  font-style: italic;
+}
+
+/* Nothing animates a number: the change is a background flash on the cell and nothing else — no count-up,
+   no digit roll, no crossfade, no width transition (web/DESIGN.md §4). */
+.num[data-flash="up"] {
+  background: var(--pgm-flash-bg-up);
+  transition: background var(--pgm-flash-out) var(--pgm-ease-out);
+}
+
+.num[data-flash="down"] {
+  background: var(--pgm-flash-bg-down);
+  transition: background var(--pgm-flash-out) var(--pgm-ease-out);
+}
+
+.num:not([data-flash]) {
+  transition: background var(--pgm-flash-out) var(--pgm-ease-out);
+}
+
+.num__value {
+  color: var(--pgm-text-primary);
+}
+
+.pnl-glyph {
+  color: var(--pgm-text-secondary);
+  font-size: var(--pgm-font-dense);
+}
+
+.stale {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--pgm-space-1);
+  color: var(--pgm-text-muted);
+  font-size: var(--pgm-font-dense);
+}
+
+.stale__mark {
+  display: inline-grid;
+  place-items: center;
+  inline-size: var(--pgm-min-touch-target);
+  block-size: var(--pgm-min-touch-target);
+  border-radius: var(--pgm-radius-chip);
+  border: var(--pgm-border-w-hair) solid var(--pgm-border-strong);
+}
+
+.stale[data-freshness="blocking"] .stale__mark {
+  border-color: var(--pgm-alert-critical);
+  color: var(--pgm-alert-critical);
+}
+
+.stale__age {
+  color: var(--pgm-text-muted);
+}
+
+/* The three-column terminal frame. The rails are laid out with a CSS variable the drag handler writes to
+   the element, so a resize never re-renders React at 60fps (web/DESIGN.md §4). */
+.frame {
+  display: grid;
+  grid-template-columns: var(--pgm-rail-left, auto) minmax(0, 1fr) var(--pgm-rail-right, auto);
+  gap: var(--pgm-space-2);
+  padding: var(--pgm-space-2);
+  min-height: 100dvh;
+}
+
+.frame--single {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.rail {
+  background: var(--pgm-bg-elevated);
+  border: var(--pgm-border-w-hair) solid var(--pgm-border-default);
+  border-radius: var(--pgm-radius-card);
+  padding: var(--pgm-pad-panel-compact);
+  min-inline-size: var(--pgm-space-10);
+  overflow: hidden;
+}
+
+.rail--collapsed {
+  inline-size: var(--pgm-space-8);
+}
+
+.handle {
+  inline-size: var(--pgm-space-2);
+  block-size: 100%;
+  cursor: col-resize;
+  background: transparent;
+  border: 0;
+  padding: 0;
+}
+
+.handle:hover {
+  background: var(--pgm-border-strong);
+}
+
+.topbar {
+  position: sticky;
+  inset-block-start: 0;
+  z-index: var(--pgm-z-sticky_header);   /* the ladder has seven layers and this is one of them; `--pgm-z-sticky` was a name nobody declared */
+  display: flex;
+  align-items: center;
+  gap: var(--pgm-space-3);
+  padding: var(--pgm-pad-panel-compact) var(--pgm-pad-screen-compact);
+  background: var(--pgm-bg-base);
+  border-block-end: var(--pgm-border-w-hair) solid var(--pgm-border-default);
+}
+
+.tabs {
+  display: none;
+}
+
+/* Mirrors --pgm-bp-md (768px) minus one: a media-query condition cannot read a custom property, so the
+   breakpoint is written twice, once here and once in the token ladder. c5 refuses the pair if they drift. */
+@media (max-width: 767px) {
+  .tabs {
+    position: fixed;
+    inset-block-end: 0;
+    inset-inline: 0;
+    z-index: var(--pgm-z-drawer);
+    display: grid;
+    grid-auto-flow: column;
+    grid-auto-columns: 1fr;
+    background: var(--pgm-bg-elevated);
+    border-block-start: var(--pgm-border-w-hair) solid var(--pgm-border-strong);
+    padding-block: var(--pgm-space-1);
+    /* The home-indicator strip on iOS is inside the safe area; the webview inset is not a decoration. */
+    padding-block-end: max(var(--pgm-space-1), env(safe-area-inset-bottom));
+  }
+
+  .frame {
+    grid-template-columns: minmax(0, 1fr);
+    padding-block-end: var(--pgm-space-16);
+  }
+}
+
+.tab {
+  display: grid;
+  justify-items: center;
+  gap: var(--pgm-space-0);
+  min-block-size: var(--pgm-min-touch-target);
+  color: var(--pgm-text-secondary);
+  background: transparent;
+  border: 0;
+  font-size: var(--pgm-font-dense);
+  text-decoration: none;
+  padding: var(--pgm-space-1);
+}
+
+.tab[aria-current="page"] {
+  color: var(--pgm-text-primary);
+  box-shadow: inset 0 calc(var(--pgm-space-off-3) * -1) 0 var(--pgm-brand-primary);
+}
+
+.dot {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--pgm-space-1);
+  font-size: var(--pgm-font-dense);
+  color: var(--pgm-text-secondary);
+}
+
+.dot__mark {
+  inline-size: var(--pgm-space-2);
+  block-size: var(--pgm-space-2);
+  border-radius: var(--pgm-radius-chip);
+  background: var(--pgm-alert-info);
+}
+
+.dot[data-connection="live"] .dot__mark {
+  background: var(--pgm-action-buy);
+}
+
+.dot[data-connection="stale"] .dot__mark,
+.dot[data-connection="unknown"] .dot__mark {
+  background: var(--pgm-alert-high);
+}
+
+.dot[data-connection="down"] .dot__mark,
+.dot[data-connection="blocking"] .dot__mark {
+  background: var(--pgm-alert-critical);
+}
+
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--pgm-space-2);
+  min-block-size: var(--pgm-min-touch-target);
+  padding: var(--pgm-space-2) var(--pgm-space-4);
+  border-radius: var(--pgm-radius-md);
+  border: var(--pgm-border-w-hair) solid var(--pgm-border-strong);
+  background: var(--pgm-bg-elevated);
+  color: var(--pgm-text-primary);
+  font: inherit;
+  cursor: pointer;
+}
+
+.button[data-variant="primary"] {
+  background: var(--pgm-brand-primary);
+  color: var(--pgm-brand-on-primary);
+  border-color: var(--pgm-brand-primary-active);
+}
+
+.button[data-variant="danger"] {
+  border-color: var(--pgm-alert-critical);
+  color: var(--pgm-text-primary);
+}
+
+.button:active {
+  transform: translateY(var(--pgm-space-off-1));
+  transition: transform var(--pgm-dur-press) var(--pgm-ease-out);
+}
+
+.button[disabled] {
+  cursor: not-allowed;
+  color: var(--pgm-text-muted);
+  background: var(--pgm-bg-inset);
+}
+
+.field {
+  display: grid;
+  gap: var(--pgm-space-1);
+  font-size: var(--pgm-font-compact);
+}
+
+.field__label {
+  color: var(--pgm-text-secondary);
+}
+
+.field__input {
+  min-block-size: var(--pgm-min-touch-target);
+  background: var(--pgm-bg-inset);
+  color: var(--pgm-text-primary);
+  border: var(--pgm-border-w-hair) solid var(--pgm-border-strong);
+  border-radius: var(--pgm-radius-sm);
+  padding: var(--pgm-space-2);
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+}
+
+.field__error {
+  color: var(--pgm-alert-critical);
+  font-size: var(--pgm-font-dense);
+}
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: var(--pgm-z-modal);
+  display: grid;
+  place-items: start center;
+  padding-block-start: var(--pgm-space-16);
+  background: var(--pgm-bg-inset);
+}
+
+.overlay__panel {
+  inline-size: min(100%, var(--pgm-shell-max-width));
+  background: var(--pgm-bg-elevated);
+  border: var(--pgm-border-w-hair) solid var(--pgm-border-strong);
+  border-radius: var(--pgm-radius-card);
+  box-shadow: var(--pgm-shadow-3);
+  padding: var(--pgm-pad-panel-comfortable);
+}
+
+.toasts {
+  position: fixed;
+  inset-block-end: var(--pgm-space-4);
+  inset-inline-end: var(--pgm-space-4);
+  z-index: var(--pgm-z-toast);
+  display: grid;
+  gap: var(--pgm-space-2);
+  max-inline-size: var(--pgm-shell-max-width);
+}
+
+.toast {
+  display: grid;
+  gap: var(--pgm-space-1);
+  padding: var(--pgm-space-2) var(--pgm-space-3);
+  border-radius: var(--pgm-radius-md);
+  border-inline-start: var(--pgm-border-w-heavy) solid var(--pgm-alert-info);
+  background: var(--pgm-bg-elevated);
+  box-shadow: var(--pgm-shadow-2);
+  font-size: var(--pgm-font-compact);
+}
+
+.toast[data-tone="error"] {
+  border-inline-start-color: var(--pgm-alert-critical);
+}
+
+.toast[data-tone="success"] {
+  border-inline-start-color: var(--pgm-action-buy);
+}
+
+.toast__count {
+  color: var(--pgm-text-muted);
+}
+
+.refusal {
+  display: grid;
+  gap: var(--pgm-space-1);
+  padding: var(--pgm-space-2);
+  border: var(--pgm-border-w-hair) dashed var(--pgm-border-strong);
+  border-radius: var(--pgm-radius-sm);
+  color: var(--pgm-text-secondary);
+  font-size: var(--pgm-font-compact);
+}
+
+.unavailable {
+  display: grid;
+  gap: var(--pgm-space-2);
+  padding: var(--pgm-pad-panel-compact);
+  border: var(--pgm-border-w-hair) solid var(--pgm-border-default);
+  border-radius: var(--pgm-radius-md);
+  background: var(--pgm-bg-inset);
+}
+
+.a11y-only {
+  position: absolute;
+  inline-size: var(--pgm-space-off-1);
+  block-size: var(--pgm-space-off-1);
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+
+/* Reduced motion: the flash becomes a static edge on the leading side (web/DESIGN.md §4). The transition
+   rules above are what get turned off; the data-flash attribute stays, so the information survives. */
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation: none !important;
+    transition: none !important;
+  }
+
+  .num[data-flash] {
+    box-shadow: inset var(--pgm-space-off-3) 0 0 var(--pgm-border-strong);
+  }
+}

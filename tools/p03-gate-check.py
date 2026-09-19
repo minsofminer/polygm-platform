@@ -565,7 +565,11 @@ def g_specimen(r: Report) -> None:
     # G6.8 — D7.4 rules 1/2 applied repo-wide, with an EXPLICIT named-exemption list. Scoping the colour
     # audit to the specimen (G6.2) while the rule said "anywhere" reported compliance while
     # server/public/index.html carried ~30 literals and its own :root palette.
-    GEN = {"brand/tokens.css", "web/tailwind.preset.cjs"}       # generated from tokens.json: hexes expected
+    GEN = {"brand/tokens.css", "web/tailwind.preset.cjs", "web/styles/tokens.css"}  # generated from tokens.json: hexes expected.
+    # web/styles/tokens.css joined this list in P08 for a reason worth the comment: Turbopack resolves CSS
+    # @import inside the project root only, so the token layer needs a copy the bundler can reach, and a copy
+    # that is not generated-and-checked is a second design system. tools/build-web-tokens.mjs --check is what
+    # keeps it a mirror instead.
     EXEMPT = {"server/public/index.html":
               "P01 throwaway probe page, pre-brand; superseded by the P10 landing page"}
     offenders, exempted, scanned = [], [], 0
@@ -573,7 +577,13 @@ def g_specimen(r: Report) -> None:
         rel = str(path.relative_to(ROOT))
         if not path.is_file() or path.suffix not in {".css", ".html", ".js", ".mjs", ".cjs", ".ts", ".tsx"}:
             continue
+        # Build output is not authored source: `.next/` holds a minified copy of everything, so excluding it
+        # is the same decision as excluding `node_modules`, and it arrived with P08 because the app now builds
+        # inside web/. `tools/p08-gate-check.py` c9 plants a hex in web/src/** and requires THIS rule to fire,
+        # so the exclusion cannot silently become a blind spot.
         if not rel.startswith(("web/", "server/", "brand/")) or ".git" in path.parts or "node_modules" in path.parts:
+            continue
+        if any(part in {".next", ".turbo", "dist", "out", "coverage"} for part in path.parts):
             continue
         if rel in GEN or rel.endswith(".md"):
             continue
