@@ -22,6 +22,7 @@ import { feedQuery, type WhaleFilters } from "./whales";
 import type {
   WhalesCounts,
   CopyConfig,
+  CopySourceRow,
   CopyMonitor,
   Portfolio,
   RadarResult,
@@ -286,6 +287,104 @@ export function usePortfolio() {
   return { data, err, refresh };
 }
 
+/**
+ * D7's discovery list.
+ *
+ * The sort is a parameter rather than a client-side reorder: the API ranks the rows (risk-adjusted by default)
+ * and states the ranking, and re-sorting in the browser would produce a list whose order and whose stated rule
+ * disagree the moment the two implementations drift.
+ */
+export function useCopySources(windowDays = 30, sort = "riskAdjusted", onlyCopying = false) {
+  const [rows, setRows] = useState<CopySourceRow[]>([]);
+  const [ranking, setRanking] = useState("");
+  const [sortNote, setSortNote] = useState("");
+  const [emptyNote, setEmptyNote] = useState("");
+  const [stamp, setStamp] = useState<Stamp | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    let res: Awaited<ReturnType<typeof request<{ rows: CopySourceRow[]; ranking: string; sortNote: string; emptyNote: string }>>>;
+    try {
+      res = await request<{ rows: CopySourceRow[]; ranking: string; sortNote: string; emptyNote: string }>({
+        key: "copySources",
+        // QUERY, not `params`: `params` fills `{placeholders}` in the path and throws when there is no such
+        // segment. That mistake cost an afternoon here — the hook's `void load()` swallowed the rejection, so
+        // the screen showed an empty list and no error, which is the worst possible pair of symptoms. The
+        // try/catch below is the other half of the lesson: a rejected read must reach the screen.
+        query: { windowDays, sort, onlyCopying: onlyCopying ? "true" : "false" },
+      });
+    } catch (cause) {
+      setErr(cause instanceof Error ? cause.message : "the discovery read failed before it was sent");
+      return;
+    }
+    if (!res.ok) {
+      setErr(res.error.message);
+      return;
+    }
+    setErr(null);
+    setRows(res.data.rows ?? []);
+    setRanking(res.data.ranking ?? "");
+    setSortNote(res.data.sortNote ?? "");
+    setEmptyNote(res.data.emptyNote ?? "");
+    setStamp(res.stamp);
+  }, [windowDays, sort, onlyCopying]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const create = useCallback(async (body: Record<string, unknown>) => {
+    setBusy(true);
+    const res = await request<{ configId: string; dryRun: boolean }>({ key: "createCopyConfig", body });
+    setBusy(false);
+    if (!res.ok) {
+      setErr(res.error.message);
+      return { ok: false as const, error: res.error.message };
+    }
+    setErr(null);
+    // The response's own `dryRun` is the field the screen reports, not an assumption that creation was safe:
+    // if the API ever answered otherwise, the screen would say so.
+    return { ok: true as const, id: res.data.configId, dryRun: res.data.dryRun === true };
+  }, []);
+
+  return { rows, ranking, sortNote, emptyNote, stamp, busy, err, create, reload: load };
+}
+
+/** The guard rails, including the only path by which a config stops being a dry run. */
+export function useSetCopyGuards() {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const set = useCallback(async (body: Record<string, unknown>) => {
+    setBusy(true);
+    const res = await request<{ configId: string; dryRun: boolean }>({ key: "copyGuards", body });
+    setBusy(false);
+    if (!res.ok) {
+      // The 409s here are sentences from the API (no acknowledgement, no dry-run history) and they are shown as
+      // they arrive: a client that rewrote them would be a second place the rule lives.
+      setErr(res.error.message);
+      return { ok: false as const, error: res.error.message };
+    }
+    setErr(null);
+    return { ok: true as const, dryRun: res.data.dryRun === true };
+  }, []);
+
+  /** The global stop: every live config, one guard call each. Sequential, so a refusal stops the rest. */
+  const setMany = useCallback(
+    async (bodies: Record<string, unknown>[]) => {
+      for (const body of bodies) {
+        const out = await set(body);
+        if (!out.ok) return out;
+      }
+      return { ok: true as const, dryRun: true };
+    },
+    [set],
+  );
+
+  return { set, setMany, busy, err };
+}
+
 export function useCopyConfigs() {
   const [configs, setConfigs] = useState<CopyConfig[]>([]);
   const [err, setErr] = useState<string | null>(null);
@@ -398,6 +497,7 @@ export const TERMINAL_ROUTES: RouteKey[] = [
   "whales",
   "trader",
   "copyConfigs",
+  "copySources",
   "createCopyConfig",
   "copyGuards",
   "copyMonitor",

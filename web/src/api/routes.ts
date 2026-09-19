@@ -130,6 +130,14 @@ export const ROUTES = {
     owner: "P10",
     note: "going live needs BOTH an acknowledged slippage warning and dry-run history (409 REFUSED otherwise)",
   },
+  copySources: {
+    method: "GET",
+    path: "/v1/copy/sources",
+    built: true,
+    whileMissing: "refuses",
+    owner: "P10",
+    note: "D7's discovery list, ranked risk-adjusted by default; each row carries its drawdown and its gate",
+  },
   copyMonitor: {
     method: "GET",
     path: "/v1/copy/configs/monitor",

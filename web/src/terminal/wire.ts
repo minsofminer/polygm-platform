@@ -209,6 +209,30 @@ export type CopyConfig = {
   sourceStats: SourceStats;
 };
 
+/** A row of D7's discovery list: the ratio, its denominator, and the gate its win rate passed or failed. */
+export type CopySourceRow = {
+  anonWallet: string;
+  windowDays: number;
+  closedTrades: number;
+  realisedMicro: number;
+  feesMicro: number;
+  netAfterFeesMicro: number;
+  maxDrawdownMicro: number;
+  longestLosingStreak: number;
+  avgLatencyMs: number;
+  winRateBps: number | null;
+  insufficientSample: boolean;
+  sampleNote: string;
+  sampleGate: number;
+  riskAdjustedBps: number;
+  riskAdjustedRule: string;
+  copierCount: number;
+  currentlyCopying: boolean;
+  myConfigs: number;
+  updatedMs: number;
+  rank: number;
+};
+
 export type CopyMonitor = {
   configId: string;
   sourceAnon: string;
