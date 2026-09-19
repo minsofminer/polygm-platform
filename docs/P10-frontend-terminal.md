@@ -19,8 +19,8 @@ verified one endpoint at a time is a chain nobody has ever walked.
 |---|---------|-------|
 | D1 | three-column terminal: left rail, centre (chart + Activity/Traders/Holders), right rail, resizable and collapsible, per-user persistence, mobile as tabs | frame built (`web/src/terminal/TerminalLayout.tsx`), panels not all wired |
 | D2 | live tape: filters (absolute **and** market-relative notional), classification badges with their rule, virtualised, coalesced at 20+ fills/s, "paused — N new", click → market, shift-click → watchlist, sound off by default | built (`web/src/terminal/TapePanel.tsx`, `tape.ts`, `useTerminal.ts`), 21 unit tests |
-| D3 | trader dossier: four windows of one metric set, PnL curve with a mandatory drawdown overlay, behaviour labels with methodology + disclaimer, "insufficient sample" instead of a win rate below the gate | API built and gated (`/v1/traders/{anon}`); screen pending |
-| D4 | whale tracker: threshold feed, saved views with channel/severity, per-market and global, severity formula stated, inline alert-rule creation | API built and gated (`/v1/whales`, `/v1/whale-views`); screen pending |
+| D3 | trader dossier: four windows of one metric set, PnL curve with a mandatory drawdown overlay, behaviour labels with methodology + disclaimer, "insufficient sample" instead of a win rate below the gate | **built** (`src/terminal/{dossier.ts,DossierView.tsx}`, `app/trader/[anon]/page.tsx`), 26 unit + 7 render tests |
+| D4 | whale tracker: threshold feed, saved views with channel/severity, per-market and global, severity formula stated, inline alert-rule creation | **built** (`src/terminal/{whales.ts,WhaleTracker.tsx}`, `app/whales/page.tsx`), 20 unit + 4 render tests |
 | D5 | Wallet Radar: ≤10 markets, four rankings, row = wallet + matched markets + bought/sold + realised PnL + win rate + classification, one-click track/follow/copy/open, cost control | **API built and gated** (`packages/polygm_core/radar/rankings.py`, `POST /v1/radar/runs`, `GET /v1/radar/runs/{job_id}`), 25 tests; screen pending |
 | D6 | portfolio: positions with mark and unrealised, negRisk groups, order history with `unknown` rows marked, PnL curve + benchmark, CSV export, empty state | API built and gated (`/v1/me/portfolio`); screen pending |
 | D7 | copy trading: risk-adjusted discovery (and saying so), the config panel, the slip warning **before** confirm, monitor with skip reasons, pause/stop | API built and gated (`/v1/copy/configs*`); screen pending |
@@ -98,7 +98,26 @@ round-trips through a double is a size the number layer renders wrong. The gate'
 terminal's own source for float literals in the money path and the radar test asserts no JSON float appears in
 any scan payload.
 
-### 2.7 Freshness on every surface, including the ones that are wrong about it
+### 2.7 A classification label's rule is text, not a tooltip
+
+The gate's rule — every classification label carries a visible rule and disclaimer — is enforced by rendering
+them: the badge chip is a chip, and the sentence (`rule · disclaimer`) is text on the screen, both on a tape row
+(when its chip is expanded) and on every whale row. The `title` attribute survives as a convenience for a pointer;
+it is not the disclosure. A label screenshot without its caveat is how "wash roundtrips" becomes an accusation,
+and the render tests assert the caveat is present as text.
+
+The same rule is why a label whose fact arrives without a `rule` or without a `disclaimer` is **dropped** rather
+than rendered as a bare chip.
+
+### 2.8 The header says what it does not know
+
+D3's kit text asks for "address + copy + explorer". This product is pseudonymous by construction — the API's own
+gate check (`c2`) fails the build if a `0x…` address appears in any P10 payload — so the header offers the
+pseudonym to copy, states in the same breath that a pseudonym is not resolved to an address, and carries no
+explorer link. That is a deviation from the kit's wording, taken deliberately and stated on screen: an explorer
+link here would either 404 or invite a user to look up an address the product deliberately does not hold.
+
+### 2.9 Freshness on every surface, including the ones that are wrong about it
 
 `asOf` is the **age of the data** and `staleAfter` is derived from it; a no-store read may legitimately have
 `staleAfter == asOf`, which is why the gate's `c8` fails on `<` rather than `<=` (and on `<=` only when the
@@ -120,6 +139,10 @@ claim than "this is ten seconds old".
   and `c10` is the one place that deliberately sends none.
 * **Four tabs, one reason.** The first radar draft wrote each ranking's `reason` onto shared row objects, so the
   last ranking to run overwrote every sentence. Each ranking now gets its own copies.
+* **A panel that rendered its own keys.** The tape's copy was written as `t(`${ROW_SAID}.label`)`, and the i18n
+  check refuses a computed key precisely because it cannot verify one — the keys did not exist in the dictionary,
+  so every string in the panel rendered as `terminal.tape.row.label`. Each terminal component now holds a literal
+  table of its copy, and the dictionary grew 129 entries written with the components that ask for them.
 * **The Makefile promised a check it did not have.** The `p10` comment cited a web-side `c10` while the gate had
   nine checks. `c10` now exists and is about the radar's cost control; the comment says what the gate actually
   does, and the web half is named as `npm run test` / `npm run build`.
@@ -128,7 +151,8 @@ claim than "this is ten seconds old".
 
 * `docs/verification/P10-gate.txt` — the recorded gate run (10/10).
 * `python3 -m unittest discover -s tests` — 771 tests, 25 of them the radar's, 42 the terminal API's.
-* `cd web && npx vitest run` — 166 tests, 21 of them the tape's.
+* `cd web && npx vitest run` — 215 tests; the terminal owns 70 of them (21 tape, 26 dossier, 20 whales, plus 11
+  render tests over the two screens). `npm run i18n:check` — 474 keys, 0 missing, 0 dynamic.
 * `python3 tools/check-openapi.py` — 287 passed, 0 failed, over a 36-path contract.
 * Seeded tape (post `make migrate && make seed`): 159 markets, 1,090 fills, four wallets, 133 markets with ≥4
   fills.
@@ -137,7 +161,8 @@ claim than "this is ten seconds old".
 
 1. **The record half of idempotency** (§2.5): `idem.begin/finish` on the four P10 mutations, with a test that
    replays a key and asserts one config exists.
-2. **D3, D4, D6, D7 screens** — the APIs are gated; the screens are the phase's remaining work.
+2. **D6, D7 screens** — the APIs are gated; the screens are the phase's remaining work (`/portfolio` and `/copy`
+   routes exist as shells from P08).
 3. **D8, D9** (automation and alerts) — the kit puts the rule engine in P11's scope; the P10 screens depend on
    that API, so they land with it rather than against a surface that does not exist.
 4. **A web-side gate check.** `c10` covers the radar's cost control; the D1–D9 components are covered by

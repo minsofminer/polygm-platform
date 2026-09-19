@@ -397,6 +397,14 @@ was decorative on exactly the routes where a duplicate costs money. It now answe
 tables and four contract operations document the 400, and the read halves of the two mixed paths have their own
 tables — an invariant `check-openapi` now checks per verb.
 
+**Then D3 and D4.** The trader dossier (`/trader/[anon]`) and the whale tracker (`/whales`), with their logic in
+`src/terminal/{dossier,whales}.ts` and 70 terminal tests in total. Two decisions worth recording: a classification
+label's rule and disclaimer are rendered as **text** rather than only as a tooltip (a disclosure you have to hover
+for is not a disclosure), and the dossier's header states that a pseudonym is deliberately not resolved to an
+on-chain address instead of offering an explorer link the API's own gate check forbids. The i18n check also caught
+that the tape had been rendering its own keys — computed `t()` keys are invisible to the build check, so the panel
+now holds a literal copy table and the dictionary gained the 129 entries the terminal asks for.
+
 **`[UNVERIFIED]`.** No browser has been in the loop, so the 60 fps-under-live-load requirement, the resize
 persistence and mobile tab parity are claims about code, not measurements; D3, D4, D6, D7 screens are pending
 against APIs that are already gated, and D8/D9 wait on P11's rule engine. The record half of idempotency is open

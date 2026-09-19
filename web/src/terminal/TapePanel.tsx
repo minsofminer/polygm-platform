@@ -44,7 +44,39 @@ import {
 } from "./tape";
 import type { TapeFacets, TerminalFill } from "./wire";
 
-const ROW_SAID = "terminal.tape.row";
+/**
+ * The tape's copy, in one literal table.
+ *
+ * These used to be `C.label` calls. The build's i18n check treats a computed key as a failure by
+ * design — it cannot verify what it cannot read — and the failure mode it prevents is exactly what had happened:
+ * the keys did not exist in the dictionary at all, so every string in this panel rendered as its own key. A
+ * literal table is checkable, greppable and has one place to edit.
+ */
+const C = {
+  label: t("terminal.tape.row.label"),
+  title: t("terminal.tape.row.title"),
+  rateHint: t("terminal.tape.row.rateHint"),
+  pause: t("terminal.tape.row.pause"),
+  soundHint: t("terminal.tape.row.soundHint"),
+  soundOn: t("terminal.tape.row.soundOn"),
+  soundOff: t("terminal.tape.row.soundOff"),
+  filters: t("terminal.tape.row.filters"),
+  minNotional: t("terminal.tape.row.minNotional"),
+  relativeHint: t("terminal.tape.row.relativeHint"),
+  side: t("terminal.tape.row.side"),
+  category: t("terminal.tape.row.category"),
+  classification: t("terminal.tape.row.classification"),
+  wallet: t("terminal.tape.row.wallet"),
+  reset: t("terminal.tape.row.reset"),
+  any: t("terminal.tape.row.any"),
+  buy: t("terminal.tape.row.buy"),
+  sell: t("terminal.tape.row.sell"),
+  shares: t("terminal.tape.row.shares"),
+  watched: t("terminal.tape.row.watched"),
+  windowNote: t("terminal.tape.row.windowNote"),
+  disconnected: t("terminal.tape.row.disconnected"),
+  error: t("terminal.tape.row.error"),
+};
 
 export function TapePanel({
   userId,
@@ -108,26 +140,26 @@ export function TapePanel({
     : 0;
 
   return (
-    <section className="pgm-tape" aria-label={t(`${ROW_SAID}.label`)}>
+    <section className="pgm-tape" aria-label={C.label}>
       <header className="pgm-tape__head">
-        <h2>{t(`${ROW_SAID}.title`)}</h2>
+        <h2>{C.title}</h2>
         <StaleIndicator freshness={fresh} ageMs={stamp ? Math.max(0, Date.now() - stamp.asOf) : null} />
-        <span className="pgm-tape__rate" title={t(`${ROW_SAID}.rateHint`)}>
-          {t(`${ROW_SAID}.rate`, { n: arrivalRate(rows, Date.now()) })}
+        <span className="pgm-tape__rate" title={C.rateHint}>
+          {t("terminal.tape.row.rate", { n: arrivalRate(rows, Date.now()) })}
         </span>
         <button type="button" className="pgm-tape__pause" onClick={() => setPaused(!paused)} aria-pressed={paused}>
           {/* "paused — N new" is the affordance: a frozen feed with no counter reads as a broken feed. */}
-          {paused ? t(`${ROW_SAID}.resume`, { n: queuedCount }) : t(`${ROW_SAID}.pause`)}
+          {paused ? t("terminal.tape.row.resume", { n: queuedCount }) : C.pause}
         </button>
         <button type="button" className="pgm-tape__sound" onClick={toggleSound} aria-pressed={sound}
-                title={t(`${ROW_SAID}.soundHint`)}>
-          {sound ? t(`${ROW_SAID}.soundOn`) : t(`${ROW_SAID}.soundOff`)}
+                title={C.soundHint}>
+          {sound ? C.soundOn : C.soundOff}
         </button>
       </header>
 
       {err ? (
         <p className="unavailable" role="status">
-          {t(`${ROW_SAID}.error`)}
+          {C.error}
         </p>
       ) : null}
 
@@ -159,7 +191,7 @@ export function TapePanel({
 
       <footer className="pgm-tape__foot">
         <span>
-          {t(`${ROW_SAID}.counts`, {
+          {t("terminal.tape.row.counts", {
             n: rows.length,
             whales: rows.filter((r) => r.isWhale).length,
             cap: MAX_ROWS,
@@ -167,7 +199,7 @@ export function TapePanel({
         </span>
         {facets ? (
           <span className="pgm-tape__window" title={facets.whale.rule}>
-            {t(`${ROW_SAID}.window`, {
+            {t("terminal.tape.row.window", {
               fills: facets.fills,
               median: formatMicro(facets.medianNotionalMicro),
               p95: formatMicro(facets.p95NotionalMicro),
@@ -175,8 +207,8 @@ export function TapePanel({
             })}
           </span>
         ) : null}
-        <span className="pgm-tape__note">{t(`${ROW_SAID}.windowNote`)}</span>
-        {status === "disconnected" ? <span role="status">{t(`${ROW_SAID}.disconnected`)}</span> : null}
+        <span className="pgm-tape__note">{C.windowNote}</span>
+        {status === "disconnected" ? <span role="status">{C.disconnected}</span> : null}
       </footer>
       <audio id="pgm-tape-chime" preload="none" aria-hidden="true" />
     </section>
@@ -195,9 +227,9 @@ function FilterBar({
   median: number;
 }) {
   return (
-    <div className="pgm-tape__filters" role="group" aria-label={t(`${ROW_SAID}.filters`)}>
+    <div className="pgm-tape__filters" role="group" aria-label={C.filters}>
       <label>
-        {t(`${ROW_SAID}.minNotional`)}
+        {C.minNotional}
         <input
           type="number"
           inputMode="numeric"
@@ -209,8 +241,8 @@ function FilterBar({
           }
         />
       </label>
-      <label title={t(`${ROW_SAID}.relativeHint`)}>
-        {t(`${ROW_SAID}.relative`, { median: formatMicro(median) })}
+      <label title={C.relativeHint}>
+        {t("terminal.tape.row.relative", { median: formatMicro(median) })}
         <input
           type="number"
           inputMode="decimal"
@@ -221,17 +253,17 @@ function FilterBar({
         />
       </label>
       <label>
-        {t(`${ROW_SAID}.side`)}
+        {C.side}
         <select value={filters.side} onChange={(e) => setFilters({ ...filters, side: e.target.value as TapeFilters["side"] })}>
-          <option value="">{t(`${ROW_SAID}.any`)}</option>
-          <option value="BUY">{t(`${ROW_SAID}.buy`)}</option>
-          <option value="SELL">{t(`${ROW_SAID}.sell`)}</option>
+          <option value="">{C.any}</option>
+          <option value="BUY">{C.buy}</option>
+          <option value="SELL">{C.sell}</option>
         </select>
       </label>
       <label>
-        {t(`${ROW_SAID}.category`)}
+        {C.category}
         <select value={filters.category} onChange={(e) => setFilters({ ...filters, category: e.target.value })}>
-          <option value="">{t(`${ROW_SAID}.any`)}</option>
+          <option value="">{C.any}</option>
           {(facets?.categories ?? []).map((c) => (
             <option key={c.value} value={c.value}>
               {c.value} ({c.fills})
@@ -240,9 +272,9 @@ function FilterBar({
         </select>
       </label>
       <label>
-        {t(`${ROW_SAID}.classification`)}
+        {C.classification}
         <select value={filters.label} onChange={(e) => setFilters({ ...filters, label: e.target.value })}>
-          <option value="">{t(`${ROW_SAID}.any`)}</option>
+          <option value="">{C.any}</option>
           {(facets?.classifications ?? []).map((c) => (
             <option key={c.label} value={c.label} title={c.rule}>
               {c.label} ({c.fills})
@@ -251,9 +283,9 @@ function FilterBar({
         </select>
       </label>
       <label>
-        {t(`${ROW_SAID}.wallet`)}
+        {C.wallet}
         <select value={filters.wallet} onChange={(e) => setFilters({ ...filters, wallet: e.target.value })}>
-          <option value="">{t(`${ROW_SAID}.any`)}</option>
+          <option value="">{C.any}</option>
           {(facets?.wallets ?? []).map((w) => (
             <option key={w.anonWallet} value={w.anonWallet}>
               {w.anonWallet} ({w.fills})
@@ -262,7 +294,7 @@ function FilterBar({
         </select>
       </label>
       <button type="button" onClick={() => setFilters({ ...EMPTY_FILTERS })}>
-        {t(`${ROW_SAID}.reset`)}
+        {C.reset}
       </button>
     </div>
   );
@@ -310,13 +342,15 @@ function TapeRow({
         <a
           href={walletHref(row.anonWallet)}
           onClick={(e) => e.stopPropagation()}
-          aria-label={t(`${ROW_SAID}.openTrader`, { wallet: row.anonWallet })}
+          aria-label={t("terminal.tape.row.openTrader", { wallet: row.anonWallet })}
         >
           {row.anonWallet}
         </a>
-        {watched ? <span className="pgm-tape__watched" title={t(`${ROW_SAID}.watched`)}>★</span> : null}
+        {watched ? <span className="pgm-tape__watched" title={C.watched}>★</span> : null}
       </span>
       {row.labels.map((fact) => (
+        // A chip that expands. The sentence it expands to is rendered as text in the cell below the row, and the
+        // title is only a convenience for a pointer: a tooltip is not a disclosure.
         <button
           key={fact.label}
           type="button"
@@ -331,7 +365,7 @@ function TapeRow({
           {fact.label}
         </button>
       ))}
-      <span className={`pgm-tape__side is-${row.side.toLowerCase()}`}>{t(`${ROW_SAID}.${row.side.toLowerCase()}`)}</span>
+      <span className={`pgm-tape__side is-${row.side.toLowerCase()}`}>{row.side === "BUY" ? C.buy : C.sell}</span>
       <span className="pgm-tape__outcome">{row.outcome}</span>
       {/* The row's own freshness, never a hardcoded "live": a tape whose stamp has gone stale must render its
           prices as such, which is the P05/P08 rule this phase inherits. */}
@@ -349,14 +383,22 @@ function TapeRow({
       >
         {row.marketSlug || row.marketId}
       </a>
-      {/* The rule travels with the row, so the tooltip can state the exact threshold that made this a whale. */}
+      {/* The rules travel with the row: the threshold that made this fill a whale, and — for each label on it —
+          the rule and the disclaimer, as TEXT rather than as a title attribute. A disclosure a user can only see
+          by hovering is not a disclosure, and a classification screenshot without its caveat is how a label
+          becomes an accusation. */}
       {open ? (
-        <span className="pgm-tape__tooltip" role="tooltip">
-          {thresholdSentence(row)}
-        </span>
+        <div className="pgm-tape__tooltip" role="tooltip">
+          <span>{thresholdSentence(row)}</span>
+          {row.labels.map((fact) => (
+            <span key={`why-${fact.label}`} className="pgm-tape__why">
+              <strong>{fact.label}</strong>: {labelSentence(fact)}
+            </span>
+          ))}
+        </div>
       ) : null}
       <span className="pgm-visually-hidden">
-        {formatShares(sharesMicro(row.shares))} {t(`${ROW_SAID}.shares`)}
+        {formatShares(sharesMicro(row.shares))} {C.shares}
       </span>
     </div>
   );

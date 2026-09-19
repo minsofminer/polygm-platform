@@ -244,7 +244,9 @@ function CollapseButton({
       type="button"
       className="pgm-terminal__collapse"
       aria-expanded={!collapsed}
-      aria-label={t(collapsed ? "terminal.layout.expand" : "terminal.layout.collapse", { side: panel })}
+      aria-label={collapsed
+        ? t("terminal.layout.expand", { side: panel })
+        : t("terminal.layout.collapse", { side: panel })}
       onClick={() => persist({ ...layout, collapsed: { ...layout.collapsed, [panel]: !collapsed } })}
     >
       {collapsed ? "»" : "«"}

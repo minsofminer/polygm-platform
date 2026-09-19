@@ -47,6 +47,9 @@ export type TerminalFill = {
   isWhale: boolean;
 };
 
+/** The whale feed's own count block (D4): what the filter found, not what the page shows. */
+export type WhalesCounts = { overThreshold: number; returned: number; marketsWithFills: number };
+
 export type WhaleThreshold = {
   thresholdMicro: number;
   reason: string;

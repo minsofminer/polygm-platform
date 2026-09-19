@@ -18,7 +18,9 @@ import { request } from "@/api/client";
 import type { Stamp } from "@/api/envelope";
 import type { RouteKey } from "@/api/routes";
 import { arrivalRate, coalesceFills, MAX_ROWS, type TapeFilters } from "./tape";
+import { feedQuery, type WhaleFilters } from "./whales";
 import type {
+  WhalesCounts,
   CopyConfig,
   CopyMonitor,
   Portfolio,
@@ -175,6 +177,9 @@ export function useDossier(anon: string, window: string) {
   const [data, setData] = useState<TraderDossier | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [stamp, setStamp] = useState<Stamp | null>(null);
+  const [nonce, setNonce] = useState(0);
+  const reload = useCallback(() => setNonce((n) => n + 1), []);
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
@@ -183,17 +188,82 @@ export function useDossier(anon: string, window: string) {
       if (cancelled) return;
       setLoading(false);
       if (!res.ok) {
+        // The error is shown next to the numbers that are still on screen: a failed refresh of a dossier is not a
+        // reason to blank the dossier, and a blank screen reads as "this trader does not exist".
         setErr(res.error.message);
         return;
       }
       setErr(null);
       setData(res.data);
+      setStamp(res.stamp);
     })();
     return () => {
       cancelled = true;
     };
-  }, [anon, window]);
-  return { data, err, loading };
+  }, [anon, window, nonce]);
+  return { data, err, loading, stamp, reload };
+}
+
+/**
+ * The whale feed (D4). Same freshness discipline as the tape: keep the rows, say when they are late.
+ *
+ * `multiple` is the view's tunable relative term; when it is null the request omits it rather than sending zero,
+ * because the API's own validation refuses a multiple below 2 and a screen that sends 0 would be answered with a
+ * 422 the user cannot act on.
+ */
+export function useWhales(filters: WhaleFilters, limit = 100) {
+  const [rows, setRows] = useState<TerminalFill[]>([]);
+  const [counts, setCounts] = useState<WhalesCounts | undefined>(undefined);
+  const [severityRule, setSeverityRule] = useState<string>("");
+  const [stamp, setStamp] = useState<Stamp | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const key = JSON.stringify([filters.scope, filters.marketId, filters.windowMs, filters.multiple, filters.minSeverity, limit]);
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    void (async () => {
+      const res = await request<{ rows: TerminalFill[]; counts: WhalesCounts; severityRule: string; thresholds: Record<string, unknown> }>({
+        key: "whales",
+        query: { ...feedQuery(filters), limit },
+      });
+      if (cancelled) return;
+      setLoading(false);
+      if (!res.ok) {
+        setErr(res.error.message);
+        return;
+      }
+      setErr(null);
+      setRows(res.data.rows ?? []);
+      setCounts(res.data.counts);
+      setSeverityRule(res.data.severityRule ?? "");
+      setStamp(res.stamp);
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // `key` is the request's identity; the filters object is rebuilt on every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key]);
+  return { rows, counts, severityRule, stamp, err, loading };
+}
+
+/** A saved view's creation, with the API's own refusal passed through rather than re-worded. */
+export function useCreateWhaleView() {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const create = useCallback(async (body: Record<string, unknown>) => {
+    setBusy(true);
+    const res = await request<WhaleView>({ key: "createWhaleView", body });
+    setBusy(false);
+    if (!res.ok) {
+      setErr(res.error.message);
+      return { ok: false as const, error: res.error.message };
+    }
+    setErr(null);
+    return { ok: true as const, view: res.data };
+  }, []);
+  return { create, busy, err };
 }
 
 export function usePortfolio() {
@@ -258,14 +328,22 @@ export function useCopyMonitor(configId: string | null) {
 
 export function useWhaleViews() {
   const [views, setViews] = useState<WhaleView[]>([]);
+  const [err, setErr] = useState<string | null>(null);
+  const [stamp, setStamp] = useState<Stamp | null>(null);
   const refresh = useCallback(async () => {
     const res = await request<{ items: WhaleView[] }>({ key: "whaleViews" });
-    if (res.ok) setViews(res.data.items ?? []);
+    if (!res.ok) {
+      setErr(res.error.message);
+      return;
+    }
+    setErr(null);
+    setViews(res.data.items ?? []);
+    setStamp(res.stamp);
   }, []);
   useEffect(() => {
     void refresh();
   }, [refresh]);
-  return { views, refresh };
+  return { views, refresh, err, stamp };
 }
 
 /**

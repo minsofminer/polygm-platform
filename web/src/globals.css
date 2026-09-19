@@ -810,3 +810,285 @@ body {
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+/* ============================================================================================
+   P10 · the terminal (D1-D5). The classes below are the ones the terminal components already
+   used; without them the tape, the dossier and the whale tracker render as unstyled text, which
+   is what a first pass at this phase shipped. Layout only — every colour, space and radius is a
+   token from brand/tokens.json via web/styles/tokens.css.
+   ============================================================================================ */
+
+.pgm-terminal {
+  display: grid;
+  gap: var(--pgm-space-2);
+  align-items: start;
+}
+
+.pgm-terminal__panel {
+  min-width: 0;
+  display: grid;
+  gap: var(--pgm-space-2);
+  align-content: start;
+}
+
+.pgm-terminal__panel[data-collapsed="true"] {
+  /* Collapsed means one line of chrome, not a hidden page: the tab strip stays, the panel's content does not. */
+  display: none;
+}
+
+.pgm-terminal__handle {
+  cursor: col-resize;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  width: var(--pgm-border-w-heavy);
+  align-self: stretch;
+}
+
+.pgm-terminal__handle:focus-visible {
+  outline: var(--pgm-border-w-strong) solid var(--pgm-brand-primary);
+}
+
+.pgm-terminal__collapse {
+  background: transparent;
+  border: 0;
+  color: var(--pgm-text-muted);
+  cursor: pointer;
+  padding: var(--pgm-space-off-1);
+}
+
+.pgm-tape,
+.pgm-dossier,
+.pgm-whales {
+  display: grid;
+  gap: var(--pgm-space-1);
+  min-width: 0;
+}
+
+.pgm-tape__head,
+.pgm-dossier__head,
+.pgm-whales__head {
+  display: flex;
+  gap: var(--pgm-space-1);
+  align-items: baseline;
+  flex-wrap: wrap;
+}
+
+.pgm-tape__filters,
+.pgm-dossier__filters,
+.pgm-whales__modes {
+  display: flex;
+  gap: var(--pgm-space-1);
+  flex-wrap: wrap;
+  align-items: flex-end;
+}
+
+.pgm-tape__filters label,
+.pgm-dossier__filters label,
+.pgm-whales__modes label,
+.pgm-whales__form label {
+  display: grid;
+  gap: var(--pgm-space-off-1);
+  font-size: var(--pgm-font-compact);
+}
+
+.pgm-tape__rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  position: relative;
+}
+
+.pgm-tape__row,
+.pgm-whales__row {
+  display: flex;
+  gap: var(--pgm-space-1);
+  align-items: center;
+  min-height: 44px;               /* ROW_H in tape.ts: the virtual window's arithmetic and this must agree */
+  flex-wrap: wrap;
+}
+
+.pgm-tape__row:hover,
+.pgm-whales__row:hover {
+  background: var(--pgm-bg-elevated);
+}
+
+.pgm-tape__tooltip {
+  display: grid;
+  gap: var(--pgm-space-off-1);
+  background: var(--pgm-bg-inset);
+  border: var(--pgm-border-w-hair) solid var(--pgm-border-default);
+  border-radius: var(--pgm-radius-sm);
+  padding: var(--pgm-space-1);
+  font-size: var(--pgm-font-compact);
+  width: 100%;
+}
+
+.pgm-tape__why {
+  color: var(--pgm-text-muted);
+}
+
+.pgm-badge {
+  display: inline-flex;
+  gap: var(--pgm-space-off-1);
+  align-items: baseline;
+  border: var(--pgm-border-w-hair) solid var(--pgm-border-default);
+  border-radius: var(--pgm-radius-chip);
+  padding: 0 var(--pgm-space-off-1);
+  font-size: var(--pgm-font-compact);
+  background: transparent;
+  color: inherit;
+  flex-wrap: wrap;
+}
+
+.pgm-badge small {
+  color: var(--pgm-text-muted);
+}
+
+.pgm-badge__conf {
+  color: var(--pgm-text-muted);
+}
+
+.pgm-dossier__badges,
+.pgm-whales__feed,
+.pgm-whales__views ul,
+.pgm-whales__buckets ul,
+.pgm-dossier__methodology ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--pgm-space-off-1);
+}
+
+.pgm-dossier__windows {
+  display: flex;
+  gap: var(--pgm-space-off-1);
+}
+
+.pgm-dossier__windows button[aria-pressed="true"] {
+  border-color: var(--pgm-brand-primary);
+  color: var(--pgm-brand-primary-text);
+}
+
+.pgm-dossier__metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+  gap: var(--pgm-space-1);
+  margin: 0;
+}
+
+.pgm-dossier__metric dd {
+  margin: 0;
+  font-family: var(--pgm-font-dense);
+}
+
+.pgm-dossier__metric small {
+  display: block;
+  color: var(--pgm-text-muted);
+  font-size: var(--pgm-font-compact);
+}
+
+.pgm-dossier__metric.is-good dd {
+  color: var(--pgm-action-buy);
+}
+
+.pgm-dossier__metric.is-bad dd {
+  color: var(--pgm-action-sell);
+}
+
+.pgm-dossier__curve svg {
+  width: 100%;
+  height: auto;
+  background: var(--pgm-bg-inset);
+}
+
+.pgm-chart-line {
+  fill: none;
+  stroke: var(--pgm-brand-primary);
+  stroke-width: var(--pgm-border-w-strong);
+}
+
+.pgm-chart-drawdown {
+  fill: var(--pgm-alert-high);
+  opacity: 0.25;
+  stroke: none;
+}
+
+.pgm-chart-zero {
+  stroke: var(--pgm-text-muted);
+  stroke-width: var(--pgm-border-w-hair);
+  stroke-dasharray: 2 2;
+}
+
+.pgm-dossier__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr));
+  gap: var(--pgm-space-2);
+}
+
+.pgm-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--pgm-font-compact);
+}
+
+.pgm-table th,
+.pgm-table td {
+  text-align: left;
+  padding: var(--pgm-pad-cell-x-compact);
+  border-bottom: var(--pgm-border-w-hair) solid var(--pgm-border-default);
+}
+
+.pgm-table td.is-good,
+.pgm-table td.is-buy {
+  color: var(--pgm-action-buy);
+}
+
+.pgm-table td.is-bad,
+.pgm-table td.is-sell {
+  color: var(--pgm-action-sell);
+}
+
+.pgm-dossier__methodology,
+.pgm-dossier__disclaimers {
+  color: var(--pgm-text-muted);
+  font-size: var(--pgm-font-compact);
+}
+
+.pgm-whales__rule,
+.pgm-whales__counts,
+.pgm-whales__why {
+  color: var(--pgm-text-muted);
+  font-size: var(--pgm-font-compact);
+}
+
+.pgm-whales__row.is-urgent {
+  border-left: var(--pgm-border-w-heavy) solid var(--pgm-alert-critical);
+}
+
+.pgm-whales__row.is-notice {
+  border-left: var(--pgm-border-w-heavy) solid var(--pgm-alert-watch);
+}
+
+.pgm-whales__row.is-info {
+  border-left: var(--pgm-border-w-heavy) solid var(--pgm-alert-info);
+}
+
+.pgm-whales__ratio {
+  display: grid;
+  font-family: var(--pgm-font-dense);
+  min-width: 4.5rem;
+}
+
+.pgm-whales__refusal,
+.pgm-dossier__error,
+.pgm-whales__error {
+  color: var(--pgm-alert-high);
+}
+
+@media (max-width: var(--pgm-bp-md)) {
+  .pgm-terminal__handle {
+    display: none;                 /* below the breakpoint the panels are tabs, so there is nothing to drag */
+  }
+}
