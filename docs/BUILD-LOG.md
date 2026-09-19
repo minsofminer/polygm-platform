@@ -376,6 +376,32 @@ test that reads both ends, and the property is exercised against `next start` + 
 launch items with numbered owners in the P08 doc's §4, and `measure-first-load.mjs` reports *bytes fetched per
 document* — a payload claim, not a rendering one.
 
+## P10 — the terminal · 2026-09-19
+
+**Built.** `docs/P10-frontend-terminal.md` (the phase, decision by decision), the terminal's data layer and its
+three-column frame with the live tape (D1, D2) in `web/src/terminal/`, and D5's Wallet Radar end to end —
+`packages/polygm_core/radar/rankings.py`, `POST /v1/radar/runs`, `GET /v1/radar/runs/{job_id}`, its contract,
+and `tools/p10-gate-check.py`'s new `c10`.
+
+**Verified.** `make p10` **10/10 in 2.5 s** with `--self-test` **8/8 canaries fired**
+(`docs/verification/P10-gate.txt`); `python3 -m unittest discover -s tests` **771 tests OK** (25 radar, 42
+terminal API); `cd web && npx vitest run` **166 tests** (21 for the tape) and `tsc` clean; `check-openapi`
+**287 passed, 0 failed** over a 36-path contract. Commits `4a7b299` (D1/D2) and `bd3169e` (D5) on
+`origin/main`, on top of `25122ae`.
+
+**Two findings that were bugs and not documentation.** (1) The radar iterated `_market_rows()` as a list — it
+returns a dict keyed by **condition** id — so every scan was a 500; the radar's own tests found it before any
+screen did. (2) The P10 POSTs accepted a mutation with **no `Idempotency-Key`** while the contract has required
+one since P04 and documented a 400 without it: `_idem_shape` treated `None` as "nothing to check", so the header
+was decorative on exactly the routes where a duplicate costs money. It now answers `IDEM_KEY_REQUIRED`, the four
+tables and four contract operations document the 400, and the read halves of the two mixed paths have their own
+tables — an invariant `check-openapi` now checks per verb.
+
+**`[UNVERIFIED]`.** No browser has been in the loop, so the 60 fps-under-live-load requirement, the resize
+persistence and mobile tab parity are claims about code, not measurements; D3, D4, D6, D7 screens are pending
+against APIs that are already gated, and D8/D9 wait on P11's rule engine. The record half of idempotency is open
+and stated in the doc's §5. No real funds: per `docs/AGENTS-BUILD.md`, money waits for P13 and P14.
+
 ## P07 — the security plane · 2026-09-18
 
 **Built.** `docs/P07-security.md` (D1–D10: STRIDE ranked by cost, the two-address key envelope with a revocation
