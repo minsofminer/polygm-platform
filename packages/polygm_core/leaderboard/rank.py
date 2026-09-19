@@ -192,14 +192,17 @@ def _gate_failure(ev: dict, board: dict) -> list[str]:
 def _row_for(board: dict, ev: dict, rank: int) -> dict:
     """One ranked row: the score, every component behind it, the labels, and the components of the order."""
     score = ev.get("boardScore") or ev["score"]
-    lived = [r for r in ev["settled"] if not r.get("atMs") or True]
+    # The rising board's evidence reaches 14 days so its subtraction has two halves; the number the row shows is
+    # the one the board ranked: settled markets INSIDE the 7-day window.
+    settled_count = (ev["rising"]["settledInWindow"] if board["id"] == "rising" and ev.get("rising")
+                     else len(ev["settled"]))
     row = {
         "rank": rank,
         "wallet": ev["wallet"],
         "scoreBps": score["scoreBps"],
         "state": ev["state"]["state"],
         "labels": list(ev["state"]["labels"]),
-        "settledMarkets": len(lived),
+        "settledMarkets": settled_count,
         "wins": score["wins"],
         "winRateBps": score["winRateBps"],
         "insufficientSample": score["insufficientSample"],
@@ -211,6 +214,9 @@ def _row_for(board: dict, ev: dict, rank: int) -> dict:
         "bestTradeShareBps": ev["state"]["bestTradeShareBps"],
         "ageDays": ev["state"]["ageDays"],
         "verifiedVolumeMicro": ev["volume"]["verifiedMicro"],
+        # Which window that turnover was measured over. The volume board ranks the window it was asked for;
+        # every other board states LIFETIME, because that is the window its eligibility floor is written in.
+        "volumeWindow": board.get("volumeWindow") or "lifetime",
         "washedMicro": ev["volume"]["washedMicro"],
         "washNote": ev["volume"]["note"],
         "copiers": ev["copiers"],
@@ -246,16 +252,26 @@ def _sort_key(board: dict):
 
 
 def rank_board(*, board_id: str, wallets: list[dict], at_ms: int, limit: int = 100,
-               category: str = "") -> dict:
+               category: str = "", window: str = "") -> dict:
     """Rank the eligible wallets on one board and say, for each, why they are where they are.
 
     `wallets` are raw evidence dicts (see `_wallet_evidence`); `limit` truncates the returned rows but never the
     eligibility decision — a board's size is a page size, not a definition of the board.
+
+    `window` is the window the EVIDENCE was read at (`source.read_plan`), not a filter this function applies: the
+    engine ranks what it is handed, and the caller that read a 7-day tape must not also have to remember to say
+    so. It is validated against the board's own window list rather than trusted, and it travels into the board
+    summary and into each row's `volumeWindow`.
     """
     b = bd.board(board_id)
     if b is None:
         raise ValueError("unknown board %r" % board_id)
     board = dict(b)
+    if window:
+        if window not in tuple(board["windows"]):
+            raise ValueError("board %s reads %s, not %s" % (board_id, "/".join(board["windows"]), window))
+        board["window"] = str(window)
+    board["volumeWindow"] = board["window"] if board_id == "volume" else "lifetime"
     if board_id == "category":
         if category not in bd.CATEGORIES:
             raise ValueError("category board needs one of %s" % (", ".join(bd.CATEGORIES),))
@@ -299,6 +315,8 @@ def rank_board(*, board_id: str, wallets: list[dict], at_ms: int, limit: int = 1
         "gate": board["gate"],
         "tieBreaks": board["tieBreaks"],
         "cadence": board["cadence"],
+        "cadenceMs": _int(board.get("cadenceMs")),
+        "windows": list(board["windows"]),
         "rows": visible,
         "rankedTotal": len(out_rows),
         "unranked": unranked[:limit],
@@ -312,14 +330,15 @@ def rank_board(*, board_id: str, wallets: list[dict], at_ms: int, limit: int = 1
 
 
 def explain(*, board_id: str, wallets: list[dict], at_ms: int, a: str, b: str,
-            category: str = "") -> dict:
+            category: str = "", window: str = "") -> dict:
     """Why `a` is above (or below) `b`, in one sentence, from the two component sets.
 
     This is the D6 "why this rank" panel and the P11 gate's own question. It answers with numbers rather than
     adjectives, and it names the sample size explicitly in both directions — because the interesting case is the
     one a user will report as a bug: fewer settled markets, better rank.
     """
-    board_out = rank_board(board_id=board_id, wallets=wallets, at_ms=at_ms, limit=10_000, category=category)
+    board_out = rank_board(board_id=board_id, wallets=wallets, at_ms=at_ms, limit=10_000, category=category,
+                           window=window)
     index = {r["wallet"]: r for r in board_out["rows"]}
     miss = [w for w in (a, b) if w not in index]
     if miss:

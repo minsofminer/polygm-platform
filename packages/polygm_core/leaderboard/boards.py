@@ -52,6 +52,11 @@ CATEGORIES = ("Politics", "Sports", "Crypto", "Finance")
 #: drawdown), which is what makes the two surfaces agree by construction rather than by coincidence.
 VOLATILITY_MULTIPLE = 2
 
+#: The two cadences, as milliseconds, so "how stale is this board" is a comparison rather than a reading of a
+#: sentence: a screen that prints "hourly" and cannot say whether the last run was four hours ago is decoration.
+HOUR_MS = 3_600_000
+DAY_MS = 86_400_000
+
 #: Settled markets required *inside* the 7-day window before a rising-board placing counts as a placing.
 RISING_SAMPLE = 5
 
@@ -79,6 +84,7 @@ BOARDS: tuple[dict, ...] = (
         "tieBreaks": ("score, then settled markets (more first), then smaller drawdown, then wallet id "
                       "(ascending, so the same data always produces the same board)"),
         "cadence": "hourly for 7d, daily for 30d/90d/all; every run appends a snapshot for the rank sparkline",
+        "cadenceMs": HOUR_MS,
         "rewards": "consistent profit relative to the risk taken to get it",
         "punishes": ("churn (volume is not in the numerator), one-off luck (trimmed), and unpunished "
                      "blow-ups (a blown-up wallet keeps its negative score and stays on the board)"),
@@ -97,6 +103,7 @@ BOARDS: tuple[dict, ...] = (
         "gate": "%d settled markets in the window" % MIN_RESOLVED,
         "tieBreaks": "win rate, then settled markets, then smaller drawdown, then wallet id",
         "cadence": "daily",
+        "cadenceMs": DAY_MS,
         "rewards": "accuracy on a real sample",
         "punishes": "nothing directly — which is why it is not the default: a 20-for-25 record on 1-cent "
                     "longshots and a 20-for-25 record on 50-cent coins are the same 80% and different products",
@@ -115,6 +122,7 @@ BOARDS: tuple[dict, ...] = (
         "gate": "any wallet with verified turnover in the window; no sample gate applies to a fact",
         "tieBreaks": "verified volume, then fills, then wallet id",
         "cadence": "hourly",
+        "cadenceMs": HOUR_MS,
         "rewards": "the familiar board, for users who want the familiar board",
         "punishes": "self-trading: the round trip is subtracted and the subtraction is shown on the row",
         "note": ("stated on every row that wash volume was removed, because a volume board that silently "
@@ -133,6 +141,7 @@ BOARDS: tuple[dict, ...] = (
         "gate": "%d settled markets inside the 7-day window" % RISING_SAMPLE,
         "tieBreaks": "improvement, then settled markets in the window, then wallet id",
         "cadence": "hourly",
+        "cadenceMs": HOUR_MS,
         "rewards": "new talent and genuine turnarounds",
         "punishes": ("nothing, and it is the board where a provisional wallet is most likely to appear, which is "
                      "why the provisional label is rendered on every row rather than in a footnote"),
@@ -153,6 +162,7 @@ BOARDS: tuple[dict, ...] = (
                  % MIN_RESOLVED),
         "tieBreaks": "score, then category settled markets, then wallet id",
         "cadence": "daily",
+        "cadenceMs": DAY_MS,
         "rewards": "people who are genuinely good at one thing, who a generalist board hides",
         "punishes": "nothing — the category-share rule is a definition of 'specialist', not a punishment",
         "note": "four boards in one: Politics, Sports, Crypto, Finance, each with its own gate",
@@ -169,6 +179,7 @@ BOARDS: tuple[dict, ...] = (
         "gate": "at least 1 active copier; the wallet must also pass the lifetime turnover floor",
         "tieBreaks": "copiers, then verified volume, then wallet id",
         "cadence": "hourly",
+        "cadenceMs": HOUR_MS,
         "rewards": "wallets people actually trust with money — the board that feeds the copy discovery list",
         "punishes": ("copy farms: a wallet whose fills are mechanically derived from another wallet is flagged "
                      "and cannot rank here, because a farm copying a wallet is not demand for that wallet"),
