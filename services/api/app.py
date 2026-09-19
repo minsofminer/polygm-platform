@@ -3092,6 +3092,16 @@ def _copy_config_out(row: tuple) -> dict:
 #: because `tools/check-openapi.py` reads these tables from the AST and a comprehension is invisible to it —
 #: and the invariant that must hold between the pair is checked there directly ("the read is the write minus
 #: the key-required answer"), which is a stronger statement than "one was built from the other".
+#: D7's sort keys, and the COLUMN each one reads. `riskAdjustedBps` is computed per row (net / drawdown) and
+#: is the only key that is not a stored column — it is the default precisely because it is the one that punishes
+#: a big PnL bought with a bigger drawdown.
+_COPY_SOURCE_SORTS = {"riskAdjusted": "riskAdjustedBps", "netAfterFees": "netAfterFeesMicro",
+                      "closedTrades": "closedTrades", "drawdown": "maxDrawdownMicro"}
+_COPY_SOURCE_SORT_NOTES = {"riskAdjusted": "risk-adjusted return (net after fees per unit of drawdown)",
+                           "netAfterFees": "net PnL after fees",
+                           "closedTrades": "the number of closed trades",
+                           "drawdown": "the largest drawdown"}
+
 COPY_LIST_RESPONSES = {401: {"description": "a session is required"},
                        404: {"description": "unknown source pseudonym, or an unknown configId filter"},
                        422: {"description": "missing field, an unknown field, or maxOrder above maxDaily"}}
@@ -3120,6 +3130,92 @@ def list_copy_configs(request: Request,
     return _stamped({"items": items, "count": len(items),
                      "note": ("`dryRun` is per config: creation is always dry-run, and going live needs both an "
                               "acknowledged slippage warning and dry-run history this account produced")},
+                    ttl_ms=0, stale_ms=0)
+
+
+#: D7's discovery list. The read is `USER` rather than `PUBLIC` because the rows carry the caller's own
+#: standing with each source (`currentlyCopying`), which is account state and not market data.
+COPY_SOURCES_RESPONSES = {401: {"description": "a session is required"},
+                          422: {"description": "an unknown sort key, or windowDays/limit outside the range"}}
+
+
+@app.get("/v1/copy/sources", responses=COPY_SOURCES_RESPONSES)
+def list_copy_sources(request: Request,
+                      windowDays: int = Query(default=30, ge=7, le=90),
+                      sort: str = Query(default="riskAdjusted", max_length=32),
+                      onlyCopying: bool = Query(default=False),
+                      limit: int = Query(default=50, ge=1, le=100)):
+    """Who is worth copying, ranked by something that is not raw PnL.
+
+    D7's rule is blunt: the default sort must not be PnL, because a list ordered by realised profit surfaces the
+    gambler who won, and the user copies a strategy that does not exist. The default here is
+    `riskAdjusted` — net after fees per unit of drawdown — and the payload says so in a sentence, because a list
+    that does not state its own order implies the obvious one.
+
+    Three things travel with every row and none of them are optional:
+
+    * the **gate**: a win rate below `SAMPLE_GATE` settled trades is `null` plus the sentence explaining why, so
+      a row cannot be read as "60% win rate" by a user who skips the footnote;
+    * the **drawdown** the risk-adjusted number is divided by, because a ratio whose denominator is invisible is
+      a marketing number;
+    * the **losing window**: `netAfterFeesMicro` is returned as it is, negative included. This list is a
+      discovery surface, and the fixture's most important row is the one that lost money.
+
+    `onlyCopying` filters to sources this account already copies — the pause/stop list's own read, so the screen
+    does not need a second call to know which rows are already engaged.
+    """
+    rid = request.state.request_id
+    if sort not in _COPY_SOURCE_SORTS:
+        return err("VALIDATION", rid, where=["sort must be one of %s" % ", ".join(sorted(_COPY_SOURCE_SORTS))])
+    uid, _row, e = _principal(request)
+    if e:
+        return e
+    rows = _db.execute(
+        "SELECT source_user_id, window_days, closed_trades, win_rate_bp, realized_pnl_micro, fees_micro,"
+        " net_after_fees_micro, max_drawdown_micro, longest_losing_streak, avg_latency_ms, updated_ms"
+        " FROM copy_source_stats WHERE window_days=?", (int(windowDays),)).fetchall()
+    out = []
+    for (wallet, days, closed, wr_bp, realised, fees, net, dd, streak, latency, updated) in rows:
+        wallet_s, closed_i, dd_i = str(wallet), _tm._int(closed), _tm._int(dd)
+        gate = _tm.win_rate(_tm._int(wr_bp or 0) * closed_i // 10_000, closed_i)
+        mine = _tm._int(_db.execute("SELECT COUNT(*) FROM copy_configs WHERE user_id=? AND source_user=?",
+                                    (str(uid), wallet_s)).fetchone()[0])
+        others = _tm._int(_db.execute("SELECT COUNT(*) FROM copy_configs WHERE source_user=?",
+                                      (wallet_s,)).fetchone()[0])
+        out.append({"anonWallet": _anon(wallet_s), "windowDays": _tm._int(days),
+                    "closedTrades": closed_i, "realisedMicro": _tm._int(realised),
+                    "feesMicro": _tm._int(fees), "netAfterFeesMicro": _tm._int(net),
+                    "maxDrawdownMicro": dd_i, "longestLosingStreak": _tm._int(streak),
+                    "avgLatencyMs": _tm._int(latency),
+                    "winRateBps": gate["bps"], "insufficientSample": gate["insufficientSample"],
+                    "sampleNote": gate["reason"], "sampleGate": gate["sampleGate"],
+                    # The division is stated as the sentence and the integer: a ratio whose denominator is not
+                    # on the row is a number a user cannot check.
+                    "riskAdjustedBps": _tm._int(net) * 10_000 // max(1, dd_i),
+                    "riskAdjustedRule": ("net after fees per unit of drawdown: %d / max(%d, 1). A source can be"
+                                         " profitable and still rank low here, which is the point of ranking"
+                                         " this way" % (_tm._int(net), dd_i)),
+                    "copierCount": others, "currentlyCopying": mine > 0, "myConfigs": mine,
+                    "updatedMs": _tm._int(updated)})
+    if onlyCopying:
+        out = [r for r in out if r["currentlyCopying"]]
+    out.sort(key=lambda r: r[_COPY_SOURCE_SORTS[sort]], reverse=True)
+    out = out[:limit]
+    for i, row in enumerate(out):
+        row["rank"] = i + 1
+    return _stamped({"rows": out, "count": len(out), "windowDays": _tm._int(windowDays),
+                     "sort": sort, "sorts": sorted(_COPY_SOURCE_SORTS),
+                     "sortNote": "rows are ordered by %s, descending" % _COPY_SOURCE_SORT_NOTES[sort],
+                     "ranking": ("this list is ranked risk-adjusted by default - net after fees per unit of"
+                                 " drawdown - and NOT by raw PnL, because $50k through a $40k drawdown and $50k"
+                                 " through a $4k one are not the same product"),
+                     "sampleGate": _tm.SAMPLE_GATE,
+                     "emptyNote": ("no source has trade statistics for this window yet. Discovery over"
+                                   " arbitrary markets is the wallet radar's job; this list can only rank"
+                                   " sources whose record we already hold"),
+                     "note": ("every row carries the drawdown the ratio is divided by, the gate its win rate"
+                              " passed or failed, and its losing streaks: a discovery list that only shows the"
+                              " top line is how a gambler gets copied")},
                     ttl_ms=0, stale_ms=0)
 
 
@@ -3841,6 +3937,7 @@ _levels_p10 = {
     "GET /v1/tape/facets": (_authz.PUBLIC, ""),
     "GET /v1/whales": (_authz.PUBLIC, ""),
     "GET /v1/traders/{anon}": (_authz.PUBLIC, ""),
+    "GET /v1/copy/sources": (_authz.USER, ""),
     "GET /v1/copy/configs": (_authz.USER, ""),
     "POST /v1/copy/configs": (_authz.USER, ""),
     "POST /v1/copy/configs/guards": (_authz.USER, "scoped:config_id"),
@@ -3853,7 +3950,8 @@ _levels_p10 = {
 }
 for _t in (TAPE_FILLS_RESPONSES, FACETS_RESPONSES, WHALES_RESPONSES, TRADER_RESPONSES, COPY_CREATE_RESPONSES,
            COPY_GUARD_RESPONSES, COPY_MONITOR_RESPONSES, PORTFOLIO_RESPONSES, WHALE_VIEW_RESPONSES,
-           RADAR_RESPONSES, RADAR_JOB_RESPONSES, COPY_LIST_RESPONSES, WHALE_VIEW_LIST_RESPONSES):
+           RADAR_RESPONSES, RADAR_JOB_RESPONSES, COPY_LIST_RESPONSES, WHALE_VIEW_LIST_RESPONSES,
+           COPY_SOURCES_RESPONSES):
     _t.update(_INTERNAL)                       # every route can 500 through the app-wide handler
 del _t
 _authz.LEVELS_TABLE.update(_levels_p10)

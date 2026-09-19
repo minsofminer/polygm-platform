@@ -415,6 +415,76 @@ class TestCopy(TerminalBase):
         self.assertEqual(r.status_code, 404)
 
 
+class TestDiscovery(TerminalBase):
+    """D7's discovery list: a sort that is allowed to be wrong about the biggest number.
+
+    The fixture is built so that the raw-PnL ordering and the risk-adjusted ordering are DIFFERENT, and the
+    largest net PnL belongs to the source with the worst drawdown. A test that only checked "rows come back"
+    would pass on a list that ranked raw PnL and said "risk adjusted" above it.
+    """
+
+    def test_the_default_sort_is_risk_adjusted_and_the_payload_says_so(self):
+        body = self.get("/v1/copy/sources", windowDays=30)
+        self.assertEqual(body["sort"], "riskAdjusted")
+        self.assertIn("risk-adjusted", body["ranking"])
+        self.assertIn("net after fees per unit of drawdown", body["sortNote"])
+        self.assertGreaterEqual(body["sampleGate"], 1)
+        scores = [r["riskAdjustedBps"] for r in body["rows"]]
+        self.assertEqual(scores, sorted(scores, reverse=True), "rows are not in the order the payload claims")
+
+    def test_the_biggest_pnl_is_not_the_top_row(self):
+        rows = {r["anonWallet"]: r for r in self.get("/v1/copy/sources", windowDays=30)["rows"]}
+        gambler = max(rows.values(), key=lambda r: r["netAfterFeesMicro"])
+        # The fixture's point: the largest net PnL carries the largest drawdown, so it cannot be rank 1 here.
+        self.assertGreater(gambler["maxDrawdownMicro"], 0)
+        self.assertNotEqual(gambler["rank"], 1)
+        top = min(rows.values(), key=lambda r: r["rank"])
+        self.assertLess(top["riskAdjustedBps"], 10 ** 9)
+        self.assertIn("net after fees per unit of drawdown", top["riskAdjustedRule"])
+        # Every row states the denominator its own ratio was divided by - a ratio whose divisor is invisible is
+        # a marketing number.
+        for row in rows.values():
+            self.assertGreater(row["maxDrawdownMicro"], 0)
+            self.assertIn(str(row["maxDrawdownMicro"]), row["riskAdjustedRule"])
+
+    def test_a_source_below_the_gate_has_no_win_rate_and_a_reason(self):
+        body = self.get("/v1/copy/sources", windowDays=30)
+        below = [r for r in body["rows"] if r["insufficientSample"]]
+        self.assertTrue(below, "the fixture no longer contains a source under the sample gate")
+        for row in below:
+            self.assertIsNone(row["winRateBps"])
+            self.assertIn("insufficient sample", row["sampleNote"])
+        gated = [r for r in body["rows"] if not r["insufficientSample"]]
+        for row in gated:
+            self.assertIsNotNone(row["winRateBps"])
+            self.assertEqual(row["sampleNote"], "")
+
+    def test_the_negative_window_is_in_the_list(self):
+        body = self.get("/v1/copy/sources", windowDays=7)
+        self.assertTrue(any(r["netAfterFeesMicro"] < 0 for r in body["rows"]),
+                        "a discovery list with no losing row is a sales page")
+
+    def test_sorting_by_the_number_the_product_refuses_to_default_to(self):
+        by_net = [r["netAfterFeesMicro"] for r in self.get("/v1/copy/sources", sort="netAfterFees")["rows"]]
+        self.assertEqual(by_net, sorted(by_net, reverse=True))
+        self.assertEqual(self.client.get("/v1/copy/sources", params={"sort": "vibes"},
+                                         headers=USER).status_code, 422)
+
+    def test_only_copying_is_the_pause_list(self):
+        all_rows = self.get("/v1/copy/sources", windowDays=30)["rows"]
+        mine = self.get("/v1/copy/sources", windowDays=30, onlyCopying=True)["rows"]
+        self.assertLessEqual(len(mine), len(all_rows))
+        for row in mine:
+            self.assertTrue(row["currentlyCopying"])
+            self.assertGreaterEqual(row["myConfigs"], 1)
+            self.assertGreaterEqual(row["copierCount"], 1)
+
+    def test_every_row_is_a_pseudonym(self):
+        for row in self.get("/v1/copy/sources", windowDays=90)["rows"]:
+            self.assertTrue(row["anonWallet"].startswith("w_"))
+            self.assertNotRegex(row["anonWallet"], r"^0x")
+
+
 class TestPortfolio(TerminalBase):
     def test_the_portfolio_answers_with_its_benchmark_and_its_unknown_rows(self):
         body = self.get("/v1/me/portfolio")

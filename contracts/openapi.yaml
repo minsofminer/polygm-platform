@@ -1720,6 +1720,62 @@ paths:
         "422": {$ref: "#/components/responses/Validation"}
 
         "500": {$ref: "#/components/responses/Internal"}
+  /v1/copy/sources:
+    get:
+      tags: [trading]
+      summary: Copyable sources, ranked risk-adjusted by default (P10 D7)
+      description: |
+        D7's discovery list. The default sort is `riskAdjusted` - net after fees per unit of drawdown - and the
+        payload states it in `sortNote` and `ranking`, because a list that does not say how it is ordered
+        implies the obvious order, and the obvious order is raw PnL, which surfaces lucky gamblers.
+
+        Every row carries the two numbers that make the ratio checkable: `maxDrawdownMicro` (the denominator) and
+        `riskAdjustedRule` (the division, spelled out). `winRateBps` is `null` with `sampleNote` when the source
+        is below `sampleGate` settled trades - a rate below the gate is not a low-confidence rate, it is not a
+        rate. `netAfterFeesMicro` is returned as it is, negative included.
+      operationId: listCopySources
+      x-auth: user
+      x-rate-class: authed-read
+      x-cache: no-store
+      parameters:
+        - name: windowDays
+          in: query
+          schema: {type: integer, minimum: 7, maximum: 90, default: 30}
+        - name: sort
+          in: query
+          schema: {type: string, default: riskAdjusted, enum: [riskAdjusted, netAfterFees, closedTrades, drawdown]}
+        - name: onlyCopying
+          in: query
+          schema: {type: boolean, default: false}
+        - name: limit
+          in: query
+          schema: {type: integer, minimum: 1, maximum: 100, default: 50}
+      responses:
+        "200":
+          description: ranked sources, each with its drawdown, its gate and its losing windows
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Stamped"
+                  - type: object
+                    required: [rows, count, windowDays, sort, sorts, sortNote, ranking, sampleGate, emptyNote, note]
+                    properties:
+                      rows:
+                        type: array
+                        items: {$ref: "#/components/schemas/CopySource"}
+                      count: {type: integer}
+                      windowDays: {type: integer}
+                      sort: {type: string}
+                      sorts: {type: array, items: {type: string}}
+                      sortNote: {type: string}
+                      ranking: {type: string}
+                      sampleGate: {type: integer}
+                      emptyNote: {type: string}
+                      note: {type: string}
+        "401": {$ref: "#/components/responses/Denied"}
+        "422": {$ref: "#/components/responses/Validation"}
+        "500": {$ref: "#/components/responses/Internal"}
   /v1/copy/configs:
     get:
       tags: [trading]
@@ -2571,6 +2627,35 @@ components:
               riskAdjustedNote: {type: string}
         ranking: {type: string, description: "the sentence that says HOW the list is sorted, in the payload"}
 
+    CopySource:
+      type: object
+      required: [anonWallet, windowDays, closedTrades, realisedMicro, feesMicro, netAfterFeesMicro,
+                 maxDrawdownMicro, longestLosingStreak, avgLatencyMs, winRateBps, insufficientSample,
+                 sampleNote, sampleGate, riskAdjustedBps, riskAdjustedRule, copierCount, currentlyCopying,
+                 myConfigs, updatedMs, rank]
+      properties:
+        anonWallet: {type: string, description: "a pseudonym; an address is never returned (P10 gate c2)"}
+        windowDays: {type: integer}
+        closedTrades: {type: integer}
+        realisedMicro: {type: integer}
+        feesMicro: {type: integer}
+        netAfterFeesMicro: {type: integer, description: "signed, and returned negative when it is negative"}
+        maxDrawdownMicro: {type: integer, description: "the denominator of the risk-adjusted ratio, stated"}
+        longestLosingStreak: {type: integer}
+        avgLatencyMs: {type: integer}
+        winRateBps:
+          type: [integer, "null"]
+          description: "null when the source is below the sample gate; the reason is in sampleNote"
+        insufficientSample: {type: boolean}
+        sampleNote: {type: string}
+        sampleGate: {type: integer}
+        riskAdjustedBps: {type: integer}
+        riskAdjustedRule: {type: string}
+        copierCount: {type: integer}
+        currentlyCopying: {type: boolean}
+        myConfigs: {type: integer}
+        updatedMs: {type: integer}
+        rank: {type: integer}
     CopyConfig:
       type: object
       required: [configId, sourceAnon, mode, enabled, dryRun]

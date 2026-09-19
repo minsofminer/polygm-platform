@@ -80,6 +80,7 @@ TABLE_FOR_PATH = {
     "/v1/copy/configs": "COPY_CREATE_RESPONSES",
     "/v1/copy/configs/guards": "COPY_GUARD_RESPONSES",
     "/v1/copy/configs/monitor": "COPY_MONITOR_RESPONSES",
+    "/v1/copy/sources": "COPY_SOURCES_RESPONSES",
     "/v1/me/portfolio": "PORTFOLIO_RESPONSES",
     "/v1/whale-views": "WHALE_VIEW_RESPONSES",
     # A path with a read and a write has TWO tables, and they differ by exactly the rows that describe the

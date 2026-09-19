@@ -52,11 +52,13 @@ PY = sys.executable
 #: The paths this phase serves. c1 requires each of them in the contract AND in `tools/check-openapi.py`'s table
 #: (`TABLE_FOR_PATH`), because a path missing from that table is a path whose status sets are never compared.
 P10_PATHS = ("/v1/tape/fills", "/v1/tape/facets", "/v1/whales", "/v1/traders/{anon}", "/v1/copy/configs",
-             "/v1/copy/configs/guards", "/v1/copy/configs/monitor", "/v1/me/portfolio", "/v1/whale-views")
+             "/v1/copy/configs/guards", "/v1/copy/configs/monitor", "/v1/copy/sources", "/v1/me/portfolio",
+             "/v1/whale-views")
 
 #: The four reads the phase's own doc calls public, and the seven that are the caller's own state.
 PUBLIC_OPS = ("GET /v1/tape/fills", "GET /v1/tape/facets", "GET /v1/whales", "GET /v1/traders/{anon}")
 USER_OPS = ("GET /v1/copy/configs", "POST /v1/copy/configs", "POST /v1/copy/configs/guards",
+            "GET /v1/copy/sources",
             "GET /v1/copy/configs/monitor", "GET /v1/me/portfolio", "GET /v1/whale-views",
             "POST /v1/whale-views")
 
@@ -318,7 +320,7 @@ def float_findings(text: str, where: str) -> list:
 
 # ---------------------------------------------------------------------------------------------------- checks
 def c1_contract(p: Probe) -> tuple[str, bool, str]:
-    """The contract, the served routes and the authz table agree about the nine P10 operations."""
+    """The contract, the served routes and the authz table agree about P10's twelve operations."""
     rc, out = sh([PY, "tools/check-openapi.py"], timeout=600)
     tail = [l for l in out.splitlines() if l.startswith("check-openapi:")]
     ok_openapi = rc == 0 and any(" 0 failed" in l for l in tail)
@@ -332,7 +334,7 @@ def c1_contract(p: Probe) -> tuple[str, bool, str]:
     user = [op for op in USER_OPS if authz.LEVELS_TABLE.get(op, ("",))[0] == authz.USER]
     ok = (ok_openapi and not missing_contract and not missing_table
           and len(public) == len(PUBLIC_OPS) and len(user) == len(USER_OPS))
-    return ("the contract, the router and the authz table agree on P10's eleven operations", ok,
+    return ("the contract, the router and the authz table agree on P10's twelve operations", ok,
             "%s; paths in the contract %d/%d, in TABLE_FOR_PATH %d/%d; public %d/%d, user %d/%d"
             % (tail[-1] if tail else out.strip()[-90:], len(P10_PATHS) - len(missing_contract), len(P10_PATHS),
                len(P10_PATHS) - len(missing_table), len(P10_PATHS), len(public), len(PUBLIC_OPS), len(user),

@@ -208,10 +208,25 @@ def copy_state(now: int) -> dict:
              "skip_if_moved: source moved 12 cents past our entry", now - 30 * 60_000),
         ],
         # `copy_source_stats`' own columns. The 7-day window is NEGATIVE on purpose.
+        #
+        # Three sources, because D7's discovery list needs a sort it can be wrong about. The gambler
+        # (INSIDER_WALLET, `0xcc…`) has the LARGEST net PnL of the three and the WORST risk-adjusted number:
+        # $1.9M earned through a $1.9M drawdown. A list ordered by raw PnL puts it first; the list D7 asks for
+        # puts it last, and the fixture is what makes "ranked risk-adjusted" a testable claim rather than a
+        # sentence in a tooltip. QUIET_WALLET stays below the sample gate on purpose: its win rate is `null`
+        # with the reason, in the same list as two rates that are not.
         "source_stats": [
             (SMART_WALLET, 7, 7, 4285, -120 * MICRO, 2 * MICRO, -122 * MICRO, 180 * MICRO, 3, 820, now),
             (SMART_WALLET, 30, 21, 5714, 640 * MICRO, 9 * MICRO, 631 * MICRO, 410 * MICRO, 4, 760, now),
             (SMART_WALLET, 90, 44, 6136, 1_450 * MICRO, 18 * MICRO, 1_432 * MICRO, 520 * MICRO, 5, 910, now),
+            (INSIDER_WALLET, 7, 9, 6666, 900 * MICRO, 4 * MICRO, 896 * MICRO, 1_100 * MICRO, 2, 1_400, now),
+            (INSIDER_WALLET, 30, 31, 5806, 1_900 * MICRO, 12 * MICRO, 1_888 * MICRO, 1_900 * MICRO, 6, 1_350,
+             now),
+            (INSIDER_WALLET, 90, 52, 5577, 1_650 * MICRO, 21 * MICRO, 1_629 * MICRO, 2_050 * MICRO, 9, 1_500,
+             now),
+            (QUIET_WALLET, 7, 2, 5000, 40 * MICRO, 0, 40 * MICRO, 30 * MICRO, 1, 600, now),
+            (QUIET_WALLET, 30, 4, 5000, 85 * MICRO, 1 * MICRO, 84 * MICRO, 60 * MICRO, 2, 640, now),
+            (QUIET_WALLET, 90, 5, 6000, 96 * MICRO, 1 * MICRO, 95 * MICRO, 70 * MICRO, 2, 700, now),
         ],
     }
 
