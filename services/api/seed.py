@@ -46,24 +46,167 @@ MARKETS = [
     dict(id="0xM6", question="Closed market (not accepting orders)", slug="closed",
          tick="0.01", min_size="5", fee="None", neg_risk=False, accepting=False, delay=0, book=True,
          outcomes=["Yes", "No"], condition="0xC6", end_days=-1),
+    # P09's quality gate needs a book that a naive ladder renders as broken. This is the P01 observation, with
+    # the numbers P01 measured: 94 ask levels climbing away from the 0.001 tick, $21.9M of notional, and ZERO
+    # bids. It is not a bug in our ingest and not a gap in the feed - it is what a market looks like when one
+    # side has genuinely walked away - so the fixture has to contain it or the treatment is never exercised.
+    dict(id="0xM9", question="Will the incumbent carry the recount? (one-sided book)", slug="recount-incumbent",
+         tick="0.001", min_size="5", fee="None", neg_risk=False, accepting=False, delay=0, book=True,
+         outcomes=["Yes", "No"], condition="0xC9", end_days=-1, one_sided=True),
 ]
+
+# --------------------------------------------------------------------------- #
+# P09 · the market surfaces
+#
+# `mid` is optional and defaults to 0.50 (the one price the earlier phases were written against). A multi-
+# outcome event whose every candidate sits at 0.50 is not a fixture, it is a fiction: the whole point of D2 is
+# that the outcomes sum to 1, and a fixture that cannot sum to anything cannot test that.
+#
+# The 128-outcome event is modelled as 128 MARKETS under one event, which is the venue's own shape and the
+# prompt's language ("128 markets under one event"). That is also the only shape our tables can carry: a book
+# is keyed (market_id, side, price), so per-outcome quotes need one market per outcome. A single market with
+# 128 outcome TOKENS would have one book and 128 unpriced outcomes, i.e. a table where every row but one says
+# "unknown" - and an invariant about the sum of 128 prices cannot be checked against one.
+NOMINEE_EVENT = dict(id="0xEV128", slug="nominee-2028", title="Republican Presidential Nominee 2028",
+                     category="Politics", neg_risk=True)
+NOMINEE_COUNT = 128
+# Prices are ON the 0.001 tick grid and sum to 1.002 - a deviation inside the band the tick sizes imply
+# (128 outcomes x 1 tick), which is the honest default state of a real event: the sum is never exactly 1, and
+# a screen that renders "100%" while the true sum is 99.4% is telling its reader something false.
+NOMINEE_PRICES = [340_000, 200_000, 120_000, 70_000] + [2_000] * 100 + [3_000] * 24
+NOMINEE_VOL24H = [620_000_000_000, 210_000_000_000, 96_000_000_000, 44_000_000_000] + \
+                 [5_000_000_000] * 10 + [400_000_000] * 114                   # last 114: the dead tail
+NOMINEE_LIQ = [26_400_000_000_000, 12_200_000_000_000, 7_100_000_000_000, 4_000_000_000_000] + \
+              [200_000_000_000] * 10 + [9_400_000_000] * 114
+
+# market_id -> (category, resolution source URL, resolution criteria, liquidity, volume24h, open interest).
+# The volumes and the OI are the P01-scale numbers the prompt quotes for this event ($1.0M 24h, $52.8M
+# liquidity); the liquidity column below is what the venue reports, NOT the sum of the seeded book, and the
+# API keeps those two apart on purpose - a fixture that makes the book sum to the reported liquidity would
+# let a wrong join look right.
+SURFACE = {
+    "0xM1": ("Economics", "https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm",
+             "Resolves YES if the FOMC statement released at the September meeting announces a reduction in "
+             "the target range for the federal funds rate. Resolves NO if the range is unchanged or raised.",
+             1_820_000_000_000, 412_500_000_000, 1_284_000_000_000),
+    "0xM2": ("Crypto", "https://www.coinbase.com/price/bitcoin",
+             # ATTACKER-INFLUENCED TEXT ON PURPOSE. The resolution criteria are written by whoever created
+             # the market, so they are the one string on the page an outsider controls. This fixture carries
+             # markup, a script tag, an entity and a markdown link so the sanitiser has something to strip:
+             # a fixture of plain sentences proves only that plain sentences render.
+             "Resolves YES if the 23:59 UTC close on <b>Coinbase</b> &amp; the Binance 1m candle both print "
+             "above $150,000. <script>steal()</script> See [the source](https://example.org/btc) for the "
+             "candle used. <img src=x onerror=alert(1)>",
+             640_000_000_000, 96_400_000_000, 388_000_000_000),
+    "0xM3": ("Culture", "https://example.org/listing-notice",
+             "Resolves YES if the token is listed on any venue in the named exchange group before the close.",
+             900_000_000, 420_000_000, 12_000_000),                  # $420/day: the dead tail, by default
+    "0xM4": ("Politics", "https://example.org/governance-record",
+             "Resolves YES if the motion passes on the recorded vote; abstentions do not count as votes cast.",
+             44_000_000_000, 8_200_000_000, 21_000_000_000),
+    "0xM5": ("Politics", "https://example.org/mayoral-return",
+             "Resolves YES for the candidate certified by the returning officer. negRisk: exactly one "
+             "outcome can resolve YES, and the others resolve NO together.",
+             3_100_000_000_000, 1_040_000_000_000, 2_200_000_000_000),
+    "0xM6": ("Politics", "https://example.org/closed-market",
+             "This market is closed and its outcome is recorded; the page keeps rendering it because links to "
+             "resolved markets must not 404.",
+             0, 0, 0),
+    "0xM9": ("Politics", "https://example.org/recount",
+             "Resolves NO. The book is one-sided because every remaining holder of YES is asking to leave; a "
+             "screen that renders this as broken is a screen that will be blamed for the market's outcome.",
+             21_900_000_000_000, 1_300_000_000_000, 21_900_000_000_000),
+}
+
+
+def nominee_markets(now: int) -> list[dict]:
+    """128 markets under one event, in the venue's shape.
+
+    Names are synthetic on purpose (`Candidate 007`) and stay synthetic: a plausible list of real names for a
+    real race would be a fixture that makes a claim about the world, and the next person to read these numbers
+    would have no way to tell which parts were measured.
+    """
+    out = []
+    for i in range(NOMINEE_COUNT):
+        out.append(dict(id="0xN%03d" % i, question="Will Candidate %03d win the 2028 nomination?" % i,
+                        slug="nominee-2028-%03d" % i, tick="0.001", min_size="5", fee="None",
+                        neg_risk=True, accepting=True, delay=0, book=True, outcomes=["Yes", "No"],
+                        condition="0xNN%03d" % i, end_days=430, mid=NOMINEE_PRICES[i],
+                        event=NOMINEE_EVENT["id"], vol24h=NOMINEE_VOL24H[i], liquidity=NOMINEE_LIQ[i],
+                        token_ids=["9%011d%s" % (410_000_000_000 + i, s) for s in ("1", "2")]))
+    return out
+
+
+def tick_micro(m: dict) -> int:
+    return 1000 if m["tick"] == "0.001" else 10000
+
+
+def mid_micro(m: dict) -> int:
+    """The price this market is quoted around. An outcome priced at 0.002 has a book two ticks wide and no
+    wider: a bid cannot sit at or below zero, so the seed narrows the ladder near the price bounds - which is
+    the same thing the venue does (P01 measured the tick_size_change event at 0.96/0.04, where the ladder
+    re-forms rather than continuing past the edge). The observed median spread of ~71 ticks at 0.001 is kept
+    wherever it fits, because that is the number P01 actually measured."""
+    return m.get("mid", 500_000)
+
+
+def half_spread_ticks(m: dict) -> int:
+    """Half the spread in ticks, always >= 1 so both sides exist and both prices land ON the tick grid."""
+    mid, tick = mid_micro(m), tick_micro(m)
+    room = int(mid // (2 * tick))                       # levels that fit before a bid would pass through 0
+    return max(1, min(71 // 2, room))
+
+
+def walk_shares(i: int, thin: bool) -> tuple[int, int]:
+    """Sizes taper with distance from the top of book, as a real ladder does."""
+    bid = (40_000_000 // (i + 1)) if not thin else (1_200_000 if i == 0 else 0)
+    ask = (36_000_000 // (i + 1)) if not thin else (900_000 if i == 0 else 0)
+    return bid, ask
+
+
+def one_sided_asks(m: dict, levels: int = 94, notional_usdc: float = 21_900_000.0) -> list[tuple]:
+    """94 ask levels and no bids, totalling the $21.9M P01 measured.
+
+    Every level carries the SAME notional (233k) rather than the same size: that is what makes the ladder
+    climb smoothly as size shrinks with price, and it is why the sum below is a division and not a loop
+    variable. `shares_micro_i = S / i` with `price_micro_i = 1000 * i` gives `notional_i = S / 1e9` USDC for
+    every i, so S follows from the target directly.
+    """
+    tick = tick_micro(m)
+    s_micro = int(round(notional_usdc * 10 ** 9 / levels))     # micro-shares, the same at every level
+    rows = []
+    for i in range(1, levels + 1):
+        if i * tick > 1_000_000:
+            break
+        rows.append((m["id"], "ask", i * tick, s_micro // i, 1))
+    return rows
 
 
 def books_for(m: dict) -> list[tuple]:
-    """Build a ladder at the observed median spread (~71 ticks of 0.001 => ~$0.071 wide)."""
-    tick = 1000 if m["tick"] == "0.001" else 10000
-    mid = 500_000
-    spread = 71 * (1000 if m["tick"] == "0.001" else 10000)
+    """A ladder at the observed median spread where it fits, narrowed near the price bounds otherwise.
+
+    A market with `enable_order_book = false` gets NO levels. The seed used to build a ladder for it anyway,
+    which made the "this market has no book" state unreachable in dev - the API's 404 could not be produced,
+    so the client's empty-book screen was never renderable and the risk gate's NO_ORDER_BOOK branch was only
+    ever exercised by a unit test with a hand-built fixture.
+    """
+    if not m.get("book"):
+        return []
+    if m.get("one_sided"):
+        return one_sided_asks(m)
+    tick, half = tick_micro(m), half_spread_ticks(m)
+    mid = mid_micro(m)
     n = 3 if m.get("thin") else 12
-    rows, base_bid, base_ask = [], mid - spread // 2, mid + spread // 2
+    rows = []
     for i in range(n):
-        bp, ap = base_bid - i * tick, base_ask + i * tick
+        bp, ap = mid - (i + 1) * tick, mid + (i + 1) * tick
         if bp <= 0 or ap >= 1_000_000:
             break
-        size_bid = (40_000_000 // (i + 1)) if not m.get("thin") else (1_200_000 if i == 0 else 0)
-        size_ask = (36_000_000 // (i + 1)) if not m.get("thin") else (900_000 if i == 0 else 0)
+        size_bid, size_ask = walk_shares(i, bool(m.get("thin")))
         rows.append((m["id"], "bid", bp, size_bid, 1 + (i % 3)))
         rows.append((m["id"], "ask", ap, size_ask, 1 + (i % 4)))
+        if i + 1 >= half:
+            break
     return rows
 
 
@@ -76,10 +219,10 @@ def trades_for(m: dict) -> list[tuple]:
     developer can accidentally code freshness off the venue timestamp and have it look right until a
     backfill arrives with 19-second-old trades.
     """
-    if not m["book"]:
-        return []
-    tick = 1000 if m["tick"] == "0.001" else 10000
-    mid = 500_000
+    if not m["book"] or m.get("one_sided"):
+        return []                     # a one-sided market has no trades inside the window we hold: the asks
+    tick = tick_micro(m)              # are resting orders nobody has crossed, which is the whole point
+    mid = mid_micro(m)
     now = _now_ms()
     rows = []
     for i in range(5):
@@ -92,24 +235,101 @@ def trades_for(m: dict) -> list[tuple]:
     return rows
 
 
+# Wallets the seed trades between, and the labels that hang off them. Exactly one is NOT publishable: the
+# venue-side rule is that `insider_suspect` is never publishable, and a seed where every label is publishable
+# cannot show that the filter works. A dev database whose holders list would happily name a suspect wallet is
+# a dev database where the leak ships.
+SEED_WALLETS = [
+    ("0x" + "aa" * 20, "whale", True, 820),
+    ("0x" + "bb" * 20, "smart_money", True, 700),
+    ("0x" + "cc" * 20, "insider_suspect", False, 640),
+    ("0x" + "dd" * 20, None, True, 0),
+]
+
+
+def fills_for(m: dict, trades: list[tuple]) -> list[tuple]:
+    """Mirror the volatile tape into `tape_fills`, the DURABLE log P05's ingest writes.
+
+    Both tables exist and they are not the same thing: `tape_trades` is the P04 fixture the gate reads,
+    `tape_fills` is what the ingestion writes and what the rollups, the holders list and the price history
+    read. A seed that fills only the first leaves three P09 surfaces permanently empty in dev, and an empty
+    chart looks exactly like a market that has never traded.
+    """
+    out = []
+    for i, (_mid, token_id, side, price, size, _maker, ts, ingest_ms, _raw) in enumerate(trades):
+        wallet, _label, _pub, _conf = SEED_WALLETS[i % len(SEED_WALLETS)]
+        out.append((m["condition"], token_id, m["outcomes"][0], 0, wallet, side, price, size,
+                    price * size // 10 ** 6, ts, ingest_ms, "ws", 0))
+    return out
+
+
 def rows() -> dict:
     now = _now_ms()
     markets, tokens, book, events, trades = [], [], [], [], []
+    meta, activity, stats = [], [], []
     # events first: markets.event_id is a FOREIGN KEY, and a seed that references a row it never created
     # fails on the first statement that touches the constraint. Only 0xM5 belongs to an event; the others
     # use NULL, which is a legal FK value and the honest one (a single-market event is not an event).
     events.append(("0xEV1", "mayor-2027", "The 2027 mayoral race", 1, now, now))
-    for m in MARKETS:
-        event = "0xEV1" if m["neg_risk"] else None
+    events.append((NOMINEE_EVENT["id"], NOMINEE_EVENT["slug"], NOMINEE_EVENT["title"],
+                   int(NOMINEE_EVENT["neg_risk"]), now, now))
+    fills: list[tuple] = []
+    all_markets = list(MARKETS) + nominee_markets(now)
+    for m in all_markets:
+        event = m.get("event") or ("0xEV1" if m["neg_risk"] else None)
         markets.append((m["id"], m["condition"], event, m["question"], m["slug"], m["accepting"],
                         m["delay"], m["book"], m["tick"], m["min_size"], m["fee"], m["neg_risk"],
                         now + m["end_days"] * 86_400_000, json.dumps(m["outcomes"]), now, now))
         for i, o in enumerate(m["outcomes"]):
-            tokens.append(("0xT%s%d" % (m["id"][-1], i), m["id"], o, i,
+            # The hand-written markets keep the ids earlier phases referenced. `id[-1] + i` collides across 128
+            # generated markets (every id ends in '0'), so a generated market brings its own token ids - the
+            # collision would have been a duplicate-key failure, which is the good outcome; the bad one is a
+            # token that silently belongs to two outcomes.
+            tid = m.get("token_ids", [None] * len(m["outcomes"]))[i]
+            tokens.append((tid or "0xT%s%d" % (m["id"][-1], i), m["id"], o, i,
                            (1 if m["id"] == "0xM6" and o == "Yes" else None)))
         book += books_for(m)
-        trades += trades_for(m)
-    return {"markets": markets, "tokens": tokens, "book": book, "events": events, "trades": trades}
+        mt = trades_for(m)
+        trades += mt
+        fills += fills_for(m, mt)
+        if "vol24h" in m:                # generated markets carry their own surfaces
+            meta.append((m["id"], "Politics", "https://example.org/nominee-2028",
+                         "Resolves YES for the candidate certified as the nominee by the party's convention. "
+                         "negRisk: exactly one outcome resolves YES.", None, now))
+            activity.append((m["id"], m["liquidity"], m["liquidity"], m["liquidity"], m.get("mid"),
+                             m.get("mid"), now))
+            stats.append((m["condition"], m["vol24h"], m["liquidity"], 0, 0, now, "{}", now))
+        elif m["id"] in SURFACE:
+            cat, src, crit, liq, vol, oi = SURFACE[m["id"]]
+            meta.append((m["id"], cat, src, crit, None, now))
+            activity.append((m["id"], oi, vol * 7, vol * 30, m.get("mid") or 500_000,
+                             m.get("mid") or 500_000, now))
+            stats.append((m["condition"], vol, liq, 0, 0, now, "{}", now))
+    labels = [(w, lab, conf, "{}", pub, now, now) for w, lab, pub, conf in SEED_WALLETS if lab]
+    return {"markets": markets, "tokens": tokens, "book": book, "events": events, "trades": trades,
+            "fills": fills, "labels": labels, "meta": meta, "activity": activity, "stats": stats}
+
+
+# The dev seed must reset the volatile reads every time it runs (see the note further down), but one of those
+# tables is APPEND-ONLY in the product: `tape_trades` has a BEFORE DELETE trigger that aborts, and rightly so -
+# a fill log you can rewrite is a fill log you cannot trust after an incident. So `make seed` twice against the
+# same database used to die with "append-only table: tape_trades is not deletable", which is the constraint
+# working exactly as designed and the seed being wrong about whose job it is.
+#
+# The fix uses the only permission SQLite offers - DROP TRIGGER, then recreate it - and both statements run
+# inside the seed's own transaction, so a failure anywhere rolls the drop back with everything else. The
+# recreate is asserted below, because "I put it back" is a claim and `sqlite_master` is evidence.
+APPEND_ONLY_RESET = ("tape_trades",)
+
+
+def _append_only_trigger_sql(table: str) -> tuple[str, str]:
+    """The exact statements tools/build-sqlite-migrations.py emits for an append-only table. Duplicated here
+    on purpose: importing the transpiler to ask it for text would make the seed depend on a dev tool, and a
+    subtly different trigger would be an invariant that exists only after a seed."""
+    return ("CREATE TRIGGER append_only_%s_update BEFORE UPDATE ON %s BEGIN "
+            "SELECT RAISE(ABORT,'append-only table: %s is not updatable'); END;" % (table, table, table),
+            "CREATE TRIGGER append_only_%s_delete BEFORE DELETE ON %s BEGIN "
+            "SELECT RAISE(ABORT,'append-only table: %s is not deletable'); END;" % (table, table, table))
 
 
 def seed_sqlite(db_path: str | None = None) -> dict:
@@ -123,6 +343,9 @@ def seed_sqlite(db_path: str | None = None) -> dict:
     try:
         con.execute("INSERT OR IGNORE INTO events (id,slug,title,neg_risk,created_ms,updated_ms)"
                     " VALUES (?,?,?,?,?,?)", r["events"][0])
+        for ev in r["events"]:            # the nominee event is a second row: the FK lives on markets
+            con.execute("INSERT OR IGNORE INTO events (id,slug,title,neg_risk,created_ms,updated_ms)"
+                        " VALUES (?,?,?,?,?,?)", ev)
         con.execute("INSERT OR IGNORE INTO users (id,stonks_address,created_ms,tier)"
                     " VALUES ('u-demo','0x' || 'ab' || 'cd', ?, 'trader')", (now,))
         for row in r["markets"]:
@@ -139,7 +362,35 @@ def seed_sqlite(db_path: str | None = None) -> dict:
         # DELETE first: the seed is idempotent by RESETTING the volatile reads, not by skipping them. A
         # "INSERT OR IGNORE" tape would keep the previous run's rows and make the tape card show a market
         # that has not ticked in an hour, which is the one thing a trader must never see as fresh.
+        # The P09 surfaces are RESET like the tape, not skipped: a re-seed that left yesterday's liquidity
+        # in place would let the discovery screen's filters pass against numbers no one is maintaining.
+        for tbl, cols in (("market_meta", "market_id,category,resolution_source,resolution_criteria,"
+                                           "image_url,updated_ms"),
+                          ("market_activity", "market_id,open_interest_micro,volume_7d_micro,"
+                                              "volume_30d_micro,price_24h_ago_micro,last_price_micro,"
+                                              "updated_ms"),
+                          ("market_stats", "condition_id,volume_24h_micro,liquidity_micro,fill_count,"
+                                           "last_fill_ms,last_book_change_ms,meta_json,updated_ms")):
+            con.execute("DELETE FROM " + tbl)
+            key = r["meta" if tbl == "market_meta" else "activity" if tbl == "market_activity" else "stats"]
+            con.executemany("INSERT INTO %s (%s) VALUES (%s)"
+                            % (tbl, cols, ",".join("?" * len(key[0]))), key)
+        for table in APPEND_ONLY_RESET:
+            con.execute("DROP TRIGGER IF EXISTS append_only_%s_update" % table)
+            con.execute("DROP TRIGGER IF EXISTS append_only_%s_delete" % table)
         con.execute("DELETE FROM tape_trades")
+        for table in APPEND_ONLY_RESET:
+            for stmt in _append_only_trigger_sql(table):
+                con.execute(stmt)
+        con.execute("DELETE FROM tape_fills")
+        cols_f = ("condition_id,token_id,outcome,outcome_index,wallet,side,price_micro,size_micro,"
+                  "usd_notional_micro,ts_ms,ingest_ms,source,fee_rate_bps")
+        con.executemany("INSERT INTO tape_fills (%s,dedupe_key) VALUES (%s,?)"
+                        % (cols_f, ",".join("?" * 13)),
+                        [row + ("seed-%s-%d" % (row[0], i),) for i, row in enumerate(r["fills"])])
+        con.execute("DELETE FROM wallet_labels")
+        con.executemany("INSERT INTO wallet_labels (wallet,label,confidence,evidence_json,publishable,"
+                        "first_seen_ms,last_seen_ms) VALUES (?,?,?,?,?,?,?)", r["labels"])
         con.executemany("INSERT INTO tape_trades (market_id,token_id,side,price_micro,size_shares_micro,"
                         "taker_is_maker,exchange_ts,ingest_ms,raw_json) VALUES (?,?,?,?,?,?,?,?,?)",
                         r["trades"])
@@ -156,9 +407,17 @@ def seed_sqlite(db_path: str | None = None) -> dict:
     except Exception:
         con.rollback()                             # a half-seeded dev DB is worse than an error: every
         raise                                      # subsequent symptom is unrelated to the real cause
+    # Evidence, not a promise: the append-only triggers this seed had to lift must be back, or the next phase
+    # develops against a database where history is editable.
+    back = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='trigger' "
+                                      "AND name LIKE 'append_only_%_delete'")}
+    missing = [t for t in APPEND_ONLY_RESET if ("append_only_%s_delete" % t) not in back]
+    if missing:
+        raise RuntimeError("seed lifted an append-only trigger and did not restore it: %s" % ",".join(missing))
     counts = {t: con.execute("SELECT COUNT(*) FROM " + t).fetchone()[0]
               for t in ("markets", "tokens", "book_levels", "tape_trades", "feature_flags", "entitlements",
-                        "events")}
+                        "events", "market_meta", "market_activity", "market_stats", "tape_fills",
+                        "wallet_labels")}
     con.close()
     return counts
 
@@ -195,10 +454,10 @@ def emit_sql() -> str:
            "-- {{NOW_MS}} is expanded by tools/run-sql.py to the ENGINE's own clock (Postgres now()), so this",
            "-- file stays fresh no matter when it is applied. Never replace it with a literal timestamp.", ""]
     out.append("-- events before markets: markets.event_id REFERENCES events(id)")
-    ev = r["events"][0]
-    out.append("INSERT INTO events (id,slug,title,neg_risk,created_ms,updated_ms) VALUES (%s) "
-               "ON CONFLICT DO NOTHING;" % ", ".join(_pg_time(v) if isinstance(v, int) and v > 10 ** 11
-                                                      else _pg(v) for v in ev))
+    for ev in r["events"]:
+        out.append("INSERT INTO events (id,slug,title,neg_risk,created_ms,updated_ms) VALUES (%s) "
+                   "ON CONFLICT DO NOTHING;" % ", ".join(_pg_time(v) if isinstance(v, int) and v > 10 ** 11
+                                                         else _pg(v) for v in ev))
     out.append("INSERT INTO users (id,created_ms,tier) VALUES ('u-demo', %s, 'trader') "
                "ON CONFLICT DO NOTHING;" % NOW_TOKEN)
     cols = ("id,condition_id,event_id,question,slug,accepting_orders,seconds_delay,enable_order_book,"
@@ -223,6 +482,40 @@ def emit_sql() -> str:
         out.append("INSERT INTO tape_trades (market_id,token_id,side,price_micro,size_shares_micro,"
                    "taker_is_maker,exchange_ts,ingest_ms,raw_json) VALUES (%s);"
                    % ", ".join(vals))
+    # P09 surfaces. `market_activity.price_24h_ago_micro` is the base of the 24h-move sort and is NULLABLE:
+    # NULL (our tape does not reach back 24h) is not 0, and emitting 0 would render every market as +100%.
+    act_cols = ("market_id,open_interest_micro,volume_7d_micro,volume_30d_micro,price_24h_ago_micro,"
+                "last_price_micro,updated_ms")
+    for row in r["meta"]:
+        out.append("INSERT INTO market_meta (market_id,category,resolution_source,resolution_criteria,"
+                   "image_url,updated_ms) VALUES (%s) ON CONFLICT (market_id) DO UPDATE SET category = "
+                   "EXCLUDED.category, resolution_source = EXCLUDED.resolution_source, "
+                   "resolution_criteria = EXCLUDED.resolution_criteria;"
+                   % ", ".join([_pg(v) for v in row[:-1]] + [NOW_TOKEN]))
+    for row in r["activity"]:
+        out.append("INSERT INTO market_activity (%s) VALUES (%s) ON CONFLICT (market_id) DO UPDATE SET "
+                   "open_interest_micro = EXCLUDED.open_interest_micro, volume_7d_micro = "
+                   "EXCLUDED.volume_7d_micro, volume_30d_micro = EXCLUDED.volume_30d_micro, "
+                   "price_24h_ago_micro = EXCLUDED.price_24h_ago_micro, last_price_micro = "
+                   "EXCLUDED.last_price_micro;"
+                   % (act_cols, ", ".join([_pg(v) for v in row[:-1]] + [NOW_TOKEN])))
+    for row in r["stats"]:
+        out.append("INSERT INTO market_stats (condition_id,volume_24h_micro,liquidity_micro,fill_count,"
+                   "last_fill_ms,last_book_change_ms,meta_json,updated_ms) VALUES (%s,%s,%s,%s,%s,%s,%s,%s) "
+                   "ON CONFLICT (condition_id) DO UPDATE SET volume_24h_micro = EXCLUDED.volume_24h_micro, "
+                   "liquidity_micro = EXCLUDED.liquidity_micro;"
+                   % tuple([_pg(v) for v in row[:-1]] + [NOW_TOKEN]))
+    for f in r["fills"]:
+        out.append("INSERT INTO tape_fills (condition_id,token_id,outcome,outcome_index,wallet,side,"
+                   "price_micro,size_micro,usd_notional_micro,ts_ms,ingest_ms,source,fee_rate_bps,"
+                   "dedupe_key) VALUES (%s) ON CONFLICT (dedupe_key) DO NOTHING;"
+                   % ", ".join([_pg_time(v) if isinstance(v, int) and v > 10 ** 11 else _pg(v)
+                                for v in f]
+                               + [_pg("seed-%s-%d" % (f[0], r["fills"].index(f)))]))
+    for lab in r["labels"]:
+        out.append("INSERT INTO wallet_labels (wallet,label,confidence,evidence_json,publishable,"
+                   "first_seen_ms,last_seen_ms) VALUES (%s) ON CONFLICT DO NOTHING;"
+                   % ", ".join([_pg(v) for v in lab[:-2]] + [NOW_TOKEN, NOW_TOKEN]))
     out.append("INSERT INTO entitlements (user_id,plan,max_alerts,max_watchlists,max_automation_rules,"
                "radar_poll_ms,api_rpm,updated_ms) VALUES ('u-demo','trader',12,4,3,5000,120,%s) "
                "ON CONFLICT DO NOTHING;" % NOW_TOKEN)

@@ -48,6 +48,9 @@ TABLE_FOR_PATH = {
     "/v1/markets/{market_id}": "MARKET_RESPONSES",
     "/v1/markets/{market_id}/book": "BOOK_RESPONSES",
     "/v1/markets/{market_id}/fills": "FILLS_RESPONSES",
+    "/v1/markets/{market_id}/history": "HISTORY_RESPONSES",
+    "/v1/markets/{market_id}/holders": "HOLDERS_RESPONSES",
+    "/v1/events/{event_id}": "EVENT_RESPONSES",
     "/v1/tape": "TAPE_RESPONSES",
     "/v1/orders": "ORDER_RESPONSES",
     "/v1/orders/intents/{intent_id}": "INTENT_RESPONSES",
@@ -363,8 +366,16 @@ def compare_live(rep: Report, doc: dict, ops: dict) -> None:
             rep.check("sortBy=%s is accepted by the live app" % value, r.status_code == 200,
                       "live app answered %d: the contract documents a sort the app rejects" % r.status_code)
 
+    # The negative probe is DERIVED, not spelled. It used to be the literal "volume24h", which the contract
+    # then legitimately gained - so the check flipped from "an undocumented sort is refused" to "the app
+    # refuses a documented one", and the only reason it was noticed at all is that this repo runs the checker
+    # against the app rather than trusting it. Suffixing the longest documented key produces a value that
+    # cannot collide by accident, and the `probe not in enum` assertion below makes the day it does collide a
+    # visible failure instead of a silently inverted control.
+    probe = (max(enum, key=len) + "-nope") if enum else "volume24h"
+    rep.check("the negative probe is not itself a documented sort key", probe not in enum, probe)
     with contextlib.redirect_stdout(io.StringIO()):
-        r = client.get("/v1/markets", params={"sortBy": "volume24h"})
+        r = client.get("/v1/markets", params={"sortBy": probe})
     rep.check("a sort the contract does NOT claim is rejected", r.status_code == 422, "got %d" % r.status_code)
 
 

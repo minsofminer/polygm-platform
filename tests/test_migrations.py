@@ -80,8 +80,20 @@ class TestPostgresText(unittest.TestCase):
             self.assertIn(col, text, col)
         # DESC/ASC belong here: a partial index over `(usd_notional_micro DESC, ts_ms DESC)` is an ordering,
         # not a column definition, and reading it as one is how a checker invents a bug in correct SQL.
-        SQL_WORDS = {"IS", "IN", "NOT", "CHECK", "NULL", "OR", "AND", "BETWEEN", "DESC", "ASC"}
-        for m in re.finditer(r"(\w+_micro)\s+([A-Za-z_][A-Za-z_0-9()]*)", text):
+        SQL_WORDS = {"IS", "IN", "NOT", "CHECK", "NULL", "OR", "AND", "BETWEEN", "DESC", "ASC",
+                     "USING", "WITH", "COLLATE"}
+        # The type token is matched WITHOUT parentheses. The paren-tolerant version of this pattern read
+        # `(volume_7d_micro DESC)` - the column list of a partial index - as the type `DESC)` and reported a
+        # float-money bug in correct SQL. A type name never has a parenthesis; only the NUMERIC(x,y) form
+        # does, and that one is checked by test_no_float_is_used_for_money_even_in_metadata_math.
+        TYPE_RE = r"(\w+_micro)\s+([A-Za-z_][A-Za-z_0-9]*)"
+        # Canary first: a rule that cannot fire is indistinguishable from a clean tree, and this exact rule
+        # spent a phase reporting nothing at all because its own anchor had been remembered wrong.
+        planted = list(re.finditer(TYPE_RE, "CREATE TABLE t (x_micro INTEGER);"))
+        self.assertEqual([m.group(2) for m in planted], ["INTEGER"], "the money-column rule cannot fire at all")
+        index_line = list(re.finditer(TYPE_RE, "CREATE INDEX i ON t (y_micro DESC);"))
+        self.assertEqual([m.group(2) for m in index_line], ["DESC"], "index ordering is not a column definition")
+        for m in re.finditer(TYPE_RE, text):
             if m.group(2).upper() in SQL_WORDS:
                 continue          # `CHECK (max_order_micro IS NOT NULL...)` is not a column definition
             self.assertIn(m.group(2).upper(), ("BIGINT",), f"{m.group(1)} is {m.group(2)}, not BIGINT")

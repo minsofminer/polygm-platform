@@ -35,6 +35,10 @@ class Flags:
     # ---- freshness (design system D5.5). Kept here so API and UI agree on "stale".
     stale_ms_book: int = 3_000
     stale_ms_tape: int = 3_000
+    # 5s, the design system's own number for a price: a book level and a last trade are 3s, but a chart point
+    # and an event's outcome table are aggregates of many trades and are honest for longer. P09's history and
+    # event reads carry it, so the API and the UI cannot disagree about when a candle is old.
+    stale_ms_price: int = 5_000
     stale_ms_metadata: int = 120_000
     stale_ms_positions: int = 30_000
 

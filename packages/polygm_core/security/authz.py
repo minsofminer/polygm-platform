@@ -32,6 +32,12 @@ LEVELS_TABLE: dict[str, tuple[str, str]] = {
     "GET /v1/tape": (PUBLIC, ""),
     "GET /v1/markets/{market_id}": (PUBLIC, ""),
     "GET /v1/markets/{market_id}/book": (PUBLIC, ""),
+    # P09's three read surfaces. All PUBLIC for the same reason the book is: they are market data, and the
+    # one thing they must never contain is somebody's address - holders are pseudonymised exactly as /v1/tape
+    # pseudonymises them, which is why a `holders` route can be public at all.
+    "GET /v1/markets/{market_id}/history": (PUBLIC, ""),
+    "GET /v1/markets/{market_id}/holders": (PUBLIC, ""),
+    "GET /v1/events/{event_id}": (PUBLIC, ""),
     "GET /v1/markets/{market_id}/fills": (PUBLIC, ""),
     "POST /v1/auth/login": (PUBLIC, ""),
     "POST /v1/auth/telegram": (PUBLIC, ""),

@@ -139,8 +139,19 @@ paths:
           schema: {type: string, minLength: 1, maxLength: 128}
         - name: depth
           in: query
-          description: levels per side; 400 is the design-system ladder cap and is also the hard maximum
+          description: >-
+            levels per side; 400 is the design-system ladder cap and is also the hard maximum. The limit is
+            applied to the RAW ladder before aggregation, so a bucket count can be lower than `depth` - the
+            alternative is loading the whole book into memory to count it, which is the cost this endpoint
+            exists to avoid.
           schema: {type: integer, minimum: 1, maximum: 400, default: 24}
+        - name: aggregate
+          in: query
+          description: >-
+            bucket width for the ladder. A 0.001-tick market has a thousand levels per dollar, so the raw
+            ladder is unreadable; 1c and 5c fold it. Rounding is DIRECTIONAL - a bid rounds down and an ask
+            rounds up - so an aggregated level never shows a price the user could not have got.
+          schema: {type: string, enum: [raw, 1c, 5c], default: raw}
       responses:
         "200":
           description: book snapshot
@@ -150,17 +161,209 @@ paths:
                 allOf:
                   - $ref: "#/components/schemas/Stamped"
                   - type: object
-                    required: [market, bids, asks, spreadTicks, ageMs]
+                    required: [market, bids, asks, spreadTicks, ageMs, aggregate, oneSided]
                     properties:
                       market: {type: string}
                       bids: {$ref: "#/components/schemas/Levels"}
                       asks: {$ref: "#/components/schemas/Levels"}
+                      aggregate: {type: string, enum: [raw, 1c, 5c]}
+                      aggregateStep: {oneOf: [{$ref: "#/components/schemas/Price"}, {type: "null"}]}
+                      tickSize: {oneOf: [{$ref: "#/components/schemas/Price"}, {type: "null"}]}
                       bestBid: {$ref: "#/components/schemas/Price"}
                       bestAsk: {$ref: "#/components/schemas/Price"}
+                      midPrice: {$ref: "#/components/schemas/Price"}
+                      maxCumShares:
+                        type: string
+                        description: the largest cumulative size on either side, so a depth bar can be a
+                          fraction of it without the chart summing the ladder itself
                       spreadTicks:
                         oneOf: [{type: number}, {type: "null"}]
                         description: metadata arithmetic on integers, never a float price
+                      oneSided:
+                        oneOf:
+                          - type: "null"
+                          - type: object
+                            required: [side, why, levels, notionalUsdc]
+                            description: >-
+                              present when one side of the book is empty. It is a STATE, not an error: P01
+                              measured a live market with 94 ask levels at 0.001 totalling $21.9M and zero
+                              bids - the holders of the other side had left. Rendering that as a broken feed
+                              tells the user the market is broken when it is simply finished.
+                            properties:
+                              side: {type: string, enum: [asks-only, bids-only]}
+                              why: {type: string, description: a machine code; the client owns the words}
+                              levels: {type: integer}
+                              notionalUsdc: {$ref: "#/components/schemas/Price"}
+                              bestAsk: {$ref: "#/components/schemas/Price"}
+                              bestBid: {$ref: "#/components/schemas/Price"}
                       ageMs: {type: integer, minimum: 0}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "422": {$ref: "#/components/responses/Validation"}
+        "500": {$ref: "#/components/responses/Internal"}
+
+  /v1/markets/{market_id}/history:
+    get:
+      tags: [market]
+      summary: Trade-derived candles for the price chart
+      description: |
+        Candles from OUR fills, not the venue's `/prices-history`: the venue's series samples mid-price on its
+        own schedule and is Cloudflare-cached (measured in P01), so it is a different object with the same
+        name. Consequences are stated rather than implied - a bucket with no fills is a GAP with `trades: 0`,
+        not a flat candle, and `sampled` says when the 20k-fill read cap was reached.
+
+        The server builds 1m, 5m, 15m and 1h. 6h and 1d are derived by the client by bucketing the 1h
+        candles, and both lists are served so a client feature-detects instead of trusting a changelog.
+      operationId: getMarketHistory
+      x-auth: none
+      x-rate-class: public-read
+      x-cache: shared, ttl 250ms
+      parameters:
+        - name: market_id
+          in: path
+          required: true
+          schema: {type: string, minLength: 1, maxLength: 128}
+        - name: interval
+          in: query
+          schema: {type: string, enum: [1m, 5m, 15m, 1h], default: 1m}
+        - name: limit
+          in: query
+          description: buckets of history, counted back from now; it bounds the fill read as well as the output
+          schema: {type: integer, minimum: 2, maximum: 1000, default: 200}
+      responses:
+        "200":
+          description: candles, oldest first
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Stamped"
+                  - type: object
+                    required: [market, interval, bucketMs, candles, serverIntervals, derivedIntervals, source]
+                    properties:
+                      market: {type: string}
+                      interval: {type: string}
+                      bucketMs: {type: integer}
+                      fromTs: {type: integer, description: the oldest bucket boundary the request reaches}
+                      candles: {type: array, items: {$ref: "#/components/schemas/Candle"}}
+                      serverIntervals: {type: array, items: {type: string}}
+                      derivedIntervals: {type: array, items: {type: string}}
+                      source: {type: string, enum: [fills]}
+                      sampled: {type: boolean, description: the read cap was hit; the left edge is not the
+                        beginning of the market}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "422": {$ref: "#/components/responses/Validation"}
+        "500": {$ref: "#/components/responses/Internal"}
+
+  /v1/markets/{market_id}/holders:
+    get:
+      tags: [market]
+      summary: Wallets we have seen trade this market, with published labels only
+      description: |
+        Provenance is `tape`: these are the wallets in OUR fill log, so a whale that traded before ingest
+        started is invisible and a wallet that only posted unfilled orders never appears. Not the venue's
+        holder list, and the rail says which one it is. Addresses are pseudonymised exactly as in `/v1/tape`
+        (sha256 with a local prefix), and `insider_suspect` filters out at the join because it is not a
+        publishable label.
+      operationId: getMarketHolders
+      x-auth: none
+      x-rate-class: public-read
+      x-cache: shared, ttl 1000ms
+      parameters:
+        - name: market_id
+          in: path
+          required: true
+          schema: {type: string, minLength: 1, maxLength: 128}
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 100, default: 20}}
+      responses:
+        "200":
+          description: holders by notional, largest first
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Stamped"
+                  - type: object
+                    required: [market, holders, provenance, holderCount]
+                    properties:
+                      market: {type: string}
+                      provenance: {type: string, enum: [tape]}
+                      holderCount: {type: integer}
+                      holders:
+                        type: array
+                        items:
+                          type: object
+                          required: [anonWallet, notional, fills, shareBp, labels]
+                          properties:
+                            anonWallet: {type: string}
+                            notional: {$ref: "#/components/schemas/Price"}
+                            fills: {type: integer}
+                            firstSeenMs: {type: integer}
+                            lastSeenMs: {type: integer}
+                            shareBp: {type: integer, description: share of the tape's notional, basis points}
+                            labels: {$ref: "#/components/schemas/Labels"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "422": {$ref: "#/components/responses/Validation"}
+        "500": {$ref: "#/components/responses/Internal"}
+
+  /v1/events/{event_id}:
+    get:
+      tags: [market]
+      summary: One negRisk event, every market under it, and the invariant they must satisfy
+      description: |
+        The 128-row table's data source. Two statements, and the difference matters:
+
+          * `probabilitySum`/`deviation`/`tolerance` are the INVARIANT. For a negRisk event the YES prices
+            partition one dollar, so the sum must be near 1 - near, because each price is only known to a
+            tick and the sum of N quotes is only known to N ticks, which is exactly `tolerance`.
+          * `buyAllCost`/`sellAllProceeds`/`opportunity` are the TRADABLE statement, computed from executable
+            levels rather than mids: buying one of every outcome costs the sum of the best asks, selling one
+            of every outcome returns the sum of the best bids. `opportunity` is null unless one of those
+            crosses a dollar by more than a tick, because a screen that shouts at every 1-tick deviation
+            teaches its reader to ignore it.
+
+        A market with only one side has no mid; it is marked `summable: false` and excluded from the sum
+        instead of borrowing its last trade price, which would put a stale number into a live invariant.
+      operationId: getEvent
+      x-auth: none
+      x-rate-class: public-read
+      x-cache: shared, ttl 250ms
+      parameters:
+        - name: event_id
+          in: path
+          required: true
+          schema: {type: string, minLength: 1, maxLength: 128}
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 400, default: 400}}
+      responses:
+        "200":
+          description: the event and its outcomes, biggest 24h volume first
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Stamped"
+                  - type: object
+                    required: [event, outcomes, probabilitySum, deviation, tolerance, withinTolerance, opportunity]
+                    properties:
+                      event: {$ref: "#/components/schemas/Event"}
+                      outcomes:
+                        type: array
+                        maxItems: 400
+                        items: {$ref: "#/components/schemas/EventOutcome"}
+                      probabilitySum: {oneOf: [{$ref: "#/components/schemas/Price"}, {type: "null"}]}
+                      deviation: {oneOf: [{$ref: "#/components/schemas/Price"}, {type: "null"}]}
+                      tolerance: {$ref: "#/components/schemas/Price"}
+                      withinTolerance: {oneOf: [{type: boolean}, {type: "null"}]}
+                      summableCount: {type: integer}
+                      buyAllCost: {oneOf: [{$ref: "#/components/schemas/Price"}, {type: "null"}]}
+                      sellAllProceeds: {oneOf: [{$ref: "#/components/schemas/Price"}, {type: "null"}]}
+                      opportunity:
+                        oneOf:
+                          - type: "null"
+                          - type: object
+                            required: [kind, edge]
+                            properties:
+                              kind: {type: string, enum: [buy-all, sell-all]}
+                              edge: {$ref: "#/components/schemas/Price"}
         "404": {$ref: "#/components/responses/NotFound"}
         "422": {$ref: "#/components/responses/Validation"}
         "500": {$ref: "#/components/responses/Internal"}
@@ -293,12 +496,47 @@ paths:
           # the live app, so an aspirational enum cannot survive the phase it was written in.
           schema:
             type: string
-            enum: [endsSoon, newMarket, spread]
+            enum: [endsSoon, newMarket, spread, volume24h, liquidity, openInterest, move24h]
         - name: q
           in: query
-          description: case-folded substring over question and slug, matched with instr() rather than LIKE so
-            a user's own % cannot change the meaning of their own search
+          description: >-
+            case-folded substring over question, slug and category, matched with instr() rather than LIKE so a
+            user's own % cannot change the meaning of their own search. Three columns, not four: the prompt
+            asks for tags as well, and we do not store tags - a typeahead that searches a column which does
+            not exist is a docstring, not a feature.
           schema: {type: string, maxLength: 128}
+        - name: category
+          in: query
+          description: the P09 filter vocabulary. Case-folded, canonicalised server-side, and a value outside
+            the vocabulary is a 422 rather than an empty page, because "no markets match" and "you spelled
+            the category wrong" are different answers.
+          schema:
+            type: string
+            enum: [Politics, Sports, Crypto, Finance, Economics, Tech, Culture, Weather, Geopolitics, Other]
+        - name: minVolume24h
+          in: query
+          description: micro-USDC over the last 24h, in integer micro units - a float here would be a float
+            in the money path
+          schema: {type: integer, minimum: 0}
+        - {name: minLiquidity, in: query, schema: {type: integer, minimum: 0}}
+        - {name: minOpenInterest, in: query, schema: {type: integer, minimum: 0}}
+        - name: endsWithinHours
+          in: query
+          description: only markets whose end is between now and now+N hours. A market that already ended is
+            NOT within the window, which is what stops a dead market leading the default sort.
+          schema: {type: integer, minimum: 1, maximum: 87600}
+        - name: newWithinHours
+          in: query
+          description: only markets first seen in the last N hours
+          schema: {type: integer, minimum: 1, maximum: 87600}
+        - {name: negRiskOnly, in: query, schema: {type: boolean, default: false}}
+        - name: includeLongTail
+          in: query
+          description: >-
+            false by default - markets under $1,000 of 24h volume are omitted and counted in
+            `longTail.hiddenCount`. P01 measured a median event at $19,910/day, so the default view is what
+            someone can actually trade and the long tail is one parameter away, never silently dropped.
+          schema: {type: boolean, default: false}
       responses:
         "200":
           description: a page
@@ -312,7 +550,24 @@ paths:
                     properties:
                       items: {type: array, maxItems: 100, items: {$ref: "#/components/schemas/Market"}}
                       nextCursor: {type: ["string", "null"]}
-                      sortBy: {type: string, enum: [endsSoon, newMarket, spread]}
+                      sortBy: {type: string, enum: [endsSoon, newMarket, spread, volume24h, liquidity,
+                        openInterest, move24h]}
+                      facets:
+                        type: object
+                        description: >-
+                          market counts per category, with every filter applied EXCEPT the category one and
+                          without the cursor: a category tab that zeroes the other tabs is a tab nobody can
+                          navigate back from
+                        additionalProperties: {type: integer}
+                      categories: {type: array, items: {type: string}}
+                      longTail:
+                        type: object
+                        required: [includeLongTail, thresholdMicro, hiddenCount]
+                        properties:
+                          includeLongTail: {type: boolean}
+                          thresholdMicro: {type: integer}
+                          hiddenCount: {type: integer, description: left out by the filter ABOVE, not by any
+                            other one}
                       sortKeys: {type: array, items: {type: string}, description: what the server accepts
                         today, so a client can feature-detect instead of guessing from a release note}
                       pageSizeHardCap:
@@ -1341,10 +1596,7 @@ components:
             sha256 of the counterparty address with a local prefix, 10 hex chars. The address itself is never
             returned: a public tape that echoes every trader's wallet is an address book of our users'
             counterparties, and `raw_json` is withheld for the same reason.
-        labels:
-          type: array
-          items: {type: string, enum: [whale, smart_money, new_wallet, insider_suspect, cluster, wash_like]}
-          description: published labels only; `insider_suspect` is never publishable, so it cannot appear here
+        labels: {$ref: "#/components/schemas/Labels"}
 
     Market:
       type: object
@@ -1369,6 +1621,108 @@ components:
         feeType: {type: string, description: "open taxonomy (6 values seen in P01); no enum on purpose"}
         enableOrderBook: {type: boolean}
         endDate: {type: ["integer", "null"]}
+        # P09 · discovery. All optional: a row still renders with none of them, which is what lets the list
+        # be used by a client that predates this phase instead of failing its schema validation.
+        category: {type: string}
+        eventId: {oneOf: [{type: string}, {type: "null"}]}
+        outcomeCount: {type: integer}
+        negRisk: {type: boolean}
+        volume24h: {$ref: "#/components/schemas/Price"}
+        liquidity: {$ref: "#/components/schemas/Price"}
+        openInterest: {$ref: "#/components/schemas/Price"}
+        lastPrice: {oneOf: [{$ref: "#/components/schemas/Price"}, {type: "null"}]}
+        price24hAgo: {oneOf: [{$ref: "#/components/schemas/Price"}, {type: "null"}]}
+        change24h:
+          oneOf: [{$ref: "#/components/schemas/Price"}, {type: "null"}]
+          description: >-
+            signed difference of two prices in micro units, null when our tape does not reach back 24h. Zero
+            would be a claim we do not have the data to make.
+        spreadMicro:
+          oneOf: [{type: integer}, {type: "null"}]
+          description: integer micro units; null when one side is missing, which is not a spread of zero
+        event: {$ref: "#/components/schemas/EventSummary"}
+
+    Labels:
+      type: array
+      items: {type: string, enum: [whale, smart_money, new_wallet, insider_suspect, cluster, wash_like]}
+      description: published labels only; `insider_suspect` is never publishable, so it cannot appear here
+
+    Candle:
+      type: object
+      description: >-
+        one price bucket derived from our fills. A bucket with `trades: 0` does not exist in the array - the
+        gaps are ABSENT rather than flat, because a candle drawn across a gap is a chart inventing prices.
+      required: [t, o, h, l, c, shares, trades, notional]
+      properties:
+        t: {type: integer, description: bucket start, venue clock, ms}
+        o: {$ref: "#/components/schemas/Price"}
+        h: {$ref: "#/components/schemas/Price"}
+        l: {$ref: "#/components/schemas/Price"}
+        c: {$ref: "#/components/schemas/Price"}
+        shares: {type: string}
+        trades: {type: integer, minimum: 1}
+        notional: {$ref: "#/components/schemas/Price"}
+
+    EventSummary:
+      type: object
+      description: >-
+        what a discovery card needs to summarise an event instead of listing it. The 128-outcome event is the
+        reason this exists: a card that lists 128 rows is unreadable and one that shows the first three is
+        wrong, so the card shows the top three BY 24h VOLUME and says how many it left out.
+      required: [id, title, marketCount, totalVolume24h, topOutcomes, hiddenCount]
+      properties:
+        id: {type: string}
+        title: {type: string}
+        marketCount: {type: integer}
+        totalVolume24h: {$ref: "#/components/schemas/Price"}
+        hiddenCount: {type: integer}
+        topOutcomes:
+          type: array
+          maxItems: 3
+          items:
+            type: object
+            required: [marketId, question, price, volume24h]
+            properties:
+              marketId: {type: string}
+              question: {type: string}
+              price: {oneOf: [{$ref: "#/components/schemas/Price"}, {type: "null"}]}
+              volume24h: {$ref: "#/components/schemas/Price"}
+
+    Event:
+      type: object
+      required: [id, title, negRisk, marketCount]
+      properties:
+        id: {type: string}
+        slug: {type: string}
+        title: {type: string}
+        negRisk: {type: boolean}
+        category: {oneOf: [{type: string}, {type: "null"}]}
+        endTs: {oneOf: [{type: integer}, {type: "null"}]}
+        marketCount: {type: integer}
+
+    EventOutcome:
+      type: object
+      description: one market under the event, i.e. one row of the 128-row table the client virtualises
+      required: [marketId, question, acceptingOrders, minimumTickSize, minimumOrderSize, price, volume24h,
+                 liquidity, summable]
+      properties:
+        marketId: {type: string}
+        question: {type: string}
+        acceptingOrders: {type: boolean}
+        minimumTickSize: {type: string, enum: ["0.001", "0.01"]}
+        minimumOrderSize: {type: string}
+        price: {oneOf: [{$ref: "#/components/schemas/Price"}, {type: "null"}]}
+        bestBid: {oneOf: [{$ref: "#/components/schemas/Price"}, {type: "null"}]}
+        bestAsk: {oneOf: [{$ref: "#/components/schemas/Price"}, {type: "null"}]}
+        volume24h: {$ref: "#/components/schemas/Price"}
+        liquidity: {$ref: "#/components/schemas/Price"}
+        openInterest: {$ref: "#/components/schemas/Price"}
+        change24h: {oneOf: [{$ref: "#/components/schemas/Price"}, {type: "null"}]}
+        summable:
+          type: boolean
+          description: >-
+            false when the market has one side or none, so it has no mid. Excluded from the sum rather than
+            borrowing its last trade price, which would put a stale number into a live invariant.
 
     Stamped:
       type: object

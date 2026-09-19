@@ -70,6 +70,8 @@
     "kill_switch_drills",
     "kill_switch_state",
     "loss_halts",
+    "market_activity",
+    "market_meta",
     "market_meta_versions",
     "market_rollups",
     "market_stats",
@@ -213,6 +215,8 @@
     },
     "0009_security.sql": {
       "dropped": [
+        "PG-only statement: CREATE OR REPLACE FUNCTION polygm_withdrawal_hold_holds() RETURNS trigger LANG",
+        "PG-only statement: CREATE TRIGGER withdrawal_hold_immutable BEFORE UPDATE ON withdrawal_addresses",
         "PG-only statement: CREATE TRIGGER append_only_auth_events          BEFORE UPDATE OR DELETE ON aut",
         "PG-only statement: CREATE TRIGGER append_only_wash_findings        BEFORE UPDATE OR DELETE ON was",
         "PG-only statement: CREATE TRIGGER append_only_broadcast_gates      BEFORE UPDATE OR DELETE ON bro",
@@ -237,6 +241,12 @@
         "drill_records",
         "incident_findings"
       ]
+    },
+    "0010_market_surfaces.sql": {
+      "dropped": [
+        "partial/expression index: CREATE INDEX IF NOT EXISTS market_meta_category_ix ON market_meta (cat"
+      ],
+      "check_clauses_reordered": []
     }
   }
 }

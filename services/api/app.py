@@ -149,6 +149,20 @@ FILLS_RESPONSES = {404: {"description": "no such market"},
                    422: {"description": "limit outside 1..1000, or a non-numeric `since`"}}
 BOOK_RESPONSES = {404: {"description": "no such market, or a market with no order book"},
                   422: {"description": "depth outside 1-400"}}
+# P09 · markets. Three read surfaces the discovery screen, the event page and the info rail need, declared as
+# literals for the same reason as the tables below: `tools/check-openapi.py` reads them out of the AST.
+HISTORY_RESPONSES = {
+    404: {"description": "no such market"},
+    422: {"description": "interval outside the server-built set, or limit outside 2-1000"},
+}
+EVENT_RESPONSES = {
+    404: {"description": "no such event"},
+    422: {"description": "limit outside 1-400"},
+}
+HOLDERS_RESPONSES = {
+    404: {"description": "no such market"},
+    422: {"description": "limit outside 1-100"},
+}
 INTENT_RESPONSES = {404: {"description": "no such intent, or it belongs to another user (never 403: an "
                                          "id-probing endpoint must not confirm existence)"}}
 AUTH_RESPONSES = {
@@ -748,28 +762,87 @@ def list_markets(request: Request,
                  limit: int = Query(default=50, ge=1, le=100),
                  live: bool = Query(default=True),
                  sort_by: str = Query(default="endsSoon", alias="sortBy",
-                                     pattern="^(endsSoon|newMarket|spread)$"),
-                 q: str | None = Query(default=None, max_length=128)):
+                                      pattern="^(endsSoon|newMarket|spread|volume24h|liquidity|"
+                                              "openInterest|move24h)$"),
+                 q: str | None = Query(default=None, max_length=128),
+                 category: str | None = Query(default=None, max_length=32),
+                 min_volume: int | None = Query(default=None, alias="minVolume24h", ge=0),
+                 min_liquidity: int | None = Query(default=None, alias="minLiquidity", ge=0),
+                 min_open_interest: int | None = Query(default=None, alias="minOpenInterest", ge=0),
+                 ends_within_hours: int | None = Query(default=None, alias="endsWithinHours", ge=1,
+                                                       le=87_600),
+                 new_within_hours: int | None = Query(default=None, alias="newWithinHours", ge=1,
+                                                      le=87_600),
+                 neg_risk_only: bool = Query(default=False, alias="negRiskOnly"),
+                 include_long_tail: bool = Query(default=False, alias="includeLongTail")):
     """One page of markets, ordered by the one thing the terminal needs first: what is about to resolve.
 
-    `volume24h` is deliberately NOT a sort key yet: there is no volume column, because volume is a P05
-    rollup of the tape. Sorting by a number nobody has computed does not fail loudly - it orders by NULLs
-    and reads like a broken sort.
+    P09 turns this into the discovery read, and the three decisions that matter are all about what is NOT
+    shown:
+
+      * **The dead tail is off by default.** P01 measured a median event at $19,910/day; the markets below
+        `DEAD_TAIL_MICRO` a day are a majority of the count and none of the trades. Hiding them silently
+        would break the header count, so the response reports how many were left out (`longTail.hiddenCount`)
+        with the threshold, and `includeLongTail=true` is one click.
+      * **A 128-market event arrives summarised.** A card that lists 128 rows is unreadable, and one that
+        lists the first 3 is wrong. Each row that belongs to an event carries `event.topOutcomes` (the three
+        by 24h volume), `event.marketCount` and `event.hiddenCount`, computed with ONE extra query for the
+        whole page - a per-row query here would be 50 queries for one screen.
+      * **Facets are counted with the filters applied, except the one being faceted.** A category tab that
+        zeroes the other tabs is a tab nobody can navigate back from.
+
+    `volume24h` is a sort key now because ingest writes it (`market_stats`, Gamma's own number). In P04 it
+    was deliberately absent.
 
     The cursor encodes `<sort key>|<id>`, i.e. the value the rows were ordered BY. Paging by id while
-    ordering by end_ts - the version of this function that existed ten minutes ago - repeats a market on
-    page 2 and drops another, and no single-page test can see it: only walking the whole set does.
+    ordering by end_ts repeats a market on page 2 and drops another, and no single-page test can see it:
+    only walking the whole set does.
     """
     rid = request.state.request_id
     key_sql, direction = _MARKET_SORT[sort_by]
-    where, args = [], []
+    if category is not None:
+        # Canonicalised against the vocabulary rather than passed through: `category=politics` is a different
+        # string from `Politics`, and an unknown value is a client bug worth naming, not an empty page that
+        # looks like "no markets match".
+        match = [c for c in CATEGORY_VOCAB if c.lower() == category.strip().lower()]
+        if not match:
+            return err("VALIDATION", rid)
+        category = match[0]
+    # Every predicate is tagged with WHY it exists, because two of the response's own fields are built by
+    # REMOVING one: the facets are the counts with the category filter lifted, and hiddenCount is what the
+    # tail filter left out. Parallel `where`/`args` lists made that a slicing exercise ("drop the last three
+    # args if there is a cursor"), which is the kind of arithmetic that is right until someone inserts a
+    # filter in the middle and then silently counts the wrong rows.
+    filters: list[tuple[str, str, list]] = []
     if live:
-        where.append("accepting_orders = 1")
+        filters.append(("live", "accepting_orders = 1", []))
     if q:
         # instr(), not LIKE: a LIKE pattern lets a user's own % and _ change what the query means, and there
-        # is nothing to gain from letting them. Case is folded on both sides, once.
-        where.append("instr(lower(question) || ' ' || lower(coalesce(slug, '')), ?) > 0")
-        args.append(q.lower())
+        # is nothing to gain from letting them. Case is folded on both sides, once. Three columns, not the
+        # prompt's four: we do not store tags yet, and searching a column that does not exist would be a
+        # sentence in a docstring rather than a working typeahead - the doc says which three.
+        filters.append(("q", "instr(lower(question || ' ' || coalesce(slug, '') || ' ' || "
+                             "coalesce(category, '')), ?) > 0", [q.lower()]))
+    if category is not None:
+        filters.append(("category", "category = ?", [category]))
+    if min_volume is not None:
+        filters.append(("minVolume", "volume_24h_micro >= ?", [min_volume]))
+    if min_liquidity is not None:
+        filters.append(("minLiquidity", "liquidity_micro >= ?", [min_liquidity]))
+    if min_open_interest is not None:
+        filters.append(("minOI", "open_interest_micro >= ?", [min_open_interest]))
+    if ends_within_hours is not None:
+        # `<=` on the deadline and `>=` on now: a market that ended an hour ago is not "ending within 24
+        # hours", and including it puts a dead market at the top of the default sort.
+        now_ms = _now_ms()
+        filters.append(("endsWithin", "end_ts IS NOT NULL AND end_ts <= ? AND end_ts >= ?",
+                        [now_ms + ends_within_hours * 3_600_000, now_ms]))
+    if new_within_hours is not None:
+        filters.append(("newWithin", "first_seen_ms >= ?", [_now_ms() - new_within_hours * 3_600_000]))
+    if neg_risk_only:
+        filters.append(("negRisk", "neg_risk = 1", []))
+    if not include_long_tail:
+        filters.append(("tail", "volume_24h_micro >= %d" % DEAD_TAIL_MICRO, []))
     if cursor is not None:
         try:
             raw_key, last_id = cursor.rsplit("|", 1)
@@ -782,39 +855,196 @@ def list_markets(request: Request,
         # both columns, and this sort is key DESC with id ASC for newMarket. The wrong form silently drops
         # every row that ties on the key.
         op = ">" if direction == "ASC" else "<"
-        where.append("(%s %s ? OR (%s = ? AND id > ?))" % (key_sql, op, key_sql))
-        args += [key_val, key_val, last_id]
+        filters.append(("cursor", "(%s %s ? OR (%s = ? AND id > ?))" % (key_sql, op, key_sql),
+                        [key_val, key_val, last_id]))
     # Two levels on purpose. `spread_micro` is a derived alias, and `COALESCE(spread_micro, ...) AS sort_key`
     # in the SAME select list is a "misuse of aliased column" error in SQLite (and in Postgres) - the sort
     # that only worked in the two tests that did not use it, which is why the contract-vs-app liveness check
     # asks the live app for every documented sort key rather than trusting that one of them works.
-    spread = ("(SELECT MIN(price_micro) FROM book_levels b WHERE b.market_id = m.id AND b.side = 'ask') - "
-              "(SELECT MAX(price_micro) FROM book_levels b WHERE b.market_id = m.id AND b.side = 'bid')")
-    inner = ("SELECT m.id, m.question, m.accepting_orders, m.seconds_delay, m.minimum_tick_size, "
-              "m.minimum_order_size, m.fee_type, m.enable_order_book, m.end_ts, m.first_seen_ms, "
-              + spread + " AS spread_micro FROM markets m")
+    #
+    # The joins are LEFT and COALESCEd: a market with no venue statistics yet (ingest has not seen it) must
+    # still be listed. An INNER join here is how a discovery screen goes blank during a backfill.
+    inner = _discovery_inner(with_spread=True)
+    # Inside the subquery every column has a name of its own, so the predicates can be written against names
+    # rather than against a column ORDER. The previous revision of this function relied on positional reads
+    # and grew a comment numbering its columns; a predicate that says `volume_24h_micro` cannot be broken by
+    # inserting a column.
     sql = "SELECT *, " + key_sql + " AS sort_key FROM (" + inner + ") x"
-    if where:
-        sql += " WHERE " + " AND ".join(where)
+    if filters:
+        sql += " WHERE " + " AND ".join(clause for _tag, clause, _a in filters)
     sql += " ORDER BY sort_key %s, id ASC LIMIT ?" % direction
-    rows = _db.execute(sql, (*args, limit + 1)).fetchall()   # one extra row: is there a next page?
+    rows = _db.execute(sql, (*[a for _t, _c, args_ in filters for a in args_], limit + 1)).fetchall()
     has_more = len(rows) > limit
     rows = rows[:limit]
-    # Tuples on purpose: sqlite3.Row would let a later edit reorder the SELECT while `r["question"]` kept
-    # working, quietly. Positional reads weld the column list to the mapping below.
-    items = [{"id": r[0], "question": r[1], "acceptingOrders": bool(r[2]), "secondsDelay": r[3],
-              "minimumTickSize": norm_tick(r[4]),           # the SAME normaliser the gate uses, so the tick
-              "minimumOrderSize": fmt_usdc(int(round(r[5] * 10 ** 6))),   # the UI paints and the gate applies
-              "feeType": r[6], "enableOrderBook": bool(r[7]), "endTs": r[8],   # cannot become two answers
-              "spreadMicro": r[9]} for r in rows]
+    events = _event_summaries([r[EVENT_ID] for r in rows if r[EVENT_ID]])
+    items = []
+    for r in rows:
+        change_micro = r[CHANGE_24H]
+        items.append({
+            "id": r[ID], "question": r[QUESTION], "acceptingOrders": bool(r[ACCEPTING]),
+            "secondsDelay": r[DELAY],
+            "minimumTickSize": norm_tick(r[TICK]),       # the SAME normaliser the gate uses, so the tick
+            "minimumOrderSize": fmt_usdc(int(round(r[MIN_SIZE] * 10 ** 6))),   # the UI paints and the gate
+            "feeType": r[FEE], "enableOrderBook": bool(r[BOOK]), "endTs": r[END_TS],   # cannot disagree
+            "spreadMicro": r[SPREAD], "eventId": r[EVENT_ID], "outcomeCount": r[OUTCOME_COUNT] or 0,
+            "negRisk": bool(r[NEG_RISK]), "category": r[CATEGORY], "volume24h": fmt_usdc(r[VOLUME_24H]),
+            "liquidity": fmt_usdc(r[LIQUIDITY]), "openInterest": fmt_usdc(r[OPEN_INTEREST]),
+            "lastPrice": fmt_usdc(r[LAST_PRICE]) if r[LAST_PRICE] is not None else None,
+            "price24hAgo": fmt_usdc(r[PRICE_24H_AGO]) if r[PRICE_24H_AGO] is not None else None,
+            # signed, and NULL when our tape does not reach back 24h: a "0.00" change is a claim, and we do
+            # not have the data to make it
+            "change24h": fmt_usdc(change_micro) if change_micro is not None else None,
+            "event": events.get(r[EVENT_ID]),
+        })
     # sort_key is LAST by construction (`SELECT *, <expr> AS sort_key`), so the cursor does not depend on how
     # many columns the inner select grows to - that is how this line broke once already, silently, when
     # first_seen_ms was added for the newMarket sort: the cursor started encoding a spread and every page
     # after the first repeated the first one.
-    nxt = "%d|%s" % (rows[-1][-1], rows[-1][0]) if (has_more and rows) else None
+    nxt = "%d|%s" % (rows[-1][-1], rows[-1][ID]) if (has_more and rows) else None
     return _stamped({"cacheKey": "markets:%s:%s" % (sort_by, cursor), "items": items, "nextCursor": nxt,
-                     "pageSizeHardCap": 100, "sortBy": sort_by, "sortKeys": sorted(_MARKET_SORT)},
+                     "pageSizeHardCap": 100, "sortBy": sort_by, "sortKeys": sorted(_MARKET_SORT),
+                     "facets": _facets(filters),
+                     "longTail": {"includeLongTail": include_long_tail,
+                                  "thresholdMicro": DEAD_TAIL_MICRO,
+                                  "hiddenCount": _hidden_tail_count(filters)},
+                     "categories": list(CATEGORY_VOCAB)},
                     ttl_ms=1000, stale_ms=flags().stale_ms_metadata)
+
+
+# The inner select's column order, named once. `sqlite3.Row` would be the other way to do this; the P04 note
+# beside the row mapping explains why the reads are positional, and THIS is what keeps them honest across an
+# edit that inserts a column: the names are the contract, the indices are derived, and
+# tests/test_markets_surfaces.py asserts the names are still in the order the SQL selects them.
+_DISCOVERY_COLUMNS = (
+    "id", "question", "accepting_orders", "seconds_delay", "minimum_tick_size", "minimum_order_size",
+    "fee_type", "enable_order_book", "end_ts", "first_seen_ms", "event_id", "outcome_count", "neg_risk",
+    "spread_micro", "change_24h_micro", "volume_24h_micro", "liquidity_micro", "open_interest_micro",
+    "price_24h_ago_micro", "last_price_micro", "slug", "category")
+(ID, QUESTION, ACCEPTING, DELAY, TICK, MIN_SIZE, FEE, BOOK, END_TS, FIRST_SEEN, EVENT_ID, OUTCOME_COUNT,
+ NEG_RISK, SPREAD, CHANGE_24H, VOLUME_24H, LIQUIDITY, OPEN_INTEREST, PRICE_24H_AGO, LAST_PRICE, SLUG,
+ CATEGORY) = range(len(_DISCOVERY_COLUMNS))
+
+
+def _discovery_inner(*, with_spread: bool) -> str:
+    """The discovery FROM-clause, built once so the page, the facets and the tail count cannot disagree about
+    what a market's category, volume or open interest IS. Three hand-copied joins is three chances for one of
+    them to forget a COALESCE and make an entire category vanish from its own tab.
+
+    Every filterable column is selected under its OWN name (not `SELECT *`), because the predicate lists are
+    written against names: a where-clause that says `volume_24h_micro` keeps working when a column is
+    inserted, and the earlier positional version of this function did not.
+
+    `with_spread` is false for the counting queries: the spread is a correlated subquery per row and nothing
+    filters or groups by it. Paying for it three times to answer "how many markets per category" is how a
+    facets query ends up slower than the page it annotates.
+    """
+    spread = ("" if not with_spread else
+              "(SELECT MIN(price_micro) FROM book_levels b WHERE b.market_id = m.id AND b.side = 'ask') - "
+              "(SELECT MAX(price_micro) FROM book_levels b WHERE b.market_id = m.id AND b.side = 'bid') "
+              "AS spread_micro, ")
+    change = ("CASE WHEN a.price_24h_ago_micro IS NULL OR a.last_price_micro IS NULL THEN NULL "
+              "ELSE a.last_price_micro - a.price_24h_ago_micro END AS change_24h_micro, ")
+    return ("SELECT m.id AS id, m.question AS question, m.accepting_orders AS accepting_orders, "
+            "m.seconds_delay AS seconds_delay, m.minimum_tick_size AS minimum_tick_size, "
+            "m.minimum_order_size AS minimum_order_size, m.fee_type AS fee_type, "
+            "m.enable_order_book AS enable_order_book, m.end_ts AS end_ts, "
+            "m.first_seen_ms AS first_seen_ms, m.event_id AS event_id, "
+            # NOT `m.outcome_count`. That column is Postgres-only: it is GENERATED ALWAYS AS
+            # jsonb_array_length(outcomes_json) STORED, and the portable subset the suite runs on DROPS
+            # generated columns (recorded in db/migrations-sqlite/DROPPED.json). Reading it made the
+            # discovery screen work in production and 500 in the test engine - the exact "tests pass,
+            # production differs" shape the transpiler's drop record exists to expose, caught here only
+            # because the tests run on the subset. The count comes from `tokens`, which both engines have and
+            # which is what the generated column was deriving from in the first place.
+            "(SELECT COUNT(*) FROM tokens tk WHERE tk.market_id = m.id) AS outcome_count, "
+            "m.neg_risk AS neg_risk, " + spread + change +
+            "COALESCE(s.volume_24h_micro, 0) AS volume_24h_micro, "
+            "COALESCE(s.liquidity_micro, 0) AS liquidity_micro, "
+            "COALESCE(a.open_interest_micro, 0) AS open_interest_micro, "
+            "a.price_24h_ago_micro AS price_24h_ago_micro, a.last_price_micro AS last_price_micro, "
+            "m.slug AS slug, COALESCE(mt.category, 'Other') AS category "
+            "FROM markets m "
+            "LEFT JOIN market_stats s ON s.condition_id = m.condition_id "
+            "LEFT JOIN market_activity a ON a.market_id = m.id "
+            "LEFT JOIN market_meta mt ON mt.market_id = m.id")
+
+
+def _clauses(filters: list[tuple[str, str, list]], drop: set[str]) -> tuple[str, list]:
+    kept = [(clause, args_) for tag, clause, args_ in filters if tag not in drop]
+    sql = (" WHERE " + " AND ".join(c for c, _a in kept)) if kept else ""
+    return sql, [a for _c, args_ in kept for a in args_]
+
+
+def _facets(filters: list[tuple[str, str, list]]) -> dict:
+    """Market counts per category, with every filter applied EXCEPT the category one, and without the cursor
+    (which is about position in a list, not membership in it). A category tab that zeroes the other tabs is a
+    tab nobody can navigate back from."""
+    where, args = _clauses(filters, drop={"category", "cursor"})
+    sql = ("SELECT category, COUNT(*) FROM (" + _discovery_inner(with_spread=False) + ") x"
+           + where + " GROUP BY category")
+    return {row[0]: row[1] for row in _db.execute(sql, args).fetchall()}
+
+
+def _hidden_tail_count(filters: list[tuple[str, str, list]]) -> int:
+    """How many markets the dead-tail filter is hiding, with every OTHER filter still applied. Zero when the
+    caller asked for the long tail - the number means "left out", and nothing was."""
+    if not any(tag == "tail" for tag, _c, _a in filters):
+        return 0
+    # Count the COMPLEMENT, with every other filter still applied. The first version dropped the tail clause
+    # and counted what was left - i.e. it reported the size of the VISIBLE set as the number of hidden
+    # markets, and the two differ by exactly everything the user can see. It looked plausible on a fixture
+    # where nothing was hidden at all (0 hidden, 0 visible), which is why the seed now contains a tail.
+    where, args = _clauses(filters, drop={"tail", "cursor"})
+    tail = "volume_24h_micro < %d" % DEAD_TAIL_MICRO
+    sql = ("SELECT COUNT(*) FROM (" + _discovery_inner(with_spread=False) + ") x"
+           + (where + " AND " if where else " WHERE ") + tail)
+    return int(_db.execute(sql, args).fetchone()[0])
+
+
+def _event_summaries(event_ids: list[str]) -> dict:
+    """Top-3-by-volume outcomes for every event on the page, in ONE query per fact.
+
+    Window function, not a loop: ROW_NUMBER() OVER (PARTITION BY ...) is supported by every engine this runs
+    on (SQLite >= 3.25, Postgres) and it is the difference between one round trip and 50 for a page of 50
+    events. A per-row query would also have been invisible in the fixture, where the biggest event has six
+    markets - the shape this exists for has 128.
+    """
+    if not event_ids:
+        return {}
+    marks = ",".join("?" * len(event_ids))
+    meta_rows = _db.execute(
+        "SELECT m.event_id, e.title, COUNT(*) AS market_count, "
+        "COALESCE(SUM(s.volume_24h_micro), 0) AS total_volume "
+        "FROM markets m LEFT JOIN events e ON e.id = m.event_id "
+        "LEFT JOIN market_stats s ON s.condition_id = m.condition_id "
+        "WHERE m.event_id IN (%s) GROUP BY m.event_id, e.title" % marks, event_ids).fetchall()
+    # volume comes back in the SAME row as the ranking: an earlier draft then queried the volume per top
+    # outcome, three extra round trips per event for a number it had already selected.
+    top_rows = _db.execute(
+        "SELECT event_id, market_id, question, price_micro, volume_micro FROM ("
+        "  SELECT m.event_id AS event_id, m.id AS market_id, m.question AS question, "
+        "         (COALESCE((SELECT MAX(price_micro) FROM book_levels b WHERE b.market_id = m.id AND "
+        "          b.side = 'bid'), 0) + COALESCE((SELECT MIN(price_micro) FROM book_levels b WHERE "
+        "          b.market_id = m.id AND b.side = 'ask'), 0)) / 2 AS price_micro, "
+        "         COALESCE(s.volume_24h_micro, 0) AS volume_micro, "
+        "         ROW_NUMBER() OVER (PARTITION BY m.event_id ORDER BY COALESCE(s.volume_24h_micro, 0) DESC, "
+        "         m.id ASC) AS rn "
+        "  FROM markets m LEFT JOIN market_stats s ON s.condition_id = m.condition_id "
+        "  WHERE m.event_id IN (%s)) ranked WHERE rn <= 3" % marks, event_ids).fetchall()
+    tops: dict[str, list] = {}
+    for event_id, market_id, question, price_micro, volume_micro in top_rows:
+        tops.setdefault(event_id, []).append({
+            "marketId": market_id, "question": question,
+            # a zero price is "no book", not "$0.00 a share": the client renders a dash
+            "price": fmt_usdc(price_micro) if price_micro else None,
+            "volume24h": fmt_usdc(int(volume_micro))})
+    out = {}
+    for event_id, title, count, total in meta_rows:
+        out[event_id] = {"id": event_id, "title": title, "marketCount": int(count),
+                         "totalVolume24h": fmt_usdc(int(total)),
+                         "topOutcomes": tops.get(event_id, []),
+                         "hiddenCount": max(0, int(count) - len(tops.get(event_id, [])))}
+    return out
 
 
 @app.get("/v1/tape", responses=TAPE_RESPONSES)
@@ -906,46 +1136,126 @@ def get_market_fills(market_id: str, request: Request,
 # The sentinel is 2**63-1, which no real millisecond timestamp reaches, and it is what puts undated markets
 # at the END of an ascending sort.
 _SENTINEL = 9223372036854775807
+# P09 adds four keys, and each one is a column somebody maintains. That is the rule this table follows since
+# `volume24h` was deliberately withheld in P04 ("sorting by a number nobody has computed orders by NULLs and
+# reads like a broken sort"): a sort key may only name a column that ingest writes. volume24h/liquidity come
+# from `market_stats` (Gamma's own numbers), openInterest from `market_activity`, and move24h is the
+# difference between the newest fill we hold and the one we held 24h ago - NULL, not 0, when our tape does
+# not reach back that far, because a move against a price of zero renders as +100%.
 _MARKET_SORT = {
     "endsSoon": ("COALESCE(end_ts, %d)" % _SENTINEL, "ASC"),
     "newMarket": ("first_seen_ms", "DESC"),
     "spread": ("COALESCE(spread_micro, %d)" % _SENTINEL, "ASC"),   # legal HERE: this is the outer query
+    "volume24h": ("volume_24h_micro", "DESC"),
+    "liquidity": ("liquidity_micro", "DESC"),
+    "openInterest": ("open_interest_micro", "DESC"),
+    "move24h": ("COALESCE(change_24h_micro, %d)" % -_SENTINEL, "DESC"),
 }
+
+# The P09 filter vocabulary. `Other` is in the list because an unclassified market has to render somewhere and
+# a tab that hides rows is a tab that makes the count in the header a lie.
+CATEGORY_VOCAB = ("Politics", "Sports", "Crypto", "Finance", "Economics", "Tech", "Culture", "Weather",
+                  "Geopolitics", "Other")
+# The dead tail. P01 measured a median event at $19,910/day, so "$1,000 of 24h volume" is far below the median
+# and still well above the noise: the markets it hides are the ones with no realistic fill. The default view is
+# what a user can actually trade; the long tail is one click away and its size is reported, never implied.
+DEAD_TAIL_MICRO = 1_000_000_000
+# Aggregate-by ladder steps, in micro-USDC. `None` is the raw tick. Rounding is DIRECTIONAL and conservative:
+# a bid aggregates DOWN and an ask UP, so an aggregated ladder never shows a price you could not have got.
+AGGREGATES = {"raw": None, "1c": 10_000, "5c": 50_000}
+# Which candle widths the SERVER builds. 6h and 1d are derivable by bucketing 1h candles on the client for
+# free; asking the server for them would be a second, weaker implementation of the same maths (docs/P09
+# D5). The list is served WITH the candles so a client feature-detects instead of guessing from a changelog.
+HISTORY_INTERVALS = {"1m": 60_000, "5m": 300_000, "15m": 900_000, "1h": 3_600_000}
+DERIVED_INTERVALS = ("6h", "1d")
 
 
 @app.get("/v1/markets/{market_id}", responses=MARKET_RESPONSES)
 def get_market(market_id: str, request: Request):
-    row = _db.execute("SELECT id,question,accepting_orders,seconds_delay,minimum_tick_size,"
-                      "minimum_order_size,fee_type,enable_order_book,end_ts FROM markets WHERE id=?",
-                      (market_id,)).fetchone()
+    """The market's own row plus everything the info rail renders.
+
+    One round trip, not five: the rail shows the category, the resolution text, liquidity, three volume
+    windows, open interest, the last price, the 24h change and the holder count. A client assembling that from
+    five endpoints would show five different `asOf` stamps for one page, and the freshness indicator is
+    supposed to answer "how old is what I am looking at", singular.
+    """
+    row = _db.execute(
+        "SELECT m.id, m.question, m.accepting_orders, m.seconds_delay, m.minimum_tick_size, "
+        "m.minimum_order_size, m.fee_type, m.enable_order_book, m.end_ts, m.event_id, "
+        "(SELECT COUNT(*) FROM tokens tk WHERE tk.market_id = m.id), "      # see _discovery_inner: the
+        "m.neg_risk, m.slug, e.title AS event_title, e.slug AS event_slug, "      # generated column is PG-only
+
+        "COALESCE(mt.category, 'Other'), mt.resolution_source, mt.resolution_criteria, "
+        "COALESCE(s.volume_24h_micro, 0), COALESCE(s.liquidity_micro, 0), "
+        "COALESCE(a.open_interest_micro, 0), COALESCE(a.volume_7d_micro, 0), "
+        "COALESCE(a.volume_30d_micro, 0), a.price_24h_ago_micro, a.last_price_micro "
+        "FROM markets m LEFT JOIN events e ON e.id = m.event_id "
+        "LEFT JOIN market_meta mt ON mt.market_id = m.id "
+        "LEFT JOIN market_stats s ON s.condition_id = m.condition_id "
+        "LEFT JOIN market_activity a ON a.market_id = m.id WHERE m.id = ?", (market_id,)).fetchone()
     if row is None:
         return err("NOT_FOUND", request.state.request_id)
-    # the same normalisation the gate uses, so the number the UI renders and the number the gate compares
-    # cannot disagree (Postgres "0.0100" vs SQLite 0.01 vs the gate's "0.01")
-    row = list(row)
-    row[4] = norm_tick(row[4])
-    keys = ["id", "question", "accepting_orders", "seconds_delay", "minimum_tick_size",
-            "minimum_order_size", "fee_type", "enable_order_book", "end_ts"]
-    m = dict(zip(keys, row))
-    return _stamped({"cacheKey": f"market:{market_id}",
-                     "market": {"id": m["id"], "question": m["question"],
-                                "acceptingOrders": bool(m["accepting_orders"]),
-                                "secondsDelay": m["seconds_delay"],
-                                "minimumTickSize": m["minimum_tick_size"],
-                                "minimumOrderSize": m["minimum_order_size"],
-                                "feeType": m["fee_type"],
-                                "enableOrderBook": bool(m["enable_order_book"]),
-                                "endDate": m["end_ts"]}},
+    # The count of wallets WE have seen trade, not the venue's holder list: the venue does not publish one for
+    # every market, and a number that silently means two different things is worse than a number that says
+    # which one it is. The rail labels it "seen trading" for exactly this reason.
+    holders = _db.execute("SELECT COUNT(DISTINCT wallet) FROM tape_fills WHERE condition_id = "
+                          "(SELECT condition_id FROM markets WHERE id = ?)", (market_id,)).fetchone()
+    # SELECT order: ... 21 volume_7d, 22 volume_30d, 23 price_24h_ago, 24 last_price
+    change = None if (row[23] is None or row[24] is None) else int(row[24]) - int(row[23])
+    market = {
+        "id": row[0], "question": row[1], "acceptingOrders": bool(row[2]), "secondsDelay": row[3],
+        # the same normalisation the gate uses, so the number the UI renders and the number the gate compares
+        # cannot disagree (Postgres "0.0100" vs SQLite 0.01 vs the gate's "0.01")
+        "minimumTickSize": norm_tick(row[4]),
+        # formatted exactly as the list endpoint formats it: SQLite hands back a REAL for a NUMERIC column and
+        # Postgres a Decimal, so returning the raw value is a `5.0` in one engine and a `5` in the other - and
+        # the contract says string. The two endpoints disagreeing is how a client ends up validating against
+        # one number and displaying another.
+        "minimumOrderSize": fmt_usdc(int(round(float(row[5]) * 10 ** 6))), "feeType": row[6],
+        "enableOrderBook": bool(row[7]), "endDate": row[8], "eventId": row[9],
+        "outcomeCount": row[10] or 0, "negRisk": bool(row[11]), "slug": row[12],
+        "eventTitle": row[13], "eventSlug": row[14], "category": row[15],
+        # Verbatim, both of them. `resolutionCriteria` is written by whoever created the market and is the one
+        # string on the page an outsider controls, so it is returned as data and the CLIENT is what renders it
+        # as text. Sanitising here instead would hide the fixture that proves the client does not trust it.
+        "resolutionSource": row[16], "resolutionCriteria": row[17],
+        "volume24h": fmt_usdc(int(row[18])), "liquidity": fmt_usdc(int(row[19])),
+        "openInterest": fmt_usdc(int(row[20])), "volume7d": fmt_usdc(int(row[21])),
+        "volume30d": fmt_usdc(int(row[22])),
+        "price24hAgo": fmt_usdc(int(row[23])) if row[23] is not None else None,
+        "lastPrice": fmt_usdc(int(row[24])) if row[24] is not None else None,
+        "change24h": fmt_usdc(change) if change is not None else None,
+        "holderCount": int(holders[0]) if holders else 0,
+    }
+    return _stamped({"cacheKey": f"market:{market_id}", "market": market},
                     ttl_ms=flags().cache_ttl_market_ms, stale_ms=flags().stale_ms_metadata)
 
 
 @app.get("/v1/markets/{market_id}/book", responses=BOOK_RESPONSES)
-def get_book(market_id: str, request: Request, depth: int = Query(default=24, ge=1, le=400)):
+def get_book(market_id: str, request: Request, depth: int = Query(default=24, ge=1, le=400),
+             aggregate: str = Query(default="raw", pattern="^(raw|1c|5c)$")):
     """Books come from `ingest`'s materialised snapshot, never proxied live: one user must not be able to
-    spend the shared rate budget (rule 2)."""
+    spend the shared rate budget (rule 2).
+
+    P09 adds two things the ladder cannot be built without:
+
+      * **`aggregate`.** A market with a 0.001 tick has 1000 price levels per dollar; rendering them raw is
+        both unreadable and expensive (the prompt's own observation: 94 levels out of a live book). Buckets
+        are 1c and 5c. Rounding is DIRECTIONAL - a bid rounds DOWN and an ask rounds UP - so an aggregated
+        ladder never displays a price the user could not have got. Aggregating in the client would need float
+        bucketing of a decimal string, which is where money bugs come from.
+      * **`oneSided`.** A book with asks and no bids is not a broken feed, it is a market where everyone
+        holding the other side has left: P01 measured 94 ask levels at 0.001 totalling $21.9M against zero
+        bids. The verdict is computed here, once, so the ladder, the depth chart and the ticket cannot
+        disagree about whether the market is one-sided - and `why` is a machine code, not a sentence, because
+        the client owns its own wording.
+    """
     # one query per side, each with its own LIMIT: a single ORDER BY side,price DESC with LIMIT 2k is the
     # classic way to return 2k bids and no asks, which then renders as a one-sided book (P01 measured 0/22
     # one-sided markets in reality, so the bug would have hidden in the data layer).
+    # The LIMIT is applied BEFORE aggregation, on the raw ladder, and that is deliberate: aggregating first
+    # would need every level in memory to bucket it, which is the cost this endpoint exists to avoid. The
+    # consequence - a 24-level page can aggregate into fewer than 24 buckets - is documented on `buckets`.
     per = []
     for side, ord_ in (("bid", "DESC"), ("ask", "ASC")):
         per.append((side, _db.execute(
@@ -955,24 +1265,274 @@ def get_book(market_id: str, request: Request, depth: int = Query(default=24, ge
     rows = [r for _, rs in per for r in rs]
     if not rows:
         return err("NOT_FOUND", request.state.request_id)
-    out = {"BUY": [], "SELL": []}
-    for side, p, s, levels, upd in rows:
-        out["SELL" if side == "ask" else "BUY"].append({"price": fmt_usdc(p),
-                                                          "shares": _shares(s),
-                                                          "levels": levels})
-    age = _now_ms() - max(r[4] for r in rows)
-    bid = max((r[1] for r in rows if r[0] == "bid"), default=None)
-    ask = min((r[1] for r in rows if r[0] == "ask"), default=None)
     meta = _db.execute("SELECT minimum_tick_size FROM markets WHERE id=?", (market_id,)).fetchone()
+    tick_micro = int(round(float(meta[0]) * 10 ** 6)) if meta and meta[0] else 10_000
+
+    def bucket(levels: list[tuple], step: int | None, up: bool) -> list[dict]:
+        """Fold the raw ladder into price buckets, keeping the WORST price in each bucket for the side.
+
+        Worst, not best, because the bucket's number is a promise to the reader: "you can trade at least this
+        well inside this band". A bid bucket that reports the highest price in the band promises fills that
+        the lower levels inside it will not deliver.
+        """
+        if step is None:
+            return [{"price": fmt_usdc(p), "shares": _shares(s), "levels": lv} for _sd, p, s, lv, _u in levels]
+        out: dict[int, dict] = {}
+        for _sd, p, s, lv, _u in levels:
+            key = ((p + step - 1) // step) * step if up else (p // step) * step
+            slot = out.setdefault(key, {"priceMicro": key, "sharesMicro": 0, "levels": 0})
+            slot["sharesMicro"] += int(s)
+            slot["levels"] += int(lv)
+        ordered = sorted(out.values(), key=lambda d: d["priceMicro"], reverse=not up)
+        return [{"price": fmt_usdc(d["priceMicro"]), "shares": _shares(d["sharesMicro"]),
+                 "levels": d["levels"]} for d in ordered]
+
+    step = AGGREGATES[aggregate]
+    bids, asks = bucket(per[0][1], step, up=False), bucket(per[1][1], step, up=True)
+    age = _now_ms() - max(r[4] for r in rows)
+    bid_top = max((r[1] for r in rows if r[0] == "bid"), default=None)
+    ask_top = min((r[1] for r in rows if r[0] == "ask"), default=None)
     spread_ticks = None
-    if bid is not None and ask is not None and meta and meta[0]:
-        spread_ticks = round((ask - bid) / (float(meta[0]) * 1e6), 3)     # metadata maths, not money
-    return _stamped({"cacheKey": f"book:{market_id}:{depth}", "market": market_id,
-                     "bids": out["BUY"], "asks": out["SELL"],   # best-first on both sides, per the design system
-                     "spreadTicks": spread_ticks, "bestBid": fmt_usdc(bid) if bid else None,
-                     "bestAsk": fmt_usdc(ask) if ask else None, "ageMs": age},
+    if bid_top is not None and ask_top is not None and tick_micro:
+        spread_ticks = round((ask_top - bid_top) / tick_micro, 3)     # metadata maths, not money
+    # The rows the ladder and the chart both need, computed once. `cumShares` is cumulative FROM THE TOP, so
+    # the depth bar's width is a fraction of the biggest cumulative figure on either side.
+    for side_rows in (bids, asks):
+        running = 0
+        for level in side_rows:
+            running += _micro_of(level["shares"])
+            level["cumShares"] = _shares(running)
+    cum_max = max([_micro_of(l["cumShares"]) for l in bids + asks] or [0])
+    # `shares` in these rows is a decimal string; the client sums in integer micro units, never as a float,
+    # which is why the cumulative is served rather than left to be derived from floats in a chart loop.
+    one_sided = None
+    if bid_top is None and ask_top is not None:
+        one_sided = {"side": "asks-only", "why": "NO_BIDS", "levels": len(asks),
+                     "notionalUsdc": fmt_usdc(_notional_micro([(l["price"], l["shares"]) for l in asks])),
+                     "bestAsk": fmt_usdc(ask_top)}
+    elif ask_top is None and bid_top is not None:
+        one_sided = {"side": "bids-only", "why": "NO_ASKS", "levels": len(bids),
+                     "notionalUsdc": fmt_usdc(_notional_micro([(l["price"], l["shares"]) for l in bids])),
+                     "bestBid": fmt_usdc(bid_top)}
+    return _stamped({"cacheKey": f"book:{market_id}:{depth}:{aggregate}", "market": market_id,
+                     "aggregate": aggregate, "aggregateStep": fmt_usdc(step) if step else None,
+                     "tickSize": norm_tick(meta[0]) if meta and meta[0] else None,
+                     # best-first on both sides, per the design system
+                     "bids": bids, "asks": asks,
+                     "spreadTicks": spread_ticks,
+                     "midPrice": fmt_usdc((bid_top + ask_top) // 2) if (bid_top and ask_top) else None,
+                     "bestBid": fmt_usdc(bid_top) if bid_top is not None else None,
+                     "bestAsk": fmt_usdc(ask_top) if ask_top is not None else None,
+                     "oneSided": one_sided, "maxCumShares": _shares(cum_max),
+                     "ageMs": age},
                     ttl_ms=flags().cache_ttl_books_ms, stale_ms=flags().stale_ms_book,
                     as_of_ms=max(r[4] for r in rows))   # the ladder's own `updated_ms`, i.e. `ageMs`'s source
+
+
+def _notional_micro(levels: list[tuple[str, str]]) -> int:
+    """Sum of price x shares in micro-units, from the DECIMAL STRINGS the payload carries.
+
+    Integer arithmetic end to end: parse the two strings into micro-integers, multiply, divide by 10^6 once.
+    The first version of this multiplied floats (`float(price) * float(shares)`) and then rounded - which is
+    the exact money-path float the repo's rules forbid, in the one place it is least visible, a footer number
+    that nobody diffs.
+    """
+    total = 0
+    for price, shares in levels:
+        p = _micro_of(price)
+        s = _micro_of(shares)
+        total += p * s // 10 ** 6
+    return total
+
+
+def _micro_of(decimal: str) -> int:
+    """`"0.001"` -> 1000. Whole and fractional parts are parsed separately; `int(float(x) * 10**6)` rounds
+    wrong on values like 0.1+0.2 and raises on nothing, so it fails silently."""
+    whole, _, frac = str(decimal).partition(".")
+    frac = (frac + "000000")[:6]
+    sign = -1 if whole.startswith("-") else 1
+    return sign * (abs(int(whole)) * 10 ** 6 + int(frac or "0"))
+
+
+# --------------------------------------------------------------------------- #
+# P09 · the market surfaces: history, the event page, and holders
+
+
+@app.get("/v1/markets/{market_id}/history", responses=HISTORY_RESPONSES)
+def get_market_history(market_id: str, request: Request,
+                       interval: str = Query(default="1m", pattern="^(1m|5m|15m|1h)$"),
+                       limit: int = Query(default=200, ge=2, le=1000)):
+    """Candles built from OUR fills, at the widths the server owns.
+
+    Deliberate limits, stated rather than implied:
+      * **These are not venue candles.** The venue's `/prices-history` was measured in P01 and it is a
+        different series (it samples mid-price on its own schedule, and it is Cloudflare-cached). Ours are
+        trade-derived: a bucket with no fills is a GAP, not a flat candle, and `trades: 0` says so. A chart
+        that draws a line through a gap is a chart that invents prices.
+      * **1m..1h are built here; 6h and 1d are derived by the client** by bucketing these 1h candles. The
+        split is served in `derivedIntervals` so a client feature-detects instead of trusting a changelog.
+      * **The window is bounded by `limit` buckets, not by an unbounded scan.** Asking for 1000 hourly candles
+        means reading a month of fills; the request says how far back it goes (`fromTs`) so the chart can
+        render "the tape does not reach that far" instead of a flat line at the left edge.
+    """
+    rid = request.state.request_id
+    if _db.execute("SELECT 1 FROM markets WHERE id=?", (market_id,)).fetchone() is None:
+        return err("NOT_FOUND", rid)
+    bucket_ms = HISTORY_INTERVALS[interval]
+    now = _now_ms()
+    from_ts = now - bucket_ms * limit
+    rows = _db.execute(
+        "SELECT price_micro, size_micro, usd_notional_micro, ts_ms FROM tape_fills WHERE condition_id = "
+        "(SELECT condition_id FROM markets WHERE id = ?) AND ts_ms >= ? ORDER BY ts_ms ASC LIMIT 20000",
+        (market_id, from_ts)).fetchall()
+    # Buckets are built in integer micro units throughout; the bucket key is floored division of the venue
+    # clock, which is the ONLY clock a chart may bucket by (mixing it with ingest_ms spreads one trade over
+    # two candles during a lag spike).
+    buckets: dict[int, dict] = {}
+    for price, size, notional, ts in rows:
+        key = int(ts) // bucket_ms * bucket_ms
+        b = buckets.get(key)
+        if b is None:
+            buckets[key] = {"t": key, "o": int(price), "h": int(price), "l": int(price), "c": int(price),
+                            "sizeMicro": int(size), "notionalMicro": int(notional), "trades": 1}
+        else:
+            b["h"] = max(b["h"], int(price)); b["l"] = min(b["l"], int(price)); b["c"] = int(price)
+            b["sizeMicro"] += int(size); b["notionalMicro"] += int(notional); b["trades"] += 1
+    candles = [{"t": b["t"], "o": fmt_usdc(b["o"]), "h": fmt_usdc(b["h"]), "l": fmt_usdc(b["l"]),
+                "c": fmt_usdc(b["c"]), "shares": _shares(b["sizeMicro"]), "trades": b["trades"],
+                # The volume histogram is sized by the NOTIONAL the fill actually carried, not by shares: a
+                # histogram of share counts makes a 1000-share trade at 0.001 look like a whale.
+                "notional": fmt_usdc(b["notionalMicro"])}
+               for b in sorted(buckets.values(), key=lambda d: d["t"])]
+    return _stamped({"cacheKey": f"history:{market_id}:{interval}:{limit}", "market": market_id,
+                     "interval": interval, "bucketMs": bucket_ms, "fromTs": from_ts, "candles": candles,
+                     "serverIntervals": sorted(HISTORY_INTERVALS), "derivedIntervals": list(DERIVED_INTERVALS),
+                     "source": "fills", "sampled": len(rows) < 20000},
+                    ttl_ms=flags().cache_ttl_books_ms, stale_ms=flags().stale_ms_price,
+                    as_of_ms=(rows[-1][2] if rows else None))
+
+
+@app.get("/v1/events/{event_id}", responses=EVENT_RESPONSES)
+def get_event(event_id: str, request: Request, limit: int = Query(default=400, ge=1, le=400)):
+    """One negRisk event and every market under it - the 128-row table, plus the invariant it must satisfy.
+
+    The invariant, and what "opportunity" means: for a negRisk event the YES prices partition one dollar, so
+    the sum of the mids must be near 1. Near, not equal: each price is only known to a tick, so the sum of N
+    quotes is only known to N ticks and `tolerance` is exactly that. The *tradable* statement is stronger and
+    is computed from executable levels rather than mids - buying every outcome at the best ask must cost more
+    than a dollar, and selling every outcome at the best bid must return less - because that is the pair of
+    orders a user could actually send. `opportunity` is null when neither side is exploitable, which is the
+    honest answer for the vast majority of events; a screen that shouts on every 1-tick deviation teaches its
+    reader to ignore it.
+    """
+    rid = request.state.request_id
+    ev = _db.execute("SELECT id, slug, title, neg_risk, category, end_ts FROM events WHERE id=?",
+                     (event_id,)).fetchone()
+    if ev is None:
+        return err("NOT_FOUND", rid)
+    rows = _db.execute(
+        "SELECT m.id, m.question, m.accepting_orders, m.minimum_tick_size, m.minimum_order_size, "
+        "COALESCE(s.volume_24h_micro, 0), COALESCE(s.liquidity_micro, 0), COALESCE(a.open_interest_micro, 0), "
+        "a.price_24h_ago_micro, a.last_price_micro, "
+        "(SELECT MAX(price_micro) FROM book_levels b WHERE b.market_id = m.id AND b.side = 'bid'), "
+        "(SELECT MIN(price_micro) FROM book_levels b WHERE b.market_id = m.id AND b.side = 'ask') "
+        "FROM markets m LEFT JOIN market_stats s ON s.condition_id = m.condition_id "
+        "LEFT JOIN market_activity a ON a.market_id = m.id WHERE m.event_id = ? "
+        "ORDER BY COALESCE(s.volume_24h_micro, 0) DESC, m.id ASC LIMIT ?", (event_id, limit)).fetchall()
+    outcomes, sum_mid, sum_bid, sum_ask, tolerance_micro, tick_sum = [], 0, 0, 0, 0, 0
+    for (mid_, question, accepting, tick, min_size, vol, liq, oi, p24, last, best_bid,
+         best_ask) in rows:
+        tick_micro = _micro_of(norm_tick(tick))
+        # Mid is the reference for the SUM. A market with only one side has no mid, and pretending its last
+        # trade is its price would put a stale number into an invariant that is supposed to be live.
+        if best_bid is not None and best_ask is not None:
+            mid_p = (int(best_bid) + int(best_ask)) // 2
+        elif last is not None:
+            mid_p = int(last)
+        else:
+            mid_p = None
+        change = None if (p24 is None or last is None) else int(last) - int(p24)
+        tolerance_micro += tick_micro
+        tick_sum += 1
+        outcomes.append({
+            "marketId": mid_, "question": question, "acceptingOrders": bool(accepting),
+            "minimumTickSize": norm_tick(tick), "minimumOrderSize": str(min_size),
+            "price": fmt_usdc(mid_p) if mid_p is not None else None,
+            "bestBid": fmt_usdc(int(best_bid)) if best_bid is not None else None,
+            "bestAsk": fmt_usdc(int(best_ask)) if best_ask is not None else None,
+            "volume24h": fmt_usdc(int(vol)), "liquidity": fmt_usdc(int(liq)),
+            "openInterest": fmt_usdc(int(oi)),
+            "change24h": fmt_usdc(change) if change is not None else None,
+            # a market with one side (or none) cannot be summed into a partition, and the client must be able
+            # to say WHICH rows were left out rather than quietly summing anyway
+            "summable": mid_p is not None,
+        })
+        if mid_p is not None:
+            sum_mid += mid_p
+        if best_bid is not None:
+            sum_bid += int(best_bid)
+        if best_ask is not None:
+            sum_ask += int(best_ask)
+    summable = sum(1 for o in outcomes if o["summable"])
+    deviation_micro = sum_mid - 10 ** 6
+    # Executable edges. Buying one of every outcome costs sum(best ask); that is profitable when it is under a
+    # dollar. Selling one of every outcome (which requires holding a short on each) returns sum(best bid);
+    # profitable above a dollar. Both are stated in micro dollars so the client renders them like any money.
+    buy_edge = 10 ** 6 - sum_ask if all(o["bestAsk"] for o in outcomes) and outcomes else None
+    sell_edge = sum_bid - 10 ** 6 if all(o["bestBid"] for o in outcomes) and outcomes else None
+    opportunity = None
+    if buy_edge is not None and buy_edge > max(tolerance_micro // tick_sum if tick_sum else 0, 0):
+        opportunity = {"kind": "buy-all", "edge": fmt_usdc(buy_edge)}
+    elif sell_edge is not None and sell_edge > max(tolerance_micro // tick_sum if tick_sum else 0, 0):
+        opportunity = {"kind": "sell-all", "edge": fmt_usdc(sell_edge)}
+    return _stamped({
+        "cacheKey": f"event:{event_id}",
+        "event": {"id": ev[0], "slug": ev[1], "title": ev[2], "negRisk": bool(ev[3]), "category": ev[4],
+                  "endTs": ev[5], "marketCount": len(rows)},
+        "outcomes": outcomes,
+        "probabilitySum": fmt_usdc(sum_mid) if summable else None,
+        "deviation": fmt_usdc(deviation_micro) if summable else None,
+        "tolerance": fmt_usdc(tolerance_micro),          # N outcomes x 1 tick each
+        "withinTolerance": abs(deviation_micro) <= tolerance_micro if summable else None,
+        "summableCount": summable,
+        "buyAllCost": fmt_usdc(sum_ask) if all(o["bestAsk"] for o in outcomes) and outcomes else None,
+        "sellAllProceeds": fmt_usdc(sum_bid) if all(o["bestBid"] for o in outcomes) and outcomes else None,
+        "opportunity": opportunity,
+    }, ttl_ms=flags().cache_ttl_books_ms, stale_ms=flags().stale_ms_price)
+
+
+@app.get("/v1/markets/{market_id}/holders", responses=HOLDERS_RESPONSES)
+def get_market_holders(market_id: str, request: Request, limit: int = Query(default=20, ge=1, le=100)):
+    """The wallets we have seen trade this market, by notional, with their published labels.
+
+    Provenance is stated because it is not the venue's holder list: it is OUR fills, so a whale that bought
+    before our ingest started is invisible, and a wallet that only ever placed unfilled orders never appears.
+    `provenance` says "tape" and the rail renders that word next to the heading. The address itself is never
+    returned - the same rule as `/v1/tape`: a public list of the wallets our users trade against is an address
+    book, and `insider_suspect` is not a publishable label, so the join filters on `publishable` exactly as
+    the tape does.
+    """
+    rid = request.state.request_id
+    mrow = _db.execute("SELECT condition_id FROM markets WHERE id=?", (market_id,)).fetchone()
+    if mrow is None:
+        return err("NOT_FOUND", rid)
+    rows = _db.execute(
+        "SELECT wallet, SUM(usd_notional_micro) AS notional, COUNT(*) AS fills, MIN(ts_ms), MAX(ts_ms) "
+        "FROM tape_fills WHERE condition_id = ? GROUP BY wallet ORDER BY notional DESC, wallet ASC LIMIT ?",
+        (str(mrow[0]), limit)).fetchall()
+    total = _db.execute("SELECT COALESCE(SUM(usd_notional_micro), 0) FROM tape_fills WHERE condition_id = ?",
+                        (str(mrow[0]),)).fetchone()
+    labels = dict(_db.execute("SELECT wallet, label FROM wallet_labels WHERE publishable=1").fetchall())
+    out = []
+    for wallet, notional, fills, first_ts, last_ts in rows:
+        out.append({"anonWallet": _anon(wallet), "notional": fmt_usdc(int(notional)),
+                    "fills": int(fills), "firstSeenMs": int(first_ts), "lastSeenMs": int(last_ts),
+                    # share of the tape's notional, in basis points, integer maths all the way
+                    "shareBp": int(int(notional) * 10_000 // int(total[0])) if total and total[0] else 0,
+                    "labels": [labels[wallet]] if wallet in labels else []})
+    return _stamped({"cacheKey": f"holders:{market_id}:{limit}", "market": market_id, "holders": out,
+                     "provenance": "tape", "holderCount": len(out)},
+                    ttl_ms=flags().cache_ttl_market_ms, stale_ms=flags().stale_ms_metadata)
 
 
 # --------------------------------------------------------------------------- #
