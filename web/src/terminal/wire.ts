@@ -347,10 +347,39 @@ export type RadarRow = {
   rank: number;
   reason: string;
 };
+
+/** A wallet the prof ranking EXCLUDED for being under the sample gate, with the reason. Never hidden. */
+export type RadarUnranked = {
+  anonWallet: string;
+  fills: number;
+  markets: string[];
+  realisedMicro: number;
+  winRateBps: number | null;
+  insufficientSample: boolean;
+  reason: string;
+};
+
+export type RadarQuota = {
+  plan?: string;
+  usedToday: number;
+  perDay: number;
+  cached: boolean;
+  jobId: string | null;
+  pollMs?: number;
+  note: string;
+};
+
 export type RadarResult = {
+  /** The selected ranking's rows, for the tab the caller asked for. */
+  items?: RadarRow[];
+  ranking?: string;
   markets: string[];
   rankings: Record<string, RadarRow[]>;
   rankingsMeta: RadarRanking[];
-  quota: { usedToday: number; perDay: number; cached: boolean; jobId: string | null; note: string };
+  /** Below the gate: returned rather than dropped, because a gate that hides its exclusions is a filter. */
+  unranked?: RadarUnranked[];
+  scanned?: number;
+  sampleGate?: number;
+  quota: RadarQuota;
   costNote: string;
 };
