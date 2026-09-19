@@ -197,6 +197,26 @@ def parse_ledger(web: Path) -> dict:
     return out
 
 
+def parse_notes(web: Path) -> dict:
+    """`src/api/route-notes.ts` -> {key: note}. The prose half of the ledger, kept out of the client module.
+
+    `src/api/routes.ts` is imported by `src/api/client.ts`, so everything in it is fetched by every signed-in
+    document. The notes explain capabilities that do not exist yet and nothing renders them, so they cost a
+    phone 2.9 KB to read nothing and they live in their own module, imported by this gate and by a test. This
+    function is what makes "in their own module" checkable, and `ledger_findings` uses it to keep the notes
+    attached to routes that still exist.
+    """
+    path = web / "src/api/route-notes.ts"
+    if not path.exists():
+        return {}
+    text = read(path)
+    m = re.search(r"export const ROUTE_NOTES[^=]*=\s*\{", text)
+    if not m:
+        raise ValueError("no `export const ROUTE_NOTES` in src/api/route-notes.ts")
+    body = text[m.end(): brace_at(text, m.end() - 1) - 1]
+    return {k: v for k, v in re.findall(r"^\s+(\w+):\s*\"([^\"]*)\"", body, re.M)}
+
+
 def parse_contract(path: Path = CONTRACT) -> set:
     """Every operation the API contract actually serves, as {(METHOD, path)} — parsed with a loader that
     refuses duplicate keys, because YAML's default behaviour is to keep the last one and call it valid."""
@@ -249,7 +269,9 @@ def doc_markers(doc_text: str) -> list:
 
 
 # ---------------------------------------------------------------------------------------- c1  the ledger
-def ledger_findings(routes: dict, ops: set, items: dict) -> list:
+def ledger_findings(routes: dict, ops: set, items: dict, notes: dict | None = None) -> list:
+    """`notes` is optional so the canary can exercise the ledger rules without a fixture notes file; when it is
+    passed, an unbuilt route must carry one and a note must not outlive its route."""
     f = []
     for key, d in routes.items():
         op = (d["method"].upper(), d["path"])
@@ -266,6 +288,13 @@ def ledger_findings(routes: dict, ops: set, items: dict) -> list:
             elif key not in items[int(m.group(1))]:
                 f.append("launch item %s never mentions route `%s`, so the checklist cannot be used to close it"
                          % (m.group(1), key))
+    if notes is not None:
+        # Coverage is the launch list's job (§4 explains every unbuilt route, and the check above makes sure each
+        # one is named there). What this file must not do is drift: a note whose route has been renamed or
+        # deleted is prose about a capability nobody has any more, and it is the first thing to rot in a ledger.
+        for key in notes:
+            if key not in routes:
+                f.append("`src/api/route-notes.ts` explains `%s`, which is not a route in the ledger" % key)
     return f
 
 
@@ -274,7 +303,7 @@ def c1_the_route_ledger_and_the_contract_and_the_launch_list_agree(ctx) -> tuple
     contract serves may still be marked unbuilt, and every unbuilt route is owned by a numbered launch item
     that names it."""
     routes, ops = ctx["routes"], ctx["ops"]
-    findings = ledger_findings(routes, ops, ctx["items"])
+    findings = ledger_findings(routes, ops, ctx["items"], ctx.get("notes"))
     dangling = []
     for rel, text in tree_files(WEB):
         for m in re.finditer(r"P08-L(\d+)", text):
@@ -1275,6 +1304,16 @@ def self_test() -> int:
         return all(w in got for w in want), got[:200]
 
     @canary
+    def c1_notes(name=TMP / "p08-self-c1-notes"):
+        routes = {"madeUp": {"method": "GET", "path": "/v1/made-up", "built": True, "whileMissing": "refuses", "owner": "P07"},
+                  "signup": {"method": "POST", "path": "/v1/auth/signup", "built": False, "whileMissing": "refuses", "owner": "P08-L1"},
+                  "ghost": {"method": "POST", "path": "/v1/ghost", "built": False, "whileMissing": "refuses", "owner": "P08-L1"}}
+        got = " | ".join(ledger_findings(routes, {}, {1: "`signup` — serve it."}, {"signup": "not built yet",
+                                                                                   "retired": "a route that left"}))
+        want = ("`retired`", "not a route in the ledger")
+        return all(w in got for w in want) and "not built yet" not in got, got[:220]
+
+    @canary
     def c9_chrome_copy(name=TMP / "p08-self-c9"):
         shutil.rmtree(name, ignore_errors=True)
         fixture(name, "src/ui/Planted.tsx",
@@ -1387,7 +1426,7 @@ CHECKS = [c1_the_route_ledger_and_the_contract_and_the_launch_list_agree,
 
 def context() -> dict:
     return {"doc": read(DOC), "items": launch_items(read(DOC)), "routes": parse_ledger(WEB),
-            "ops": parse_contract()}
+            "ops": parse_contract(), "notes": parse_notes(WEB)}
 
 
 def main() -> int:

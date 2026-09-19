@@ -338,6 +338,12 @@ export function TraderDossierView({ anon, initial }: { anon: string; initial?: D
       </section>
 
       {err ? <RefusalNotice route="trader" extra={err} /> : null}
+      {/* D3's integration: the dossier is where somebody lands from a leaderboard row, and the way back to the
+          board is a link rather than a browser back button. It points at the panel with this wallet focused, so
+          the standing opens on the trader the user was already reading about. */}
+      <p className="pgm-dossier__board-link">
+        <a href={`/leaderboard?anon=${encodeURIComponent(anon)}`}>{t("terminal.dossier.boardLink")}</a>
+      </p>
     </section>
   );
 }

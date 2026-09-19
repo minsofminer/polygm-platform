@@ -42,7 +42,6 @@ export const ROUTES = {
     built: true,
     whileMissing: "refuses",
     owner: "P07",
-    note: "server-side HMAC check only; the browser never parses initData.hash",
   },
   totpEnroll: { method: "POST", path: "/v1/auth/totp/enroll", built: true, whileMissing: "refuses", owner: "P07" },
   totpVerify: { method: "POST", path: "/v1/auth/totp/verify", built: true, whileMissing: "refuses", owner: "P07" },
@@ -60,7 +59,6 @@ export const ROUTES = {
     built: true,
     whileMissing: "refuses",
     owner: "P09",
-    note: "candles from our fills; 6h/1d are derived on the client from the 1h series",
   },
   holders: {
     method: "GET",
@@ -68,7 +66,6 @@ export const ROUTES = {
     built: true,
     whileMissing: "refuses",
     owner: "P09",
-    note: "tape-derived and pseudonymised; provenance is returned so the rail can say which list it is",
   },
   // ---- P10's terminal surfaces. Each is `built: true` because the gate's c1 asserts a built route is in
   // contracts/openapi.yaml, and each is named here rather than called by path so a screen cannot reach a route
@@ -80,7 +77,6 @@ export const ROUTES = {
     built: true,
     whileMissing: "refuses",
     owner: "P10",
-    note: "the durable fill log: filtered before the limit, and each row carries its own whale threshold",
   },
   tapeFacets: {
     method: "GET",
@@ -88,7 +84,6 @@ export const ROUTES = {
     built: true,
     whileMissing: "refuses",
     owner: "P10",
-    note: "the window's distribution, every filter's counts, and the rule the whale threshold came from",
   },
   whales: {
     method: "GET",
@@ -96,7 +91,6 @@ export const ROUTES = {
     built: true,
     whileMissing: "refuses",
     owner: "P10",
-    note: "fills at or above their own market's threshold; the thresholds travel with the feed",
   },
   trader: {
     method: "GET",
@@ -104,7 +98,6 @@ export const ROUTES = {
     built: true,
     whileMissing: "refuses",
     owner: "P10",
-    note: "four windows of one metric set, the curve with its drawdown, and the methodology",
   },
   copyConfigs: {
     method: "GET",
@@ -112,7 +105,6 @@ export const ROUTES = {
     built: true,
     whileMissing: "refuses",
     owner: "P10",
-    note: "each config with the pre-confirm slippage warning and the source's own losing windows",
   },
   createCopyConfig: {
     method: "POST",
@@ -120,7 +112,6 @@ export const ROUTES = {
     built: true,
     whileMissing: "refuses",
     owner: "P10",
-    note: "always a dry run: the schema has no field that turns copying live",
   },
   copyGuards: {
     method: "POST",
@@ -128,7 +119,25 @@ export const ROUTES = {
     built: true,
     whileMissing: "refuses",
     owner: "P10",
-    note: "going live needs BOTH an acknowledged slippage warning and dry-run history (409 REFUSED otherwise)",
+  },
+  // ---- P11 D3: the rating surfaces. `built: true` because the gate's c1 asserts a built route is in
+  // contracts/openapi.yaml, and the contract has all four (checked by `tools/p11-gate-check.py` c1). Notes are
+  // deliberately one line each: this ledger is loaded by EVERY route, so its copy is on every route's budget.
+  leaderboardRank: { method: "GET", path: "/v1/leaderboard/rank", built: true, whileMissing: "refuses", owner: "P11" },
+  leaderboardCompare: { method: "GET", path: "/v1/leaderboard/compare", built: true, whileMissing: "refuses", owner: "P11" },
+  leaderboardFollows: {
+    method: "GET",
+    path: "/v1/leaderboard/follows",
+    built: true,
+    whileMissing: "refuses",
+    owner: "P11",
+  },
+  leaderboardFollow: {
+    method: "POST",
+    path: "/v1/leaderboard/follows",
+    built: true,
+    whileMissing: "refuses",
+    owner: "P11",
   },
   copySources: {
     method: "GET",
@@ -136,7 +145,6 @@ export const ROUTES = {
     built: true,
     whileMissing: "refuses",
     owner: "P10",
-    note: "D7's discovery list, ranked risk-adjusted by default; each row carries its drawdown and its gate",
   },
   copyMonitor: {
     method: "GET",
@@ -144,7 +152,6 @@ export const ROUTES = {
     built: true,
     whileMissing: "refuses",
     owner: "P10",
-    note: "simulations and fills are separate lists, and every skip carries its reason",
   },
   portfolio: {
     method: "GET",
@@ -152,7 +159,6 @@ export const ROUTES = {
     built: true,
     whileMissing: "refuses",
     owner: "P10",
-    note: "positions with their share of the book, negRisk groups, and the orders we could not resolve",
   },
   whaleViews: {
     method: "GET",
@@ -160,7 +166,6 @@ export const ROUTES = {
     built: true,
     whileMissing: "refuses",
     owner: "P10",
-    note: "saved views, each with the rule it is bound to and that rule's fire budget",
   },
   createWhaleView: {
     method: "POST",
@@ -168,7 +173,6 @@ export const ROUTES = {
     built: true,
     whileMissing: "refuses",
     owner: "P10",
-    note: "a channel makes the view notify, which needs a market target (409 REFUSED without one)",
   },
   walletRadar: {
     method: "POST",
@@ -176,7 +180,6 @@ export const ROUTES = {
     built: true,
     whileMissing: "refuses",
     owner: "P10",
-    note: "up to ten markets, four rankings, cached and quota-limited - the cache is why a repeat is free",
   },
   walletRadarJob: {
     method: "GET",
@@ -184,7 +187,6 @@ export const ROUTES = {
     built: true,
     whileMissing: "refuses",
     owner: "P10",
-    note: "the async half: poll the job instead of re-running a scan the user already paid for",
   },
   // ---- P10 D8/D9: the automation and alert surfaces. Both are `built: true` because the API serves them as
   // of the D8/D9 work, and both are declared here rather than called by path so the gate's c1 holds the screens
@@ -195,7 +197,6 @@ export const ROUTES = {
     built: true,
     whileMissing: "refuses",
     owner: "P10",
-    note: "rules with their derived status, the halt banner's data, and the builder's own vocabulary",
   },
   createAutomation: {
     method: "POST",
@@ -203,7 +204,6 @@ export const ROUTES = {
     built: true,
     whileMissing: "refuses",
     owner: "P10",
-    note: "always a dry run: the schema has no field that arms a rule, and there is no expression syntax",
   },
   automationPreview: {
     method: "POST",
@@ -211,7 +211,6 @@ export const ROUTES = {
     built: true,
     whileMissing: "refuses",
     owner: "P10",
-    note: "the dry run: with a ruleId it is recorded and completes the dry run, without one it is not saved",
   },
   automationGuards: {
     method: "POST",
@@ -219,7 +218,6 @@ export const ROUTES = {
     built: true,
     whileMissing: "refuses",
     owner: "P10",
-    note: "arm/pause; arming refuses without a completed dry run (DRY_RUN_REQUIRED) or under a loss halt",
   },
   automationRuns: {
     method: "GET",
@@ -227,7 +225,6 @@ export const ROUTES = {
     built: true,
     whileMissing: "refuses",
     owner: "P10",
-    note: "every evaluation with its reason and the trigger's leaf values: the answer to why it did that",
   },
   automationTemplates: {
     method: "GET",
@@ -235,7 +232,6 @@ export const ROUTES = {
     built: true,
     whileMissing: "refuses",
     owner: "P10",
-    note: "the 5-minute crypto entry is shown WITH its fee arithmetic when the maths withholds it",
   },
   alerts: {
     method: "GET",
@@ -243,7 +239,6 @@ export const ROUTES = {
     built: true,
     whileMissing: "refuses",
     owner: "P10",
-    note: "each rule with its cooldown stated as a rule and what quiet hours/digest would do to it right now",
   },
   createAlert: {
     method: "POST",
@@ -251,7 +246,6 @@ export const ROUTES = {
     built: true,
     whileMissing: "refuses",
     owner: "P10",
-    note: "create or edit inline; the channel's plan is checked at save time, not at fire time",
   },
   alertTest: {
     method: "POST",
@@ -259,7 +253,6 @@ export const ROUTES = {
     built: true,
     whileMissing: "refuses",
     owner: "P10",
-    note: "a test fire that does not spend the rule's own window, recorded under a test rule id",
   },
   alertDeliveries: {
     method: "GET",
@@ -267,7 +260,6 @@ export const ROUTES = {
     built: true,
     whileMissing: "refuses",
     owner: "P10",
-    note: "per-channel status and reason; held (digest_scheduled) is not the same fact as refused",
   },
   alertSettings: {
     method: "POST",
@@ -275,7 +267,6 @@ export const ROUTES = {
     built: true,
     whileMissing: "refuses",
     owner: "P10",
-    note: "quiet hours, digest mode and the default channel; an absent field means leave it",
   },
   event: {
     method: "GET",
@@ -283,7 +274,6 @@ export const ROUTES = {
     built: true,
     whileMissing: "refuses",
     owner: "P09",
-    note: "the 128-row table plus the negRisk sum/deviation/tolerance",
   },
   createOrder: { method: "POST", path: "/v1/orders", built: true, whileMissing: "refuses", owner: "P06" },
   intent: { method: "GET", path: "/v1/orders/intents/{intent_id}", built: true, whileMissing: "refuses", owner: "P06" },
@@ -293,7 +283,6 @@ export const ROUTES = {
     built: true,
     whileMissing: "refuses",
     owner: "P07",
-    note: "the list carries no full address by design; the add response is the only reveal",
   },
   addressAdd: { method: "POST", path: "/v1/wallet/withdrawal-addresses/add", built: true, whileMissing: "refuses", owner: "P07" },
   addressRemove: {
@@ -302,7 +291,6 @@ export const ROUTES = {
     built: true,
     whileMissing: "refuses",
     owner: "P07",
-    note: "factor-protected: a missing code is a 403 TOTP_REQUIRED, so the screen asks before it sends",
   },
 
   // ---- designed in P08, not yet served --------------------------------------------------------------
@@ -391,7 +379,6 @@ export const ROUTES = {
     built: false,
     whileMissing: "refuses",
     owner: "P08-L16",
-    note: "needs the signature challenge; P07 refused to consume a proof without one, this is where it is made",
   },
   globalSearch: { method: "GET", path: "/v1/search", built: false, whileMissing: "hides", owner: "P08-L17" },
 } satisfies Record<string, RouteDecl>;

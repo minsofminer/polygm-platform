@@ -116,6 +116,7 @@
     "telegram_nonces",
     "tokens",
     "totp_enrollments",
+    "trader_follows",
     "trader_metric_series",
     "trader_metric_snapshots",
     "trader_metrics",
@@ -281,6 +282,10 @@
       ]
     },
     "0013_leaderboard.sql": {
+      "dropped": [],
+      "check_clauses_reordered": []
+    },
+    "0014_follows.sql": {
       "dropped": [],
       "check_clauses_reordered": []
     }

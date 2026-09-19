@@ -63,6 +63,12 @@ TABLE_FOR_PATH = {
     "/v1/leaderboard/why": "LEADERBOARD_WHY_RESPONSES",
     "/v1/leaderboard/snapshots": "LEADERBOARD_SNAPSHOT_RESPONSES",
     "/v1/leaderboard/runs": "LEADERBOARD_RUN_RESPONSES",
+    # D3: three reads and one write, all four on the leaderboard tag. `("GET", …)`/`("POST", …)` rows because
+    # `/follows` serves both a read and a write, and the two have different status sets.
+    "/v1/leaderboard/rank": "LEADERBOARD_RANK_RESPONSES",
+    "/v1/leaderboard/compare": "LEADERBOARD_COMPARE_RESPONSES",
+    ("GET", "/v1/leaderboard/follows"): "LEADERBOARD_FOLLOWS_RESPONSES",
+    ("POST", "/v1/leaderboard/follows"): "LEADERBOARD_FOLLOW_RESPONSES",
     "/v1/radar/runs": "RADAR_RESPONSES",
     "/v1/radar/runs/{job_id}": "RADAR_JOB_RESPONSES",
     "/healthz": "HEALTH_RESPONSES",                    # empty on purpose; the comment in app.py says why

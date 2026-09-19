@@ -46,11 +46,15 @@ PY = sys.executable
 #: The paths this phase serves. c1 requires each of them in the contract AND in `tools/check-openapi.py`'s table,
 #: because a path missing from that table is a path whose status sets are never compared.
 P11_PATHS = ("/v1/leaderboard", "/v1/leaderboard/boards", "/v1/leaderboard/methodology", "/v1/leaderboard/why",
-             "/v1/leaderboard/snapshots", "/v1/leaderboard/runs", "/v1/leaderboard/recompute")
+             "/v1/leaderboard/snapshots", "/v1/leaderboard/runs", "/v1/leaderboard/recompute",
+             # D3. The standing and the comparison are public reads; the follow list is the account's own and the
+             # follow itself is the one write a user makes about other people.
+             "/v1/leaderboard/rank", "/v1/leaderboard/compare", "/v1/leaderboard/follows")
 #: The whole point of a leaderboard is that a stranger can read it, so six of the seven are public — and the
 #: seventh is a user mutation, which the gate also walks (a cadence nobody can exercise is untested).
-PUBLIC_OPS = tuple("GET %s" % p for p in P11_PATHS if p != "/v1/leaderboard/recompute")
-USER_OPS = ("POST /v1/leaderboard/recompute",)
+PUBLIC_OPS = tuple("GET %s" % p for p in P11_PATHS
+                   if p not in ("/v1/leaderboard/recompute", "/v1/leaderboard/follows"))
+USER_OPS = ("POST /v1/leaderboard/recompute", "GET /v1/leaderboard/follows", "POST /v1/leaderboard/follows")
 
 BOARDS = ("risk_adjusted", "win_rate", "volume", "rising", "category", "copied")
 ACTIVITY_WINDOWS = ("24h", "7d", "30d")
@@ -127,6 +131,19 @@ class Probe:
         hdrs = {"X-User-Id": "u-demo", "Idempotency-Key": key or "g11-%s-%04d" % (url.strip("/").replace("/", "-"), n)}
         hdrs.update(headers or {})
         r = self.client().post(url, json=body, headers=hdrs)
+        try:
+            return r.status_code, r.json()
+        except ValueError:
+            return r.status_code, {}
+
+    def post_key(self, url: str, body: dict) -> tuple[int, dict]:
+        """A write with a well-formed key: every mutating route here requires one, and a 422 about the key would
+        be a check measuring the key's shape instead of the thing it is about."""
+        key = "g11-%s-%04d" % (url.strip("/").replace("/", "-"), getattr(self, "_post_n", 0) + 1)
+        return self.post(url, body, key=key)
+
+    def get_user(self, url: str, **params) -> tuple[int, dict]:
+        r = self.client().get(url, params=params, headers={"X-User-Id": "u-demo"})
         try:
             return r.status_code, r.json()
         except ValueError:
@@ -303,6 +320,79 @@ def cadence_findings(freshness: dict, cadence_ms: int) -> list[str]:
         f.append("stale=%s with ageMs=%s against a cadence of %s" % (stale, age, cadence_ms))
     if freshness.get("source") != "live":
         f.append("the read does not say where the numbers came from: %r" % freshness.get("source"))
+    return f
+
+
+def standing_findings(standing: dict, rows: dict) -> list[str]:
+    """The standing has to be the row it came from, with the gap re-derivable from the two neighbours.
+
+    Four plantings this catches: a badge that disagrees with the rank it labels; a gap computed against a wallet
+    that is not the one directly above; a `toPass` that equals the neighbour's value (a tie does not pass — the
+    board's tie-breaks decide); and a percentile that is not `rank / board` rounded up, which is the difference
+    between "the top 74%" and "the bottom 26%" for the same row.
+    """
+    f = []
+    anon = standing.get("anon")
+    if standing.get("state") == "unranked":
+        if standing.get("rank") is not None or standing.get("rankBadge") is not None:
+            f.append("%s is unranked but carries a placing" % anon)
+        if not standing.get("reasons"):
+            f.append("%s is unranked with no reason" % anon)
+        return f
+    rank = standing.get("rank")
+    total = standing.get("rankedTotal") or 0
+    if (standing.get("rankBadge") or {}).get("rank") != rank or (standing.get("rankBadge") or {}).get("text") != "#%d" % rank:
+        f.append("%s's badge disagrees with rank %s" % (anon, rank))
+    if (standing.get("rankBadge") or {}).get("rankedTotal") != total:
+        f.append("%s's badge states a board size of %s, the board is %s"
+                 % (anon, (standing.get("rankBadge") or {}).get("rankedTotal"), total))
+    if rank and rank > 1:
+        above = rows.get(rank - 1)
+        if above is None:
+            f.append("rank %s has no neighbour above it in the board's own rows" % rank)
+        elif (standing.get("above") or {}).get("anon") != above["anon"]:
+            f.append("%s's `above` is not the wallet ranked %s" % (anon, rank - 1))
+        else:
+            gap = standing.get("gap") or {}
+            field = gap.get("field")
+            if field != standing.get("orderField"):
+                f.append("the gap is measured in %s while the board orders by %s"
+                         % (field, standing.get("orderField")))
+            elif gap.get("value") != rows[rank][field] or gap.get("valueAbove") != above[field]:
+                f.append("the gap's two values are not the two rows' %s" % field)
+            elif gap.get("delta") != above[field] - rows[rank][field]:
+                f.append("the gap's delta is not above - mine")
+            elif gap.get("toPass") != above[field] + 1:
+                f.append("toPass is %s: a tie does not pass, so it has to be %s"
+                         % (gap.get("toPass"), above[field] + 1))
+        if (standing.get("below") or {}).get("anon") != (rows.get(rank + 1) or {}).get("anon"):
+            f.append("%s's `below` is not the wallet ranked %s" % (anon, rank + 1))
+    elif (standing.get("gap") is not None or standing.get("above") is not None):
+        f.append("the top of the board has something above it")
+    if total and standing.get("percentileBps") != (rank * 10_000 + total - 1) // total:
+        f.append("%s's percentile %s is not ceil(rank/board) for %s of %s"
+                 % (anon, standing.get("percentileBps"), rank, total))
+    return f
+
+
+def follow_findings(follow: dict, listing: dict, anon: str) -> list[str]:
+    """A follow is a watch: it says so, it is keyed by a pseudonym, and it never claims to trade."""
+    f = []
+    if follow.get("state") not in ("followed", "unfollowed"):
+        f.append("the follow answered state=%r" % follow.get("state"))
+    if follow.get("anon") != anon:
+        f.append("the follow was acknowledged for %r" % follow.get("anon"))
+    if "not a copy" not in str(follow.get("note") or ""):
+        f.append("the acknowledgement does not say what a follow is not")
+    if "not a copy" not in str(listing.get("note") or ""):
+        f.append("the list does not say what a follow is not")
+    for row in listing.get("rows") or []:
+        if not str(row.get("anon") or "").startswith("w_"):
+            f.append("a followed row is not a pseudonym: %r" % row.get("anon"))
+        if row.get("state") not in ("ranked", "unranked", "absent"):
+            f.append("a followed row is in state %r" % row.get("state"))
+        if row.get("state") == "unranked" and not row.get("reasons"):
+            f.append("a followed wallet left the board with no reason")
     return f
 
 
@@ -725,9 +815,119 @@ def c14_board_orders(p: Probe) -> tuple[str, bool, str]:
                ("; " + "; ".join(findings[:3])) if findings else ""))
 
 
+def c15_wallet_standing(p: Probe) -> tuple[str, bool, str]:
+    """A wallet's standing is the board's own row, with a gap that can be re-derived from its neighbours.
+
+    D3's profile integration and D4's pinned self-rank both render this, so the two things it must get right are
+    the things a reader can check: the badge is the rank, the neighbours are the neighbours, and the number to
+    the place above is stated in the field the board is ordered by.
+    """
+    board = p.board(board="risk_adjusted")
+    rows = {r["rank"]: r for r in (board.get("rows") or [])}
+    findings, checked = [], 0
+    for rank in (1, 12, 47):
+        row = rows.get(rank)
+        if row is None:
+            continue
+        code, standing = p.get("/v1/leaderboard/rank", anon=row["anon"], days=30)
+        checked += 1
+        if code != 200:
+            findings.append("rank %d's standing answered %d" % (rank, code))
+            continue
+        findings += ["rank %d: %s" % (rank, f) for f in standing_findings(standing, rows)]
+        if rank == 47 and standing.get("gap"):
+            gap = standing["gap"]
+            if not (gap["toPass"] > gap["valueAbove"] > gap["value"] - 1):
+                findings.append("rank 47's gap is not a gap: %s" % gap)
+    # An unranked wallet is the other half of the same surface: no placing, and the refusal with its number.
+    unranked = board.get("unranked") or []
+    if unranked:
+        code, standing = p.get("/v1/leaderboard/rank", anon=unranked[0]["anon"])
+        checked += 1
+        if code != 200:
+            findings.append("an unranked wallet's standing answered %d" % code)
+        else:
+            findings += standing_findings(standing, rows)
+    if p.get("/v1/leaderboard/rank", anon="w_0000000000")[0] != 404:
+        findings.append("an unknown pseudonym did not 404")
+    ok = not findings
+    detail = "%d stand%s checked" % (checked, "ing" if checked == 1 else "ings")
+    if checked and rows.get(47):
+        g47 = p.get("/v1/leaderboard/rank", anon=rows[47]["anon"])[1].get("gap") or {}
+        detail += "; rank 47's gap is %s %s of %s, toPass %s" % (g47.get("delta"), g47.get("units"),
+                                                                 g47.get("field"), g47.get("toPass"))
+    return ("a wallet's standing is the board's own row, with a re-derivable gap to the place above", ok,
+            detail + ("; %d findings%s" % (len(findings), "; " + "; ".join(findings[:3])) if findings else ""))
+
+
+def c16_comparison_and_follows(p: Probe) -> tuple[str, bool, str]:
+    """Compare up to three, follow without copying, and neither one ever carries an address."""
+    p10 = _p10_module()
+    board = p.board(board="risk_adjusted")
+    rows = board.get("rows") or []
+    findings, notes = [], []
+    if len(rows) < 3:
+        return ("compare and follow behave as a watch and a table", False, "not enough rows to compare")
+    a, b, c = rows[46]["anon"], rows[11]["anon"], rows[0]["anon"]
+    code, cmp_ = p.get("/v1/leaderboard/compare", anons="%s,%s,%s" % (a, b, c))
+    if code != 200:
+        findings.append("compare answered %d" % code)
+    else:
+        asked = [a, b, c]
+        if [r["anon"] for r in cmp_.get("rows") or []] != asked:
+            findings.append("compare did not return the wallets in the order asked")
+        if len(cmp_.get("order") or []) != 3:
+            findings.append("three wallets is three pairwise sentences, got %d" % len(cmp_.get("order") or []))
+        for pair in cmp_.get("order") or []:
+            if "the sample size did not decide this" not in (pair.get("why") or ""):
+                findings.append("a pairwise sentence does not name the sample")
+                break
+        if len(cmp_.get("order") or []) == 3:
+            notes.append("3 pairwise sentences, all naming the sample")
+    for bad, why in ((a, "one wallet"), ("%s,%s" % (a, a), "the same wallet twice"),
+                     ("%s,%s,%s,%s" % (a, b, c, rows[1]["anon"]), "four wallets")):
+        if p.get("/v1/leaderboard/compare", anons=bad)[0] != 422:
+            findings.append("%s was accepted by compare" % why)
+    # Follow, then read the list back with the standing attached, then unfollow.
+    before = p.get_user("/v1/leaderboard/follows")[1].get("total")
+    code, follow = p.post_key("/v1/leaderboard/follows", {"anon": b, "label": "gate"})
+    if code != 200:
+        findings.append("following answered %d" % code)
+    else:
+        listing = p.get_user("/v1/leaderboard/follows")[1]
+        findings += follow_findings(follow, listing, b)
+        followed = [r for r in listing.get("rows") or [] if r["anon"] == b]
+        if not followed:
+            findings.append("the follow is not in the list")
+        else:
+            row = followed[0]
+            if row.get("rank") != 12 and row.get("state") == "ranked":
+                findings.append("the followed wallet's standing says rank %s, the board says 12" % row.get("rank"))
+            if not row.get("drawdown"):
+                findings.append("the followed row carries a PnL without its drawdown")
+            notes.append("followed %s (%s, rank %s)" % (b, row.get("state"), row.get("rank")))
+        findings += ["follow payload %s" % f for f in p10.address_findings(listing, "follows")]
+        code2, back = p.post_key("/v1/leaderboard/follows", {"anon": b, "state": "unfollow"})
+        if code2 != 200 or back.get("state") != "unfollowed":
+            findings.append("unfollowing answered %d %s" % (code2, json.dumps(back)[:60]))
+        after = p.get_user("/v1/leaderboard/follows")[1].get("total")
+        if after != before:
+            findings.append("the follow list went %s -> %s across follow+unfollow" % (before, after))
+    # An address is not a pseudonym anywhere on this surface.
+    for where, got in (("a follow", p.post_key("/v1/leaderboard/follows", {"anon": "0x" + "ab" * 20})),
+                       ("a comparison", p.get("/v1/leaderboard/compare", anons="0x%s,0x%s" % ("ab" * 20, "cd" * 20)))):
+        text = json.dumps(got[1])
+        if p10.ADDRESS_RX.search(text):
+            findings.append("%s echoed an address" % where)
+    ok = not findings
+    return ("a comparison is one read of one board, and a follow is a watch that never trades", ok,
+            "%s%s" % ("; ".join(notes) if notes else "no notes",
+                      "; %d findings%s" % (len(findings), "; " + "; ".join(findings[:3])) if findings else ""))
+
+
 CHECKS = (c1_contract, c2_no_addresses, c3_gate_pair, c4_win_rate_gate, c5_refusals, c6_no_hidden_losses,
           c7_integers_only, c8_freshness, c9_read_plans, c10_history, c11_exclusions, c12_population,
-          c13_published, c14_board_orders)
+          c13_published, c14_board_orders, c15_wallet_standing, c16_comparison_and_follows)
 
 
 # --------------------------------------------------------------------------------------------------- self-test
@@ -821,6 +1021,43 @@ def self_test() -> int:
                  "defaultBoard": "volume"}
         return (not publish_findings(good) and len(publish_findings(thin)) >= 2
                 and len(publish_findings(vague)) >= 2), publish_findings(vague)
+
+    @canary
+    def standing():
+        rows = {1: {"anon": "w_best", "scoreBps": 900},
+                2: {"anon": "w_second", "scoreBps": 800},
+                3: {"anon": "w_third", "scoreBps": 700}}
+        good = {"anon": "w_second", "state": "ranked", "rank": 2, "rankedTotal": 3, "orderField": "scoreBps",
+                "rankBadge": {"rank": 2, "rankedTotal": 3, "text": "#2"}, "percentileBps": 6667,
+                "above": {"anon": "w_best"}, "below": {"anon": "w_third"},
+                "gap": {"rankAbove": 1, "anonAbove": "w_best", "field": "scoreBps", "units": "bps",
+                        "value": 800, "valueAbove": 900, "delta": 100, "toPass": 901}}
+        counting_order = dict(good, rankedTotal=2, rankBadge={"rank": 2, "rankedTotal": 2, "text": "#2"},
+                              percentileBps=10_000)
+        tie = dict(good, gap=dict(good["gap"], toPass=900))                    # a tie would not pass
+        wrong_neighbour = dict(good, above={"anon": "w_third"})
+        no_placing = {"anon": "w_thin", "state": "unranked", "rank": 47, "rankBadge": {"rank": 47},
+                      "reasons": ["9 settled markets; this board needs 20"], "rankedTotal": 3}
+        good_unranked = {"anon": "w_thin", "state": "unranked", "rank": None, "rankBadge": None,
+                         "reasons": ["9 settled markets; this board needs 20"], "rankedTotal": 3}
+        for case in (good, counting_order, good_unranked):
+            assert not standing_findings(case, rows), case
+        got = [len(standing_findings(x, rows)) for x in (tie, wrong_neighbour, no_placing)]
+        return got == [1, 1, 1], got
+
+    @canary
+    def follows():
+        good = {"anon": "w_2", "state": "followed", "followed": True, "existed": False, "note": "a watch, not a copy"}
+        listing = {"note": "a follow is a watch, not a copy",
+                   "rows": [{"anon": "w_2", "state": "ranked"}, {"anon": "w_3", "state": "unranked",
+                                                                "reasons": ["9 settled markets"]}]}
+        silent = dict(good, note="saved")
+        address = {"note": "a watch, not a copy",
+                   "rows": [{"anon": "0x" + "ab" * 20, "state": "ranked"}]}
+        reasonless = {"note": "a watch, not a copy", "rows": [{"anon": "w_3", "state": "unranked", "reasons": []}]}
+        return (not follow_findings(good, listing, "w_2") and len(follow_findings(silent, listing, "w_2")) == 1
+                and len(follow_findings(good, address, "w_2")) == 1
+                and len(follow_findings(good, reasonless, "w_2")) == 1), follow_findings(silent, listing, "w_2")
 
     @canary
     def p10_scanners_still_work():

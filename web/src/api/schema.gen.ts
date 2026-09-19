@@ -1256,6 +1256,66 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/leaderboard/rank": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One wallet's standing on one board
+         * @description The badge, both neighbours, the gap to the place above (in the board's own ordering field), and the
+         *     wallet's rank history for this board. An unknown pseudonym is a 404 rather than an empty standing.
+         */
+        get: operations["getLeaderboardRank"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/leaderboard/compare": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Up to three wallets, side by side
+         * @description Two to three pseudonyms, each with its own board rank, plus the engine's pairwise sentences and an explicit
+         *     `unknown` list — one bad name must not hide the two good ones.
+         */
+        get: operations["getLeaderboardCompare"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/leaderboard/follows": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The wallets you follow, with their current standing */
+        get: operations["getLeaderboardFollows"];
+        put?: never;
+        /** Follow or unfollow a trader (idempotent per key) */
+        post: operations["postLeaderboardFollow"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/leaderboard/recompute": {
         parameters: {
             query?: never;
@@ -2353,6 +2413,8 @@ export interface components {
             improvementMicro?: number;
             weekMicro?: number;
             priorWeekMicro?: number;
+            /** @description the rising board's 7-day half: how many of `settledMarkets` fell inside the window being measured */
+            windowSettledMarkets?: number;
             category?: string | null;
             categoryShareBps?: number;
             categorySettled?: number;
@@ -2414,10 +2476,12 @@ export interface components {
             hasMore: boolean;
             filtered: boolean;
         };
-        /** @description which rows this board was ranked from — the first question in any ranking dispute */
+        /** @description which rows this board was ranked from, as of when — the first question in any ranking dispute */
         LeaderboardReadPlan: {
             board: string;
             window: string;
+            /** @description the instant the window starts were derived from */
+            atMs: number;
             windowMs: number;
             settledFromMs: number;
             fillsFromMs: number;
@@ -2528,6 +2592,11 @@ export interface components {
             snapshots: number;
             note: string;
         };
+        /**
+         * @description One recompute: how many wallets ranked, how many were refused, how long it took. `window` is the board's
+         *     run key, which for the category board is the window plus its category (`30d:Politics`) — the board is
+         *     four boards in one, and a key without the category would collapse four runs into one row.
+         */
         LeaderboardRunRow: {
             board: string;
             label: string;
@@ -2591,6 +2660,155 @@ export interface components {
             /** @description operator-only (admin token); null for a public caller, because a wall of shame is a different product from a leaderboard */
             excluded: Record<string, never>[] | null;
             disclaimer: string;
+        };
+        /**
+         * @description A row's neighbour, or null at the top and bottom of the board. Served as a full row rather than a name:
+         *     the point of showing who is directly above you is that you can read what they did.
+         */
+        LeaderboardNeighbour: {
+            [key: string]: unknown;
+        } | null;
+        /**
+         * @description The distance to the place above, in the board's own ordering field. `toPass` is `valueAbove + 1` because a
+         *     tie does not pass anybody — ties fall through to the board's declared tie-breaks, so equality is not enough.
+         */
+        LeaderboardGap: {
+            rankAbove: number;
+            anonAbove: string;
+            /** @enum {string} */
+            field: "scoreBps" | "winRateBps" | "verifiedVolumeMicro" | "improvementMicro" | "copiers";
+            /** @enum {string} */
+            units: "bps" | "micro" | "count";
+            value: number;
+            valueAbove: number;
+            delta: number;
+            toPass: number;
+            note: string;
+        } | null;
+        LeaderboardStandingHistory: {
+            days: number;
+            points: components["schemas"]["LeaderboardSnapshotPoint"][];
+            snapshots: number;
+            latestRank: number | null;
+            bestRank: number | null;
+            worstRank: number | null;
+            /** @description change in RANK; negative is an improvement */
+            delta: number | null;
+            note: string;
+        };
+        LeaderboardStanding: {
+            board: string;
+            label: string;
+            window: string;
+            category: string | null;
+            formula: string;
+            gate: string;
+            tieBreaks: string;
+            sampleGate: number;
+            /** @enum {string} */
+            orderField: "scoreBps" | "winRateBps" | "verifiedVolumeMicro" | "improvementMicro" | "copiers";
+            /** @enum {string} */
+            orderUnits: "bps" | "micro" | "count";
+            anon: string;
+            rankedTotal: number;
+            /** @enum {string} */
+            state: "ranked" | "provisional" | "blew_up" | "unranked" | "unknown";
+            rank?: number | null;
+            rankBadge?: components["schemas"]["LeaderboardRankBadge"];
+            /** @description rank as a share of the board, rounded UP: 47 of 64 is 7344 bps, "the top 74%" */
+            percentileBps?: number;
+            /** @description the full ranked row (LeaderboardRow) */
+            row?: {
+                [key: string]: unknown;
+            } | null;
+            above?: components["schemas"]["LeaderboardNeighbour"];
+            below?: components["schemas"]["LeaderboardNeighbour"];
+            gap?: components["schemas"]["LeaderboardGap"];
+            unranked?: {
+                [key: string]: unknown;
+            } | null;
+            reasons?: string[];
+            methodologyPath: string;
+            history: components["schemas"]["LeaderboardStandingHistory"];
+            note: string;
+        };
+        /**
+         * @description Two or three wallets. `rows` are in the order the caller asked, `order` carries the engine's pairwise
+         *     sentences, and `unknown` names any pseudonym we have never seen — an explicit list, because silently
+         *     dropping it would make a two-wallet comparison of three wallets look complete.
+         */
+        LeaderboardComparison: {
+            board: string;
+            label: string;
+            window: string;
+            category: string | null;
+            formula: string;
+            gate: string;
+            tieBreaks: string;
+            sampleGate: number;
+            orderField: string;
+            /** @enum {string} */
+            orderUnits: "bps" | "micro" | "count";
+            requested: string[];
+            rows: components["schemas"]["LeaderboardRow"][];
+            unranked: components["schemas"]["LeaderboardUnranked"][];
+            unknown: string[];
+            order: {
+                a: string;
+                b: string;
+                why: string;
+                aAbove: boolean;
+                components?: Record<string, never>;
+            }[];
+            rankedTotal: number;
+            methodologyPath: string;
+            verdict: string;
+            note: string;
+            disclaimer: string;
+        };
+        LeaderboardFollowRow: {
+            anon: string;
+            label: string;
+            followedMs: number;
+            /** @enum {string} */
+            state: "ranked" | "unranked" | "absent";
+            rank: number | null;
+            rankBadge: components["schemas"]["LeaderboardRankBadge"];
+            scoreBps: number | null;
+            realisedMicro: number | null;
+            realised: components["schemas"]["LeaderboardMoney"];
+            maxDrawdownMicro: number | null;
+            drawdown: components["schemas"]["LeaderboardMoney"];
+            winRateBps: number | null;
+            insufficientSample: boolean | null;
+            sampleNote: string;
+            reasons: string[];
+            classifications: Record<string, never>[];
+        };
+        LeaderboardFollows: {
+            board: string;
+            label: string;
+            window: string;
+            rows: components["schemas"]["LeaderboardFollowRow"][];
+            total: number;
+            rankedTotal: number;
+            states: {
+                ranked: number;
+                unranked: number;
+                absent: number;
+            };
+            note: string;
+        };
+        LeaderboardFollow: {
+            anon: string;
+            /** @enum {string} */
+            state: "followed" | "unfollowed";
+            followed: boolean;
+            /** @description the follow already existed (or did not exist, for an unfollow) */
+            existed: boolean;
+            followedMs?: number | null;
+            label?: string;
+            note: string;
         };
     };
     responses: {
@@ -5235,6 +5453,131 @@ export interface operations {
                     "application/json": components["schemas"]["Stamped"] & components["schemas"]["LeaderboardRuns"];
                 };
             };
+            500: components["responses"]["Internal"];
+        };
+    };
+    getLeaderboardRank: {
+        parameters: {
+            query: {
+                anon: string;
+                board?: "risk_adjusted" | "win_rate" | "volume" | "rising" | "category" | "copied";
+                window?: "24h" | "7d" | "30d" | "90d" | "all";
+                category?: string;
+                days?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description the standing, its neighbours and its history */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Stamped"] & components["schemas"]["LeaderboardStanding"];
+                };
+            };
+            404: components["responses"]["NotFound"];
+            422: components["responses"]["Denied"];
+            500: components["responses"]["Internal"];
+        };
+    };
+    getLeaderboardCompare: {
+        parameters: {
+            query: {
+                /** @description comma-separated pseudonyms; two or three distinct wallets */
+                anons: string;
+                board?: "risk_adjusted" | "win_rate" | "volume" | "rising" | "category" | "copied";
+                window?: "24h" | "7d" | "30d" | "90d" | "all";
+                category?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description the comparison */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Stamped"] & components["schemas"]["LeaderboardComparison"];
+                };
+            };
+            422: components["responses"]["Denied"];
+            500: components["responses"]["Internal"];
+        };
+    };
+    getLeaderboardFollows: {
+        parameters: {
+            query?: {
+                board?: "risk_adjusted" | "win_rate" | "volume" | "rising" | "category" | "copied";
+                window?: "24h" | "7d" | "30d" | "90d" | "all";
+                category?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description the follows, resolved against the board as it stands now */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Stamped"] & components["schemas"]["LeaderboardFollows"];
+                };
+            };
+            401: components["responses"]["Denied"];
+            422: components["responses"]["Denied"];
+            500: components["responses"]["Internal"];
+        };
+    };
+    postLeaderboardFollow: {
+        parameters: {
+            query?: never;
+            header?: {
+                /**
+                 * @description 8-128 chars of [A-Za-z0-9_-]. Required on every mutating endpoint; the 400 for its absence is part
+                 *     of the contract so a client cannot "just try without it" once and conclude it is optional.
+                 */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    anon: string;
+                    /** @enum {string} */
+                    state?: "follow" | "unfollow";
+                    label?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description the follow's new state */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LeaderboardFollow"];
+                };
+            };
+            400: components["responses"]["Validation"];
+            401: components["responses"]["Denied"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Denied"];
             500: components["responses"]["Internal"];
         };
     };

@@ -68,6 +68,53 @@ class LeaderboardBase(unittest.TestCase):
         out.append(self.get("/v1/leaderboard/snapshots", anon=anon))
         return out
 
+    def anon_of(self, wallet: str) -> str:
+        import app as app_mod
+        return app_mod._anon(wallet)
+
+    def anon_of_unranked(self, needle: str) -> str:
+        """The first refused wallet whose reasons contain `needle`, as a PSEUDONYM.
+
+        The D3 surfaces take pseudonyms — a comparison names wallets, a follow is keyed by one — so the helper
+        that hands them a name has to hand them the name they accept. The address-returning helper below exists
+        for the places that check what the DATABASE holds.
+        """
+        for u in self.board(limit=200)["unranked"]:
+            if needle in " ".join(u["reasons"]):
+                return u["anon"]
+        raise AssertionError("no unranked wallet mentions %r" % needle)
+
+    def wallet_of_unranked(self, needle: str) -> str:
+        """The first refused wallet whose reasons contain `needle`, as an ADDRESS.
+
+        The three D3 surfaces all have to say something honest about a wallet that is not on the board, and the
+        fixture has one of each kind: too few settled markets, too little turnover, mechanically derived fills.
+        """
+        board = self.board(limit=200)
+        for u in board["unranked"]:
+            if needle in " ".join(u["reasons"]):
+                return self.wallet_of(u["anon"])
+        raise AssertionError("no unranked wallet mentions %r" % needle)
+
+    def post_recompute(self, key: str):
+        r = self.client.post("/v1/leaderboard/recompute", json={},
+                             headers={**USER, "Idempotency-Key": "d3-recompute-" + key})
+        self.assertEqual(r.status_code, 200, r.text[:300])
+        return r.json()
+
+    def get_authed(self, url, **params):
+        r = self.client.get(url, params=params, headers=USER)
+        self.assertEqual(r.status_code, 200, "%s -> %d %s" % (url, r.status_code, r.text[:300]))
+        return r.json()
+
+    def unfollow(self, anon: str, key: str):
+        # Keys are `d3-`-prefixed here because the API's key shape is 8-128 chars of [A-Za-z0-9_-]: a short key is
+        # a 422 about the request, and these tests are about what happens after the request is well formed.
+        r = self.client.post("/v1/leaderboard/follows", json={"anon": anon, "state": "unfollow"},
+                             headers={**USER, "Idempotency-Key": "d3-unfollow-" + key})
+        self.assertEqual(r.status_code, 200, r.text[:300])
+        return r.json()
+
     def wallet_of(self, anon: str) -> str:
         import app as app_mod
         for i in range(60):
@@ -364,6 +411,261 @@ class TestMethodologyAndCounts(LeaderboardBase):
         back = self.board(limit=200)
         self.assertTrue(any(r["anon"] == anon for r in back["rows"]))
         self.assertEqual(back["excludedTotal"], 0)
+
+
+class TestOneWalletsStanding(LeaderboardBase):
+    """`/v1/leaderboard/rank` — the dossier's badge, its neighbours, its gap, and its history.
+
+    This is the endpoint D3's profile integration is built on and D4's pinned self-rank reuses, so what it must
+    never do is return a rank with no context: the neighbours and the gap are served WITH the rank, and a wallet
+    that is not on the board gets the number that refused it rather than a fabricated placing.
+    """
+
+    def test_the_standing_carries_the_badge_both_neighbours_and_the_gap(self):
+        rows = self.rows_by_rank()
+        me = rows[47]
+        got = self.get("/v1/leaderboard/rank", anon=me["anon"])
+        self.assertEqual(got["state"], "ranked")
+        self.assertEqual(got["rank"], 47)
+        self.assertEqual(got["rankBadge"]["text"], "#47")
+        self.assertEqual(got["rankBadge"]["rankedTotal"], got["rankedTotal"])
+        self.assertEqual(got["above"]["anon"], rows[46]["anon"], "the wallet directly above")
+        self.assertEqual(got["below"]["anon"], rows[48]["anon"], "and the one directly below")
+        self.assertEqual(got["row"]["anon"], me["anon"])
+        gap = got["gap"]
+        self.assertEqual(gap["rankAbove"], 46)
+        self.assertEqual(gap["anonAbove"], rows[46]["anon"])
+        self.assertEqual(gap["field"], "scoreBps")
+        self.assertEqual(gap["units"], "bps")
+        self.assertEqual(gap["value"], me["scoreBps"])
+        self.assertEqual(gap["valueAbove"], rows[46]["scoreBps"])
+        self.assertEqual(gap["delta"], rows[46]["scoreBps"] - me["scoreBps"])
+        self.assertEqual(gap["toPass"], rows[46]["scoreBps"] + 1,
+                         "a tie does not pass anybody: the tie-breaks decide, not equality")
+
+    def test_the_wallet_that_leads_has_nobody_above_it(self):
+        top = self.rows_by_rank()[1]
+        got = self.get("/v1/leaderboard/rank", anon=top["anon"])
+        self.assertEqual(got["rank"], 1)
+        self.assertIsNone(got["above"])
+        self.assertIsNone(got["gap"], "there is no gap at the top, and a zero would read as one")
+        self.assertIsNotNone(got["below"])
+
+    def test_the_percentile_is_the_rank_over_the_board_and_rounds_up(self):
+        rows = self.rows_by_rank()
+        me = rows[47]
+        got = self.get("/v1/leaderboard/rank", anon=me["anon"])
+        total = got["rankedTotal"]
+        self.assertEqual(got["percentileBps"], (47 * 10_000 + total - 1) // total)
+        self.assertLessEqual(got["percentileBps"], 10_000)
+
+    def test_an_unranked_wallet_gets_its_numbers_instead_of_a_placing(self):
+        thin = self.get("/v1/leaderboard/rank", anon=self.anon_of(self.wallet_of_unranked("needs 20")))
+        self.assertEqual(thin["state"], "unranked")
+        self.assertIsNone(thin["rank"])
+        self.assertIsNone(thin["rankBadge"])
+        self.assertIsNone(thin["row"])
+        self.assertTrue(thin["reasons"], "a refusal without a reason is a wallet quietly dropped")
+        self.assertTrue(any(ch.isdigit() for ch in " ".join(thin["reasons"])))
+        self.assertIn("settledMarkets", thin["unranked"])
+
+    def test_an_unknown_pseudonym_is_a_404_rather_than_an_invented_rank(self):
+        r = self.client.get("/v1/leaderboard/rank", params={"anon": "w_0000000000"})
+        self.assertEqual(r.status_code, 404)
+        self.assertNotIn("rank", r.text, "a 404 must not carry a zero to render")
+
+    def test_the_history_comes_from_the_recompute_and_says_so_when_there_is_none(self):
+        # The empty case comes from a wallet the recompute will never snapshot: an unranked one. A skipping test
+        # is a test that stops running the day the suite's order changes, so nothing here depends on order.
+        thin = self.anon_of_unranked("needs 20")
+        empty = self.get("/v1/leaderboard/rank", anon=thin, days=30)["history"]
+        self.assertEqual(empty["points"], [])
+        self.assertIsNone(empty["latestRank"])
+        self.assertIn("no history yet", empty["note"],
+                      "an empty sparkline says so rather than drawing a flat line at rank zero")
+        anon = self.rows_by_rank()[12]["anon"]
+        self.post_recompute("stand-1")
+        got = self.get("/v1/leaderboard/rank", anon=anon, days=30)["history"]
+        self.assertGreater(got["snapshots"], 0)
+        self.assertEqual(len(got["points"]), got["snapshots"])
+        self.assertEqual(got["delta"], got["points"][-1]["rank"] - got["points"][0]["rank"],
+                         "delta is a change in RANK, and it is computed from the points it ships")
+        self.assertEqual(got["latestRank"], got["points"][-1]["rank"])
+
+    def test_the_standing_says_which_field_the_board_orders_by(self):
+        got = self.get("/v1/leaderboard/rank", anon=self.rows_by_rank("volume", window="7d")[1]["anon"],
+                       board="volume", window="7d")
+        self.assertEqual(got["orderField"], "verifiedVolumeMicro")
+        self.assertEqual(got["orderUnits"], "micro",
+                         "a gap in the volume board is money, and calling it basis points would be a lie")
+
+    def test_the_standing_is_public_and_never_carries_an_address(self):
+        anon = self.rows_by_rank()[1]["anon"]
+        r = self.client.get("/v1/leaderboard/rank", params={"anon": anon})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(ADDRESS.findall(json.dumps(r.json())), [])
+
+
+class TestCompare(LeaderboardBase):
+    """`/v1/leaderboard/compare` — up to three wallets, each with the board's own verdict on the ordering."""
+
+    def test_three_wallets_come_back_in_the_order_asked_with_every_pair_explained(self):
+        rows = self.rows_by_rank()
+        asked = [rows[47]["anon"], rows[12]["anon"], rows[1]["anon"]]
+        got = self.get("/v1/leaderboard/compare", anons=",".join(asked))
+        self.assertEqual([r["anon"] for r in got["rows"]], asked,
+                         "the caller's order is the caller's; the board's order lives in `order`")
+        self.assertEqual([r["rank"] for r in got["rows"]], [47, 12, 1])
+        self.assertEqual(len(got["order"]), 3, "three wallets is three pairs")
+        for pair in got["order"]:
+            self.assertTrue(pair["why"].strip())
+            self.assertIn("scoreBps", pair["why"])
+        self.assertEqual(got["verdict"].startswith(asked[2]), True,
+                         "the verdict names the LEAD, which is a maximum and not whoever was listed first")
+        self.assertIn("did not decide this", " ".join(p["why"] for p in got["order"]))
+        self.assertEqual(got["orderField"], "scoreBps")
+
+    def test_two_is_the_floor_and_three_is_the_cap(self):
+        anon = self.rows_by_rank()[1]["anon"]
+        one = self.client.get("/v1/leaderboard/compare", params={"anons": anon})
+        self.assertEqual(one.status_code, 422)
+        same = self.client.get("/v1/leaderboard/compare", params={"anons": "%s,%s" % (anon, anon)})
+        self.assertEqual(same.status_code, 422, "the same wallet twice is not a comparison")
+        four = self.client.get("/v1/leaderboard/compare",
+                               params={"anons": "w_11111111,w_22222222,w_33333333,w_44444444"})
+        self.assertEqual(four.status_code, 422)
+        self.assertIn("anons", json.dumps(four.json()),
+                      "the refusal names the field it is about; the sentence behind it stays in the log")
+
+    def test_a_wallet_that_did_not_rank_is_listed_beside_the_ones_that_did(self):
+        rows = self.rows_by_rank()
+        thin = self.anon_of_unranked("needs 20")
+        got = self.get("/v1/leaderboard/compare", anons="%s,%s,%s" % (rows[1]["anon"], thin, rows[2]["anon"]))
+        self.assertEqual([r["anon"] for r in got["rows"]], [rows[1]["anon"], rows[2]["anon"]])
+        self.assertEqual([u["anon"] for u in got["unranked"]], [thin])
+        self.assertTrue(any(ch.isdigit() for ch in " ".join(got["unranked"][0]["reasons"])))
+        self.assertEqual(len(got["order"]), 1, "a sentence about a wallet that is not on the board would be a lie")
+
+    def test_an_unknown_pseudonym_is_named_rather_than_dropped(self):
+        rows = self.rows_by_rank()
+        got = self.get("/v1/leaderboard/compare",
+                       anons="%s,w_0000000000,%s" % (rows[1]["anon"], rows[2]["anon"]))
+        self.assertEqual(got["unknown"], ["w_0000000000"])
+        self.assertEqual(len(got["rows"]), 2, "one bad name must not hide the two good ones")
+
+    def test_an_address_in_the_query_is_refused_and_not_echoed(self):
+        """An address is not a pseudonym, and the API's answer must not contain it either.
+
+        Two different failures in one rule: a request that asks us to resolve an address is refused, and the
+        refusal echoes FIELD NAMES rather than the value it was sent — the same reason FastAPI's validation body
+        is rewritten before it leaves the app.
+        """
+        r = self.client.get("/v1/leaderboard/compare", params={"anons": "0x%s,0x%s" % ("ab" * 20, "cd" * 20)})
+        self.assertEqual(r.status_code, 422)
+        self.assertEqual(ADDRESS.findall(r.text), [], "the refusal echoed the address it refused")
+        self.assertIn("anons", r.text)
+
+    def test_the_comparison_is_on_one_board_and_says_which(self):
+        rows = self.rows_by_rank("volume", window="7d")
+        got = self.get("/v1/leaderboard/compare", anons="%s,%s" % (rows[1]["anon"], rows[2]["anon"]),
+                       board="volume", window="7d")
+        self.assertEqual(got["board"], "volume")
+        self.assertEqual(got["window"], "7d")
+        self.assertEqual(got["orderUnits"], "micro")
+        self.assertIn("USDC", got["verdict"])
+        self.assertIn("drawdown", json.dumps(got["rows"][0]), "a PnL row carries its drawdown")
+
+
+class TestFollows(LeaderboardBase):
+    """`/v1/leaderboard/follows` — a watch, not a copy, keyed by pseudonym and idempotent per key."""
+
+    def follow(self, anon, key, **body):
+        r = self.client.post("/v1/leaderboard/follows", json={"anon": anon, **body},
+                             headers={**USER, "Idempotency-Key": "d3-follow-" + key})
+        self.assertEqual(r.status_code, 200, r.text[:300])
+        return r.json()
+
+    def test_following_is_idempotent_per_key_and_collapses_to_one_row(self):
+        anon = self.rows_by_rank()[12]["anon"]
+        first = self.follow(anon, "follow-1", label="the twelfth")
+        self.assertTrue(first["followed"])
+        self.assertFalse(first["existed"])
+        replay = self.follow(anon, "follow-1", label="the twelfth")
+        self.assertEqual(replay["followedMs"], first["followedMs"],
+                         "a replayed key returns the first answer, byte for byte")
+        again = self.follow(anon, "follow-2", label="the twelfth")
+        self.assertTrue(again["existed"], "a second key finds the follow already there")
+        listed = self.get_authed("/v1/leaderboard/follows")
+        self.assertEqual(listed["total"], 1, "following twice is one relationship")
+        self.unfollow(anon, "follow-3")
+
+    def test_the_follow_list_resolves_the_current_standing(self):
+        rows = self.rows_by_rank()
+        self.follow(rows[12]["anon"], "stand-1", label="the twelfth")
+        listed = self.get_authed("/v1/leaderboard/follows")
+        row = next(r for r in listed["rows"] if r["anon"] == rows[12]["anon"])
+        self.assertEqual(row["state"], "ranked")
+        self.assertEqual(row["rank"], 12)
+        self.assertEqual(row["rankBadge"]["text"], "#12")
+        self.assertEqual(row["scoreBps"], rows[12]["scoreBps"])
+        self.assertTrue(row["realised"], "the money travels as a display string too")
+        self.assertTrue(row["drawdown"], "and the drawdown comes with the PnL")
+        self.assertEqual(listed["states"]["ranked"], 1)
+        self.unfollow(rows[12]["anon"], "stand-2")
+
+    def test_a_followed_wallet_that_left_the_board_says_why(self):
+        thin = self.anon_of_unranked("needs 20")
+        self.follow(thin, "thin-1")
+        listed = self.get_authed("/v1/leaderboard/follows")
+        row = next(r for r in listed["rows"] if r["anon"] == thin)
+        self.assertEqual(row["state"], "unranked")
+        self.assertIsNone(row["rank"])
+        self.assertTrue(any(ch.isdigit() for ch in " ".join(row["reasons"])))
+        self.unfollow(thin, "thin-2")
+
+    def test_unfollowing_removes_the_watch_and_nothing_else(self):
+        rows = self.rows_by_rank()
+        anon = rows[1]["anon"]
+        before = len(self.get_authed("/v1/copy/configs")["items"])
+        self.follow(anon, "unf-1", label="top")
+        out = self.unfollow(anon, "unf-2")
+        self.assertEqual(out["state"], "unfollowed")
+        self.assertTrue(out["existed"])
+        self.assertEqual(self.get_authed("/v1/leaderboard/follows")["total"], 0)
+        after = len(self.get_authed("/v1/copy/configs")["items"])
+        self.assertEqual(before, after, "a follow is a watch; unfollowing it must not touch a copy config")
+
+    def test_a_follow_is_stored_against_a_pseudonym_and_an_address_is_refused(self):
+        import seed_leaderboard
+        address = seed_leaderboard.WALLET_LEAD
+        r = self.client.post("/v1/leaderboard/follows", json={"anon": address},
+                             headers={**USER, "Idempotency-Key": "d3-address-1"})
+        self.assertEqual(r.status_code, 404, "an address is not a pseudonym and is not followable")
+        unknown = self.client.post("/v1/leaderboard/follows", json={"anon": "w_0000000000"},
+                                   headers={**USER, "Idempotency-Key": "d3-address-2"})
+        self.assertEqual(unknown.status_code, 404)
+        kept = self.app._db.execute("SELECT COUNT(*) FROM trader_follows WHERE anon_wallet=?",
+                                    (address,)).fetchone()
+        self.assertEqual(kept[0], 0, "nothing is stored for an address")
+
+    def test_the_write_needs_a_key_and_a_session_and_never_returns_an_address(self):
+        anon = self.rows_by_rank()[1]["anon"]
+        no_key = self.client.post("/v1/leaderboard/follows", json={"anon": anon}, headers=USER)
+        self.assertEqual(no_key.status_code, 400)
+        anon_read = self.client.get("/v1/leaderboard/follows")
+        self.assertEqual(anon_read.status_code, 401, "the list is the account's own")
+        body = self.client.post("/v1/leaderboard/follows", json={"anon": anon},
+                                headers={**USER, "Idempotency-Key": "d3-address-3"})
+        self.assertEqual(ADDRESS.findall(body.text), [])
+        self.unfollow(anon, "addr-4")
+
+    def test_the_list_says_what_a_follow_is_not(self):
+        listed = self.get_authed("/v1/leaderboard/follows")
+        self.assertIn("not a copy", listed["note"])
+        anon = self.rows_by_rank()[1]["anon"]
+        out = self.follow(anon, "note-1")
+        self.assertIn("not a copy", out["note"])
+        self.unfollow(anon, "note-2")
 
 
 class TestThePhaseGate(LeaderboardBase):

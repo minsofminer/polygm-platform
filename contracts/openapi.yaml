@@ -2890,6 +2890,135 @@ paths:
                   - $ref: "#/components/schemas/LeaderboardRuns"
         "500": {$ref: "#/components/responses/Internal"}
 
+  /v1/leaderboard/rank:
+    get:
+      tags: [leaderboard]
+      operationId: getLeaderboardRank
+      x-auth: none
+      x-rate-class: public-read
+      x-cache: short
+      summary: One wallet's standing on one board
+      description: |-
+        The badge, both neighbours, the gap to the place above (in the board's own ordering field), and the
+        wallet's rank history for this board. An unknown pseudonym is a 404 rather than an empty standing.
+      parameters:
+        - {name: anon, in: query, required: true, schema: {type: string, minLength: 4, maxLength: 64}}
+        - name: board
+          in: query
+          schema: {type: string, enum: [risk_adjusted, win_rate, volume, rising, category, copied]}
+        - name: window
+          in: query
+          schema: {type: string, enum: [24h, 7d, 30d, 90d, all]}
+        - {name: category, in: query, schema: {type: string, maxLength: 32}}
+        - {name: days, in: query, schema: {type: integer, minimum: 1, maximum: 90, default: 30}}
+      responses:
+        "200":
+          description: the standing, its neighbours and its history
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Stamped"
+                  - $ref: "#/components/schemas/LeaderboardStanding"
+        "404": {$ref: "#/components/responses/NotFound"}
+        "422": {$ref: "#/components/responses/Denied"}
+        "500": {$ref: "#/components/responses/Internal"}
+  /v1/leaderboard/compare:
+    get:
+      tags: [leaderboard]
+      operationId: getLeaderboardCompare
+      x-auth: none
+      x-rate-class: public-read
+      x-cache: short
+      summary: Up to three wallets, side by side
+      description: |-
+        Two to three pseudonyms, each with its own board rank, plus the engine's pairwise sentences and an explicit
+        `unknown` list — one bad name must not hide the two good ones.
+      parameters:
+        - name: anons
+          in: query
+          required: true
+          description: comma-separated pseudonyms; two or three distinct wallets
+          schema: {type: string, minLength: 9, maxLength: 200}
+        - name: board
+          in: query
+          schema: {type: string, enum: [risk_adjusted, win_rate, volume, rising, category, copied]}
+        - name: window
+          in: query
+          schema: {type: string, enum: [24h, 7d, 30d, 90d, all]}
+        - {name: category, in: query, schema: {type: string, maxLength: 32}}
+      responses:
+        "200":
+          description: the comparison
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Stamped"
+                  - $ref: "#/components/schemas/LeaderboardComparison"
+        "422": {$ref: "#/components/responses/Denied"}
+        "500": {$ref: "#/components/responses/Internal"}
+  /v1/leaderboard/follows:
+    get:
+      tags: [leaderboard]
+      operationId: getLeaderboardFollows
+      x-auth: user
+      x-rate-class: authed-read
+      x-cache: no-store
+      summary: The wallets you follow, with their current standing
+      parameters:
+        - name: board
+          in: query
+          schema: {type: string, enum: [risk_adjusted, win_rate, volume, rising, category, copied]}
+        - name: window
+          in: query
+          schema: {type: string, enum: [24h, 7d, 30d, 90d, all]}
+        - {name: category, in: query, schema: {type: string, maxLength: 32}}
+      responses:
+        "200":
+          description: the follows, resolved against the board as it stands now
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Stamped"
+                  - $ref: "#/components/schemas/LeaderboardFollows"
+        "401": {$ref: "#/components/responses/Denied"}
+        "422": {$ref: "#/components/responses/Denied"}
+        "500": {$ref: "#/components/responses/Internal"}
+    post:
+      tags: [leaderboard]
+      operationId: postLeaderboardFollow
+      summary: Follow or unfollow a trader (idempotent per key)
+      x-auth: user
+      x-rate-class: mutation
+      x-cache: no-store
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [anon]
+              properties:
+                anon: {type: string, minLength: 4, maxLength: 64}
+                state: {type: string, enum: [follow, unfollow]}
+                label: {type: string, maxLength: 48}
+      responses:
+        "200":
+          description: the follow's new state
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/LeaderboardFollow"}
+        "400": {$ref: "#/components/responses/Validation"}
+        "401": {$ref: "#/components/responses/Denied"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/Denied"}
+        "500": {$ref: "#/components/responses/Internal"}
+
   /v1/leaderboard/recompute:
     post:
       tags: [leaderboard]
@@ -4670,6 +4799,171 @@ components:
           description: operator-only (admin token); null for a public caller, because a wall of shame is a different product from a leaderboard
           items: {type: object}
         disclaimer: {type: string}
+
+    LeaderboardNeighbour:
+      type: [object, "null"]
+      description: |-
+        A row's neighbour, or null at the top and bottom of the board. Served as a full row rather than a name:
+        the point of showing who is directly above you is that you can read what they did.
+      additionalProperties: true
+
+    LeaderboardGap:
+      type: [object, "null"]
+      required: [rankAbove, anonAbove, field, units, value, valueAbove, delta, toPass, note]
+      description: |-
+        The distance to the place above, in the board's own ordering field. `toPass` is `valueAbove + 1` because a
+        tie does not pass anybody — ties fall through to the board's declared tie-breaks, so equality is not enough.
+      properties:
+        rankAbove: {type: integer, minimum: 1}
+        anonAbove: {type: string}
+        field: {type: string, enum: [scoreBps, winRateBps, verifiedVolumeMicro, improvementMicro, copiers]}
+        units: {type: string, enum: [bps, micro, count]}
+        value: {type: integer}
+        valueAbove: {type: integer}
+        delta: {type: integer}
+        toPass: {type: integer}
+        note: {type: string}
+
+    LeaderboardStandingHistory:
+      type: object
+      required: [days, points, snapshots, latestRank, bestRank, worstRank, delta, note]
+      properties:
+        days: {type: integer, minimum: 1}
+        points: {type: array, items: {$ref: "#/components/schemas/LeaderboardSnapshotPoint"}}
+        snapshots: {type: integer, minimum: 0}
+        latestRank: {type: [integer, "null"]}
+        bestRank: {type: [integer, "null"]}
+        worstRank: {type: [integer, "null"]}
+        delta: {type: [integer, "null"], description: "change in RANK; negative is an improvement"}
+        note: {type: string}
+
+    LeaderboardStanding:
+      type: object
+      required: [board, label, window, category, formula, gate, tieBreaks, sampleGate, orderField, orderUnits,
+                 anon, rankedTotal, methodologyPath, history, state, note]
+      properties:
+        board: {type: string}
+        label: {type: string}
+        window: {type: string}
+        category: {type: [string, "null"]}
+        formula: {type: string}
+        gate: {type: string}
+        tieBreaks: {type: string}
+        sampleGate: {type: integer, minimum: 1}
+        orderField: {type: string, enum: [scoreBps, winRateBps, verifiedVolumeMicro, improvementMicro, copiers]}
+        orderUnits: {type: string, enum: [bps, micro, count]}
+        anon: {type: string}
+        rankedTotal: {type: integer, minimum: 0}
+        state: {type: string, enum: [ranked, provisional, blew_up, unranked, unknown]}
+        rank: {type: [integer, "null"]}
+        rankBadge: {$ref: "#/components/schemas/LeaderboardRankBadge"}
+        percentileBps:
+          type: integer
+          minimum: 0
+          maximum: 10000
+          description: "rank as a share of the board, rounded UP: 47 of 64 is 7344 bps, \"the top 74%\""
+        row: {type: [object, "null"], additionalProperties: true, description: "the full ranked row (LeaderboardRow)"}
+        above: {$ref: "#/components/schemas/LeaderboardNeighbour"}
+        below: {$ref: "#/components/schemas/LeaderboardNeighbour"}
+        gap: {$ref: "#/components/schemas/LeaderboardGap"}
+        unranked: {type: [object, "null"], additionalProperties: true}
+        reasons: {type: array, items: {type: string}}
+        methodologyPath: {type: string}
+        history: {$ref: "#/components/schemas/LeaderboardStandingHistory"}
+        note: {type: string}
+
+    LeaderboardComparison:
+      type: object
+      required: [board, label, window, category, formula, gate, tieBreaks, sampleGate, orderField, orderUnits,
+                 requested, rows, unranked, unknown, order, rankedTotal, methodologyPath, verdict, note, disclaimer]
+      description: |-
+        Two or three wallets. `rows` are in the order the caller asked, `order` carries the engine's pairwise
+        sentences, and `unknown` names any pseudonym we have never seen — an explicit list, because silently
+        dropping it would make a two-wallet comparison of three wallets look complete.
+      properties:
+        board: {type: string}
+        label: {type: string}
+        window: {type: string}
+        category: {type: [string, "null"]}
+        formula: {type: string}
+        gate: {type: string}
+        tieBreaks: {type: string}
+        sampleGate: {type: integer, minimum: 1}
+        orderField: {type: string}
+        orderUnits: {type: string, enum: [bps, micro, count]}
+        requested: {type: array, items: {type: string}}
+        rows: {type: array, items: {$ref: "#/components/schemas/LeaderboardRow"}}
+        unranked: {type: array, items: {$ref: "#/components/schemas/LeaderboardUnranked"}}
+        unknown: {type: array, items: {type: string}}
+        order:
+          type: array
+          items:
+            type: object
+            required: [a, b, why, aAbove]
+            properties:
+              a: {type: string}
+              b: {type: string}
+              why: {type: string}
+              aAbove: {type: boolean}
+              components: {type: object}
+        rankedTotal: {type: integer, minimum: 0}
+        methodologyPath: {type: string}
+        verdict: {type: string}
+        note: {type: string}
+        disclaimer: {type: string}
+
+    LeaderboardFollowRow:
+      type: object
+      required: [anon, label, followedMs, state, rank, rankBadge, scoreBps, realisedMicro, realised,
+                 maxDrawdownMicro, drawdown, winRateBps, insufficientSample, sampleNote, reasons, classifications]
+      properties:
+        anon: {type: string}
+        label: {type: string}
+        followedMs: {type: integer}
+        state: {type: string, enum: [ranked, unranked, absent]}
+        rank: {type: [integer, "null"]}
+        rankBadge: {$ref: "#/components/schemas/LeaderboardRankBadge"}
+        scoreBps: {type: [integer, "null"]}
+        realisedMicro: {type: [integer, "null"]}
+        realised: {$ref: "#/components/schemas/LeaderboardMoney"}
+        maxDrawdownMicro: {type: [integer, "null"]}
+        drawdown: {$ref: "#/components/schemas/LeaderboardMoney"}
+        winRateBps: {type: [integer, "null"]}
+        insufficientSample: {type: [boolean, "null"]}
+        sampleNote: {type: string}
+        reasons: {type: array, items: {type: string}}
+        classifications: {type: array, items: {type: object}}
+
+    LeaderboardFollows:
+      type: object
+      required: [board, label, window, rows, total, rankedTotal, note, states]
+      properties:
+        board: {type: string}
+        label: {type: string}
+        window: {type: string}
+        rows: {type: array, items: {$ref: "#/components/schemas/LeaderboardFollowRow"}}
+        total: {type: integer, minimum: 0}
+        rankedTotal: {type: integer, minimum: 0}
+        states:
+          type: object
+          required: [ranked, unranked, absent]
+          properties:
+            ranked: {type: integer, minimum: 0}
+            unranked: {type: integer, minimum: 0}
+            absent: {type: integer, minimum: 0}
+        note: {type: string}
+
+    LeaderboardFollow:
+      type: object
+      required: [anon, state, followed, existed, note]
+      properties:
+        anon: {type: string}
+        state: {type: string, enum: [followed, unfollowed]}
+        followed: {type: boolean}
+        existed: {type: boolean, description: "the follow already existed (or did not exist, for an unfollow)"}
+        followedMs: {type: [integer, "null"]}
+        label: {type: string}
+        note: {type: string}
 
   responses:
     NotFound:

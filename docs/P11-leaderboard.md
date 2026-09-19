@@ -1,11 +1,12 @@
 # P11 — Leaderboard, Rankings & Referrals
 
-Status: **D1 and D2 built**, verified by `tools/p11-gate-check.py` at **14/14** (8/8 scanners canaried,
-`docs/verification/P11-gate.txt`) with the whole backend suite at **890 tests OK** and `check-openapi` at 405/0.
-D1 is the specification, the integrity rules and the ranking engine; D2 is the rankings API, the population the
-boards are demonstrated on, and the read path they are ranked from. D3–D7 are next: the profile integration,
-self-rank and privacy, referrals, the public SSR pages, and the anti-gaming dashboard. This file is written as
-the phase is built.
+Status: **D1, D2 and D3 built**, verified by `tools/p11-gate-check.py` at **16/16** (10 scanners canaried,
+`docs/verification/P11-gate.txt`) with the whole backend suite at **911 tests OK**, the web suite at **366 tests
+OK** and `check-openapi` at 431/0. D1 is the specification, the integrity rules and the ranking engine; D2 is the
+rankings API, the population the boards are demonstrated on, and the read path they are ranked from; D3 is the
+standing a wallet can see — its rank, its gap to the place above, its sparkline and the board it can put two
+other wallets beside. D4–D7 are next: self-rank and privacy, referrals, the public SSR pages, and the
+anti-gaming dashboard. This file is written as the phase is built.
 
 The phase's acceptance sentence, from the kit, is the thing everything below is arranged around:
 
@@ -24,7 +25,7 @@ better rank — is the one a user reports as a bug.
 |---|-------------|-------|
 | D1 | leaderboard specification: six boards, formula per board, eligibility gate, windows, tie-breaks, recompute cadence; integrity rules (wash, copy farms, provisional, blown-up, lucky-gambler share, disputed markets) | **built** — `packages/polygm_core/leaderboard/{boards,integrity,rank}.py`, 20 unit tests; `0013_leaderboard.sql` + its SQLite twin |
 | D2 | the rankings API: boards, rows with components, unranked-with-reasons, methodology, snapshots, the worker's recompute | **built** — `GET /v1/leaderboard{,/boards,/methodology,/why,/snapshots,/runs}` + `POST /v1/leaderboard/recompute`; `leaderboard/source.py`; `services/api/seed_leaderboard.py`; 20 + 28 tests |
-| D3 | profile integration: rank badge, 30-day rank sparkline, "why this rank", follow/copy from the row, compare up to 3 | not started |
+| D3 | profile integration: rank badge, 30-day rank sparkline, "why this rank", follow/copy from the row, compare up to 3 | **built** — `GET /v1/leaderboard/{rank,compare,follows}` + `POST /v1/leaderboard/follows`; `0014_follows.sql` + its SQLite twin; `web/src/terminal/{board.ts,BoardPanel.tsx}` on `/leaderboard`; 49 API tests + 18 + 7 + 2 web tests |
 | D4 | self-rank: your own position on every board, pinned when off-page, the unranked state, private-by-default with an opt-in | not started |
 | D5 | referrals: link + short code, the reward model and its argument, Sybil defence (first matched order over a notional threshold, device/IP/funding dedupe, velocity limits, review queue, clawback, hard self-referral block), the referrer dashboard, payout terms | not started |
 | D6 | public SSR pages: `/trader/<handle>`, `/market/<slug>`, `/leaderboard/<board>` with OG images, structured data, rate limiting | not started |
@@ -226,25 +227,83 @@ inside the process to prove the cadence works is a gate that never runs. `leader
 (board, window, hour), so a second recompute inside the same hour *replaces* that hour's row rather than
 inventing cadence we did not have.
 
+### 2.14 The gap to the place above is stated in the board's own field
+
+Rank 47 is a position; "625 bps behind" is a distance, and only one of the two tells a trader whether the next
+recompute can move them. `/rank` therefore carries `orderField`/`orderUnits` per board — `scoreBps` in bps on
+`risk_adjusted` and `category`, `winRateBps` in bps on `win_rate`, `verifiedVolumeMicro` and `improvementMicro`
+in micro-pounds on `volume` and `rising`, `copiers` in count on `copied` — and the gap is expressed in that unit
+(`625 bps behind …, 5626 bps would pass them`). A gap in "points" would be a fifth vocabulary for four boards
+that already say what they rank by (§2.9), and the screen's `gapSentence` is built from the served field, not
+from a table of its own.
+
+### 2.15 One read is one board, and a comparison is one read
+
+`/compare` takes two or three pseudonyms and answers for **one** board and window, in one request. Three
+separate `/rank` reads assembled by the client is three reads that can disagree — different recompute instants,
+different windows, and a screen that shows a "leader" its own rows contradict. The pairwise sentences come from
+the engine's `rank.explain()` (§2.10's vocabulary), and `verdict` is computed from the board's `order` array
+rather than from `rows[0]`, because the two differ exactly when `order` is the honest answer.
+
+The route refuses a non-pseudonym **before** it echoes anything: `0x…` in `anons` is a 422 naming the field, and
+the response never carries an address back. That ordering is what the gate's c16 canary plants — an
+address-echoing comparison is a privacy leak with a nice table around it, and it is the same rule as §2.8's
+"exclusions are applied, and the reasons are not published".
+
+### 2.16 A follow is a watch, not a copy config
+
+`POST /v1/leaderboard/follows` writes to `trader_follows` and to nothing else. It is keyed by **pseudonym** —
+`0x…` is a 422, because the follow list is a list of rows a leaderboard served, not a list of addresses a user
+typed — it is idempotent per `Idempotency-Key` like every other write in this API, and unfollow reports whether
+a row existed rather than pretending the second press was the first. `GET` returns the followed wallets with
+their **current** standing attached: a follow list that does not say what happened since is a list of names.
+
+The distinction is the phase's own subject matter. A follow is a read; a copy config is money and belongs to D7
+of P10, which is why the response says "a follow is a watch, not a copy config" and why the tests assert that
+`/v1/copy/configs` is untouched by a follow.
+
+### 2.17 The prose that explains a missing route is not on the wire
+
+The measured first load of `/markets` was **200.7 KB against a 200 KB budget** — over, after D3's four routes
+were added to `web/src/api/routes.ts`. The ledger is imported by `src/api/client.ts`, so every key, path, flag
+and **note** in it is fetched by every signed-in document; the notes, which are prose for a human and which no
+screen renders, were **2.9 KB** of that. They moved to `src/api/route-notes.ts`, which no screen imports, and the
+measured cost fell to **199.2 KB**.
+
+What makes that a fix rather than a trick is the pair that holds it: the P08 gate's c1 (extended in this phase,
+with a new canary) and `web/src/api/route-notes.test.ts` both fail if a note outlives its route or if a `note`
+field reappears on a `RouteDecl`. Coverage is deliberately not checked — the launch list in
+`docs/P08-frontend-shell.md` §4 already explains every unbuilt route, and a second list that must agree with the
+first is a second list that can disagree.
+
 ## 3. Where the numbers come from
 
 * `tests/test_leaderboard_rank.py` — **20 tests, OK** (`python3 -m unittest discover -s tests -p "test_leaderboard_rank.py"`).
 * `tests/test_leaderboard_source.py` — **20 tests, OK**: the windows, the realised arithmetic (both sides, both
   outcomes, and the unresolved case that is NOT a zero), per-market folding, determinism under a reversed read,
   and the two refusal paths.
-* `tests/test_leaderboard_api.py` — **28 tests, OK**, including the gate's own pair. The population it runs on:
+* `tests/test_leaderboard_api.py` — **49 tests, OK**, including the gate's own pair and D3's standing/compare/follow routes. The population it runs on:
   `services/api/seed_leaderboard.py` writes **60 generated wallets + 5 specimens** — a lucky gambler, a blown-up
   account, a washer, a copy farm, a three-day-old wallet — plus two wallets built to be refused for different
   reasons (9 settled markets; 21 markets of forty cents). Measured on that population: **64 ranked**, 7 unranked,
   **5 blown up**, 1 provisional, 1 disputed result withheld, and the gate pair at ranks 12/47 has **48 versus 26
   settled markets** — the smaller sample ranked *below*, and the sentence explaining it is served by `/why`.
-* `tools/check-openapi.py` — **405 passed, 0 failed** over 53 paths (the contract gained the seven leaderboard
-  paths and 22 components).
-* `tools/p11-gate-check.py` — **14/14 checks, 8/8 scanners canaried**, recorded in `docs/verification/P11-gate.txt`.
+* `tools/check-openapi.py` — **431 passed, 0 failed** over 57 paths (the contract gained the seven leaderboard
+  paths and 22 components in D2, and D3's four routes with their `x-auth`/`x-rate-class`/`x-cache` extensions on
+  top; `npm run gen:api` regenerates `web/src/api/schema.gen.ts`, and `npm run check:api` fails if it drifts).
+* `tools/p11-gate-check.py` — **16/16 checks, 10/10 scanners canaried**, recorded in `docs/verification/P11-gate.txt`.
   c3 is the phase's own acceptance sentence walked over the API (rank 47 with 26 settled markets above rank 12
-  with 48, and `/why` saying so in one sentence), and the scanners that make it a floor rather than a screenshot
-  are canaried: each one is handed a planted violation and fails the run if it walks past it.
-* The whole backend suite: **890 tests, OK** (`python3 -m unittest discover -s tests`).
+  with 48, and `/why` saying so in one sentence), c15 is the standing a wallet can read back (the badge, the
+  re-derivable gap, the empty sparkline that says "no history yet"), and c16 is the comparison that must not
+  echo an address. The scanners that make it a floor rather than a screenshot are canaried: each one is handed a
+  planted violation and fails the run if it walks past it.
+* The whole backend suite: **911 tests, OK** (`python3 -m unittest discover -s tests`, 62.9 s).
+* The web suite: **366 tests in 40 files, OK** (`web/node_modules/.bin/vitest run`), `tsc --noEmit` clean,
+  `i18n-check` ok (857 keys, 814 used), and `npm run build` renders 19 routes including `/leaderboard`.
+* `npm run measure` (P08 c8) — **pass**: `/` 190.0 KB, `/markets` **199.2 KB**, `/tma` and `/profile` 191.9 KB
+  against a 200 KB budget, with route-level splitting still proven; `tools/p08-gate-check.py` is **15/15**.
+* `tools/p08-gate-check.py` — **15/15**, including the c4 money-layer scan over the new screens (the percentile,
+  the best-trade share and the win rate all render through `bpsText`, never `.toFixed`).
 * `db/migrations/0013_leaderboard.sql` + `db/migrations-sqlite/0013_leaderboard.sql` (generated) — the portable
   subset executes: **106 tables, 54 triggers**, with `leaderboard_exclusions` append-only in both.
 * Seeded tape measurement used for the gate's justification: 1,090 fills, median fill $0.02, p90 $137.50
@@ -252,7 +311,7 @@ inventing cadence we did not have.
 
 ## 4. Open, in the order it should be closed
 
-1. **D3–D7** as listed in §1.
+1. **D4–D7** as listed in §1.
 2. **The eligibility floor re-derived on production data** ($500 and its $0.02-median sensitivity are a judgement,
    §2.2), plus a real **category taxonomy**: `seed_leaderboard` invents four strings (Politics/Sports/Crypto/
    Finance) because the venue's own tags are not in our ingest yet, and the category board is only as meaningful
