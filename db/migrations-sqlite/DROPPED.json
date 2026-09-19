@@ -25,7 +25,8 @@
     "kill_switch_drills",
     "copy_dry_runs",
     "trader_metric_snapshots",
-    "wallet_pseudonyms"
+    "wallet_pseudonyms",
+    "leaderboard_exclusions"
   ],
   "tables": [
     "address_allowlist",
@@ -75,6 +76,9 @@
     "key_wraps",
     "kill_switch_drills",
     "kill_switch_state",
+    "leaderboard_exclusions",
+    "leaderboard_runs",
+    "leaderboard_snapshots",
     "loss_halts",
     "market_activity",
     "market_meta",
@@ -119,6 +123,7 @@
     "users",
     "venue_fees",
     "wallet_events",
+    "wallet_integrity",
     "wallet_label_history",
     "wallet_labels",
     "wallet_pseudonyms",
@@ -274,6 +279,10 @@
         "automation_rule_labels",
         "notification_settings"
       ]
+    },
+    "0013_leaderboard.sql": {
+      "dropped": [],
+      "check_clauses_reordered": []
     }
   }
 }

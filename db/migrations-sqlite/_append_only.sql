@@ -104,3 +104,7 @@ CREATE TRIGGER append_only_trader_metric_snapshots_delete BEFORE DELETE ON trade
 CREATE TRIGGER append_only_wallet_pseudonyms_update BEFORE UPDATE ON wallet_pseudonyms BEGIN SELECT RAISE(ABORT,'append-only table: wallet_pseudonyms is not updatable'); END;
 
 CREATE TRIGGER append_only_wallet_pseudonyms_delete BEFORE DELETE ON wallet_pseudonyms BEGIN SELECT RAISE(ABORT,'append-only table: wallet_pseudonyms is not deletable'); END;
+
+CREATE TRIGGER append_only_leaderboard_exclusions_update BEFORE UPDATE ON leaderboard_exclusions BEGIN SELECT RAISE(ABORT,'append-only table: leaderboard_exclusions is not updatable'); END;
+
+CREATE TRIGGER append_only_leaderboard_exclusions_delete BEFORE DELETE ON leaderboard_exclusions BEGIN SELECT RAISE(ABORT,'append-only table: leaderboard_exclusions is not deletable'); END;

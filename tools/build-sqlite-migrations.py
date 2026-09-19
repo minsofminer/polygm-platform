@@ -41,7 +41,10 @@ APPEND_ONLY = ["cash_ledger", "fills", "tape_trades", "builder_attribution", "po
                # P10: the copy engine's would-be actions and the history of a trader's score. Both are
                # evidence read back after the fact — "why did it skip that fill" and "why did this wallet
                # stop being smart money" — so neither may be rewritten.
-               "copy_dry_runs", "trader_metric_snapshots", "wallet_pseudonyms"]
+               "copy_dry_runs", "trader_metric_snapshots", "wallet_pseudonyms",
+               # P11: an exclusion is a decision about somebody's standing, and the question after an incident is
+               # "who removed this wallet, when, and why" — which an UPDATE cannot answer.
+               "leaderboard_exclusions"]
 API_TABLES = {"markets", "events", "tokens", "book_levels", "tape_trades", "users", "idempotency_keys",
               "kill_switch_state", "order_intents", "orders", "fills", "cash_ledger", "position_lots",
               "position_snapshots", "builder_attribution", "feature_flags", "flag_audit", "audit_log",
