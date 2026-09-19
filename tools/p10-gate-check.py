@@ -45,6 +45,12 @@ for _p in (str(ROOT / "packages"), str(ROOT / "services" / "api"), str(ROOT / "t
     if _p not in sys.path:
         sys.path.insert(0, _p)
 DOC = ROOT / "docs" / "P10-frontend-terminal.md"
+PERF = ROOT / "docs" / "verification" / "P10-perf.txt"
+#: What the tape's frame budget is measured against. 16.6 ms is one frame at 60fps; the tape is allowed a
+#: fraction of it per second of load, and the artefact records what it actually spent.
+FRAME_MS = 1000 / 60
+PERF_SOURCES = ("web/src/terminal/tape.ts", "web/scripts/measure-tape-budget.mjs",
+                "web/src/terminal/perf.test.ts")
 CONTRACT = ROOT / "contracts" / "openapi.yaml"
 METRICS = ROOT / "packages" / "polygm_core" / "terminal" / "metrics.py"
 PY = sys.executable
@@ -764,8 +770,61 @@ def c10_radar_cost(p: Probe) -> tuple[str, bool, str]:
             " | ".join(steps))
 
 
+def perf_findings(text: str, age_note: str = "") -> list:
+    """Everything the tape-budget artefact has to say before a 60fps claim can rest on it.
+
+    The requirement is "60fps under live load or the component is not done", and the trap in it is that the
+    JavaScript half of a frame is measurable in this environment and the pixel half is not (no browser: the
+    Playwright download fails its host-requirements check, which is why P08's numbers are byte counts too). So
+    the artefact must state the load it ran, the number it produced, and — in the same file — that paint,
+    layout and compositing are `[UNVERIFIED]`. A measurement that quietly upgrades itself to a rendering claim
+    is the failure this check exists for, and it is why the caveat is parsed rather than trusted.
+    """
+    f = []
+    if not text.strip():
+        return ["docs/verification/P10-perf.txt is missing — `npm run measure:tape` writes it"]
+    if "200 fills/second" not in text:
+        f.append("the artefact does not state the load it ran (200 fills/second)")
+    if "[UNVERIFIED]" not in text or "No browser exists in this environment" not in text:
+        f.append("the artefact claims pixels it did not measure: the paint/layout caveat is missing")
+    m = re.search(r"mean work per second of load\s+([0-9.]+) ms", text)
+    if not m:
+        f.append("the mean work per second is not in the artefact, so nothing here is a measurement")
+    elif float(m.group(1)) > FRAME_MS:
+        f.append("the tape spends %.3f ms per second of load, past one frame (%.1f ms)" % (float(m.group(1)), FRAME_MS))
+    m2 = re.search(r"worst single batch release\s+([0-9.]+) ms", text)
+    if m2 and float(m2.group(2 - 1)) > FRAME_MS:
+        f.append("a single batch release takes %.3f ms, past one frame" % float(m2.group(1)))
+    if "status: pass" not in text:
+        f.append("the artefact does not say `status: pass`")
+    if age_note:
+        f.append(age_note)
+    return f
+
+
+def c11_tape_frame_budget(p: Probe) -> tuple[str, bool, str]:
+    """The 60fps line is measured, on the tape's real functions, at 200 fills/s — and the pixels are not claimed."""
+    newest = 0.0
+    for rel in PERF_SOURCES:
+        path = ROOT / rel
+        if path.exists():
+            newest = max(newest, path.stat().st_mtime)
+    note = ""
+    if PERF.exists() and newest and PERF.stat().st_mtime < newest:
+        note = "the measurement is older than the newest terminal source it describes"
+    text = PERF.read_text() if PERF.exists() else ""
+    findings = perf_findings(text, note)
+    mean = re.search(r"mean work per second of load\s+([0-9.]+) ms", text)
+    detail = ("%s ms per second of load at 200 fills/s, worst release %s ms, budget %.1f ms; %d findings%s"
+              % (mean.group(1) if mean else "no", (re.search(r"worst single batch release\s+([0-9.]+)", text).group(1)
+                 if re.search(r"worst single batch release\s+([0-9.]+)", text) else "no"),
+                 FRAME_MS, len(findings), ("; " + "; ".join(findings[:3])) if findings else ""))
+    return ("the tape's own work at 200 fills/s fits in a frame, and the artefact says what it did not measure",
+            not findings, detail)
+
+
 CHECKS = (c1_contract, c2_no_addresses, c3_gate_and_drawdown, c4_whale_rule, c5_copy_safety, c6_views_and_alerts,
-          c7_integers_only, c8_freshness, c9_acceptance_path, c10_radar_cost)
+          c7_integers_only, c8_freshness, c9_acceptance_path, c10_radar_cost, c11_tape_frame_budget)
 
 
 # --------------------------------------------------------------------------------------------------- self-test
@@ -815,6 +874,25 @@ def self_test() -> int:
                                                      "realisedMicro": 1, "unrealisedMicro": 0, "volumeMicro": 1,
                                                      "maxDrawdownMicro": 0}}}
         return len(win_rate_findings(bad)) >= 2 and not win_rate_findings(good), win_rate_findings(bad)
+
+    @canary
+    def perf_scanner():
+        """Three plantings: a breach, a missing caveat, and a clean one that must stay clean.
+
+        The clean case matters as much as the two failures — a scanner that flags everything would make the gate
+        impossible to pass and therefore impossible to trust.
+        """
+        head = ("P10 tape budget — generated by web/scripts/measure-tape-budget.mjs.\n\n"
+                "driven at 200 fills/second for 10 seconds\n")
+        caveat = ("What it does NOT measure: paint, layout and compositing. No browser exists in this environment,\n"
+                  "so the pixels are [UNVERIFIED].\n")
+        clean = (head + caveat + "  mean work per second of load   1.463 ms  (budget 16.7 ms)\n"
+                 "  worst single batch release     0.113 ms\n\nstatus: pass\n")
+        breached = clean.replace("1.463 ms", "41.000 ms").replace("status: pass", "status: fail")
+        no_caveat = clean.replace(caveat, "")
+        ok = (not perf_findings(clean) and len(perf_findings(breached)) >= 2 and len(perf_findings(no_caveat)) == 1
+              and perf_findings("", "") != [])
+        return ok, {"clean": perf_findings(clean), "breached": perf_findings(breached), "no_caveat": perf_findings(no_caveat)}
 
     @canary
     def threshold_scanner():

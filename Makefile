@@ -230,11 +230,11 @@ p08-offline: web-deps        ## the 14 checks that need neither a build nor a bo
 p08-selftest: web-deps        ## prove the 15 checks can fail, one planted violation at a time
 	$(PY) tools/p08-gate-check.py --self-test
 
-# P10 · the terminal. `p10` is the ten checks, and it is the first gate in this repo whose subject is a
+# P10 · the terminal. `p10` is the eleven checks, and it is the first gate in this repo whose subject is a
 # *journey*: c9 walks the phase's own acceptance sentence (find a whale -> open the trader -> the win rate is
 # real -> the drawdown is there -> a copy config in dry-run -> the slippage risk) over the real API, in one
 # script, because a chain verified one endpoint at a time is a chain nobody has ever walked. c1 runs
-# check-openapi over the whole contract, so this target is also where the 36-path document is enforced, and
+# check-openapi over the whole contract, so this target is also where the 37-path document is enforced, and
 # c10 walks the Wallet Radar's cost control (cache, budget, the limit in the refusal, the async job, the key).
 # The WEB half of D1-D9 is checked by `npm run test` and `npm run build` under `p08`/`p09`; a web-side gate
 # check lands with the screens, and this comment used to promise one that did not exist - which is the same

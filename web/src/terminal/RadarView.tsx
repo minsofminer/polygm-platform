@@ -16,7 +16,7 @@
  * would be a second, more flattering rendering of one payload.
  */
 import { useState } from "react";
-import { t } from "@/i18n/t";
+import { t } from "@/i18n/terminal";
 import { Number } from "@/num/Number";
 import { microToCents } from "@/money/cents";
 import { RefusalNotice } from "@/ui/RefusalNotice";

@@ -13,7 +13,7 @@
  * end up disagreeing.
  */
 import { useMemo, useState } from "react";
-import { t } from "@/i18n/t";
+import { t } from "@/i18n/terminal";
 import { freshnessOf } from "@/api/envelope";
 import { microToCents } from "@/money/cents";
 import { Number } from "@/num/Number";

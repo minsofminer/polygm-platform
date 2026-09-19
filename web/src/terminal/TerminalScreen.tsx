@@ -23,7 +23,7 @@
  * disagree with the first. Its label says "from this window's tape" for the same reason.
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { t } from "@/i18n/t";
+import { t } from "@/i18n/terminal";
 import { freshnessOf, stampFrom, type Freshness } from "@/api/envelope";
 import { request } from "@/api/client";
 import { Number } from "@/num/Number";

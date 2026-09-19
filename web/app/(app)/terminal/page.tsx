@@ -1,4 +1,4 @@
-import { t } from "@/i18n/t";
+import { t } from "@/i18n/terminal";
 import { serverRead } from "@/api/server-read";
 import { serverAuth } from "@/auth/server";
 import { marketTitle, TerminalScreen, type TerminalMarketRef } from "@/terminal/TerminalScreen";

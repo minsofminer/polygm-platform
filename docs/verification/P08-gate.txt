@@ -1,33 +1,33 @@
-P08 gate run, 2026-09-19 01:43:42Z (--fast=False)
+P08 gate run, 2026-09-19 06:38:23Z (--fast=False)
 
-  PASS     6 ms  c1
-        40 routes in the ledger (19 built, 21 refused-by-design), 22 contract operations, 19 launch items; all three agree
-  PASS  2234 ms  c2
-        check:api rc=0, contract 177 passed / 0 failed, schema.gen.ts 1875 lines, no hand-typed bodies
-  PASS    22 ms  c3
-        34 markers, 19 numbered launch items, 4 [UNVERIFIED] slugs paired
-  PASS    38 ms  c4
+  PASS     9 ms  c1
+        57 routes in the ledger (36 built, 21 refused-by-design), 39 contract operations, 19 launch items; all three agree
+  PASS  2776 ms  c2
+        check:api rc=0, contract 293 passed / 0 failed, schema.gen.ts 3575 lines, no hand-typed bodies
+  PASS    24 ms  c3
+        35 markers, 19 numbered launch items, 4 [UNVERIFIED] slugs paired
+  PASS    98 ms  c4
         parseFloat/toFixed/Intl.NumberFormat confined to src/money/, no bitwise in the money path, one numeric renderer
-  PASS   132 ms  c5
+  PASS   272 ms  c5
         0 literal(s) and 0 unknown var() name(s) across the tree
-  PASS   134 ms  c6
-        4 generated/structural checks over 259 lines of token CSS and the shell stylesheet
-  PASS   904 ms  c7
-        assert-env rc=0; built-output grep rc=0 over 403 built file(s); telegram.org in script-src only on /tma
-  PASS     1 ms  c8
-        worst route 190.3 KB of a 200 KB budget; 4 routes measured; the Lighthouse/frame-trace claims are launch items 3 and 4, not this artefact
-  PASS   135 ms  c9
-        i18n-check (advisory): "wallet.tx.title" is declared and unused | canary: i18n-check --self-test: ok (planted plain + interpolated keys caught; prose in comments ignored)
-  PASS    25 ms  c10
-        2 price surface(s) guarded, tape announcements capped, haptics on confirmations only
-  PASS  2246 ms  c11
+  PASS   140 ms  c6
+        4 generated/structural checks over 262 lines of token CSS and the shell stylesheet
+  PASS   597 ms  c7
+        assert-env rc=0; built-output grep rc=0 over 183 built file(s); telegram.org in script-src only on /tma
+  PASS     2 ms  c8
+        worst route 199.1 KB of a 200 KB budget; 4 routes measured; the Lighthouse/frame-trace claims are launch items 3 and 4, not this artefact
+  PASS   207 ms  c9
+        i18n-check (advisory): "wallet.tx.title" is declared and unused | canary: i18n-check --self-test: ok (planted plain + interpolated keys caught; a terminal key outside its route family caught; prose in comments ignored)
+  PASS    44 ms  c10
+        11 price surface(s) guarded, tape announcements capped, haptics on confirmations only
+  PASS  2153 ms  c11
         login/CSRF/refresh-race/logout all exercised against next start + uvicorn
-  PASS     8 ms  c12
+  PASS    17 ms  c12
         21 unbuilt routes, every one of them refused or gated in the tree; no src barrels
   PASS     0 ms  c13
         cap 64, rails 0.1..0.34 of the viewport per device, 5 tabs
-  PASS     2 ms  c14
-        route boundary + 10 widget boundaries over 14 page(s)
-  PASS  9930 ms  c15
-        Test Files  15 passed (15)
-P08 gate: 15/15 checks passed in 15817 ms
+  PASS     3 ms  c14
+        route boundary + 7 widget boundaries over 20 page(s)
+  PASS 26148 ms  c15
+        Test Files  33 passed (33)
+P08 gate: 15/15 checks passed in 32490 ms

@@ -1,4 +1,4 @@
-import { t } from "@/i18n/t";
+import { t } from "@/i18n/terminal";
 import { serverRead } from "@/api/server-read";
 import { PortfolioView } from "@/terminal/PortfolioView";
 import type { Portfolio } from "@/terminal/wire";

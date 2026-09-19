@@ -13,7 +13,7 @@
  * screen cannot accidentally merge them into one row by forgetting a filter.
  */
 import { useCallback, useMemo, useState } from "react";
-import { t } from "@/i18n/t";
+import { t } from "@/i18n/terminal";
 import { freshnessOf } from "@/api/envelope";
 import { Number } from "@/num/Number";
 import { StaleIndicator } from "@/num/StaleIndicator";

@@ -14,7 +14,8 @@
     "check:api": "node scripts/check-generated.mjs",
     "i18n:check": "node scripts/i18n-check.mjs",
     "measure": "node scripts/measure-first-load.mjs",
-    "pretest": "node scripts/i18n-check.mjs"
+    "pretest": "node scripts/i18n-check.mjs",
+    "measure:tape": "node scripts/measure-tape-budget.mjs"
   },
   "dependencies": {
     "@tanstack/react-query": "5.103.1",

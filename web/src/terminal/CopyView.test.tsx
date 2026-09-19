@@ -138,9 +138,12 @@ describe("the copy screen", () => {
     expect(screen.getByText(/90th percentile 0\.90%/)).toBeInTheDocument();
     expect(screen.getByText(/4 skipped/)).toBeInTheDocument();
     expect(screen.getByText(/skip instead of chase/)).toBeInTheDocument();
-    // Two dry runs in the monitor (one simulated fill, one engine skip) is the history that unblocks live.
-    // The sentence is assembled from a count and a clause, so it is matched on its own fragment. The API's
-    // first condition is unacknowledged here, so the screen says blocked — and names the reason.
+    // Two dry runs in the monitor (one simulated fill, one engine skip) is the history that unblocks live —
+    // and the monitor is a SECOND read, so this is the one assertion in the test that has to wait for it.
+    // It did not, and the suite failed roughly one run in five with "0 recorded evaluations": the earlier
+    // `waitFor` matched a sentence the config's own warning supplied, so the monitor had not landed yet.
+    // Awaiting a fragment only the monitor can produce is what makes the count below a fact rather than a race.
+    await waitFor(() => expect(screen.getByText(/would copy: within the limit/)).toBeInTheDocument());
     expect(screen.getByText(/2 recorded evaluations/)).toBeInTheDocument();
     expect(screen.getByText(/live copying is still blocked/)).toBeInTheDocument();
     expect(screen.getByText(/acknowledge the measured slippage above/)).toBeInTheDocument();

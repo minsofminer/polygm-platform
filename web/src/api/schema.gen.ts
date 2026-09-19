@@ -546,10 +546,757 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/tape/fills": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The market-wide tape, filterable (P10 D2)
+         * @description Every fill we hold, newest first, across all markets. `/v1/tape` is per-market and reads the P04
+         *     fixture; this reads the durable `tape_fills` log and is the only tape the terminal uses.
+         *
+         *     Filtering happens SERVER-side for three reasons that each bit during the design pass: a filter applied
+         *     after a `LIMIT` silently hides matches; the relative whale threshold needs the same window the rows
+         *     came from; and the count behind a filter is a fact the client cannot compute. The response therefore
+         *     carries `filterNote` saying the counts are of the page while `/v1/tape/facets` has the window's totals.
+         */
+        get: operations["getTapeFills"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/tape/facets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * What is in the window, and every filter's options with counts (P10 D2/D4)
+         * @description The data behind the filter bar. Served as one payload because a filter bar assembled from six requests
+         *     is a filter bar that shows six different windows, and the faceted counts are what make a filter honest:
+         *     a user picking "whale" should see how many exist before picking it.
+         *
+         *     This is also where the whale threshold is DEFINED for a window, so a screen can state the rule before
+         *     the first fill arrives. Every classification label comes with its rule and its disclaimer - a badge
+         *     whose rule is not visible is an accusation.
+         */
+        get: operations["getTapeFacets"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/whales": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The whale feed - the same rule as the tape, applied per market (P10 D4)
+         * @description Every fill at or above ITS OWN market's threshold, sorted by notional. The threshold is per market and
+         *     the rule travels with the response (`thresholds`) so a global feed cannot imply a global rule: $5,000 is
+         *     a whale in one market and the median fill in another, and a feed that hides which one it used cannot be
+         *     tuned.
+         *
+         *     `multiple` switches the relative term to N x the market's median fill - the tunable form a saved view
+         *     exposes - and the absolute floor applies either way. `reason` per market says which term won, which is
+         *     the difference between a threshold a user can reproduce and a number they have to trust.
+         */
+        get: operations["getWhales"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/traders/{anon}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * A trader's dossier, by pseudonym (P10 D3)
+         * @description One wallet: four windows of the SAME metric set, the PnL curve with its drawdown per point, the
+         *     positions still open, the behaviour labels with their rules, and the methodology for every number.
+         *
+         *     Two rules are structural rather than decorative: a win rate below the sample gate is `null` WITH A
+         *     REASON (never a percentage - a 3-for-4 record is not a 75% win rate), and every curve point carries
+         *     `peakMicro` and `drawdownMicro`, so no chart can draw PnL without the overlay. Both are computed in
+         *     `polygm_core.terminal.metrics`, so a client cannot opt out of either.
+         *
+         *     The header carries the pseudonym and never an address: `/v1/tape/fills` names traders the same way, and
+         *     a screen that resolved one to an address would make the other pointless.
+         */
+        get: operations["getTrader"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/copy/sources": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Copyable sources, ranked risk-adjusted by default (P10 D7)
+         * @description D7's discovery list. The default sort is `riskAdjusted` - net after fees per unit of drawdown - and the
+         *     payload states it in `sortNote` and `ranking`, because a list that does not say how it is ordered
+         *     implies the obvious order, and the obvious order is raw PnL, which surfaces lucky gamblers.
+         *
+         *     Every row carries the two numbers that make the ratio checkable: `maxDrawdownMicro` (the denominator) and
+         *     `riskAdjustedRule` (the division, spelled out). `winRateBps` is `null` with `sampleNote` when the source
+         *     is below `sampleGate` settled trades - a rate below the gate is not a low-confidence rate, it is not a
+         *     rate. `netAfterFeesMicro` is returned as it is, negative included.
+         */
+        get: operations["listCopySources"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/copy/configs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * This account's copy configs, with the pre-confirm warning and the source's record (P10 D7)
+         * @description The list sorts a source by RISK-ADJUSTED return, not raw PnL, and says so in `sourceStats.ranking`:
+         *     a $50k profit with a $40k drawdown and a $50k profit with a $4k drawdown are not the same product, and
+         *     a list ordered by the first number is a list that sells the second one as a surprise.
+         *
+         *     Each config carries `warning` - the slippage this SOURCE actually produced, measured on our own copies -
+         *     and `sourceStats`, including windows where the source lost money. A copy screen that only shows
+         *     winners is the feature working as a trap.
+         */
+        get: operations["listCopyConfigs"];
+        put?: never;
+        /**
+         * Create a copy config - always in DRY-RUN (P10 D7)
+         * @description Creation never enables live copying. The response carries the slippage warning the confirm dialog will
+         *     show and the source's own record, and turning a config live is a separate call that must both
+         *     acknowledge the slippage and point at dry-run history this account already produced.
+         *
+         *     `sourceAnon` is a pseudonym, not an address. The engine resolves it internally; a client never needs
+         *     the address to copy somebody, and a client that has it is a client that can leak it.
+         */
+        post: operations["createCopyConfig"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/copy/configs/guards": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Set the guard rails, including turning dry-run off (P10 D7)
+         * @description Refused with 409 `REFUSED` unless the caller sends `acknowledgeSlippage: true` AND the config already
+         *     has at least one dry-run event recorded. The second condition is the interesting one: nobody goes live
+         *     before the system has shown them, in their own account, what the strategy would have done. A dialog that
+         *     asks "are you sure?" costs nothing and prevents nothing; a required dry-run history is evidence, and it
+         *     is the difference between a warning and a gate.
+         */
+        post: operations["setCopyGuards"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/copy/configs/monitor": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Source price vs our fill vs slippage, and every skip with its reason (P10 D7)
+         * @description Real fills (`copy_events`) and would-be fills (`copy_dry_runs`) are two lists, not one time-ordered
+         *     stream. The one thing this screen must never allow is mistaking a simulation for a trade, and a merged
+         *     list is exactly how that happens; every row carries `dryRun` for the same reason, and so does a fill
+         *     with no intent: a copied event with an empty `intentId` never reached the venue.
+         */
+        get: operations["getCopyMonitor"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/me/portfolio": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Positions marked, grouped by event, with the curve and the benchmark (P10 D6)
+         * @description Positions marked at the last fill we saw, grouped by event where the event is negRisk (exactly one
+         *     outcome pays, so a long-Yes book across k outcomes is one position with k legs and the group's ceiling
+         *     is the best leg, not the sum), the order history with its `unknown` rows INTACT, and the realised curve
+         *     against a stated benchmark.
+         *
+         *     Rows whose lifecycle we cannot name are returned rather than filtered: a table that hides them claims
+         *     every order resolved, and the reason a user needs is usually in `reason`. A position with no mark is
+         *     returned with an empty `mark` and `markSource: unknown` - dropping it would mean a position stops
+         *     existing as far as its holder is concerned.
+         */
+        get: operations["getPortfolio"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/radar/runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Scan up to ten markets for the wallets worth watching (P10 D5)
+         * @description Four rankings over one selection, and each answers a different question: who is most active here, who
+         *     made money (sample-gated), who was earliest, and who holds several of these markets at once. Cost
+         *     control is part of the contract rather than an operational footnote: a scan is cached for 60 seconds,
+         *     the same markets in a different order are the same scan, an account has a daily scan budget, and past
+         *     six uncached markets the scan runs as a job so the page does not wait on it.
+         */
+        post: operations["createRadarRun"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/radar/runs/{job_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Collect a radar scan that ran as a job (P10 D5)
+         * @description The job executes on the first poll and exactly once; the second poll reads the completed result and the
+         *     scan is cached by then. Polling is what the UI does with `quota.jobId`, so a slow scan costs one
+         *     request that returns immediately plus whatever the client's poll interval is.
+         */
+        get: operations["getRadarRun"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/whale-views": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * This account's saved whale views (P10 D4)
+         * @description A saved view is a name plus the filters it was saved with, and optionally the alert rule it is bound
+         *     to. `notifies` says whether the view is allowed to fire: a view bound to a rule that has no target
+         *     cannot notify, because an alert with no target is a notification about nothing.
+         */
+        get: operations["listWhaleViews"];
+        put?: never;
+        /**
+         * Save a whale view, optionally with its alert rule (P10 D4)
+         * @description The same call creates the view and, when a channel is given, the alert rule it fires through: D4 asks
+         *     for alert-rule creation inline, and an inline form that posts to a second endpoint is an inline form
+         *     that loses what the user just typed.
+         */
+        post: operations["createWhaleView"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** @description one PUBLISHABLE classification label with the rule that produced it and its disclaimer. P09's `Labels` carries the label NAMES; the terminal's rows carry the facts, because D2's badge tooltip has to state the exact rule and a rule that only arrives on another endpoint is a rule most users never see. */
+        LabelFact: {
+            /** @enum {string} */
+            label: "whale" | "smart_money" | "new_wallet" | "cluster" | "wash_like";
+            /** @description the classifier's own confidence, per mille */
+            confidence: number;
+            /** @description the threshold sentence, in the words the classifier ran */
+            rule: string;
+            /** @description what the label does NOT claim; required wherever the label is shown */
+            disclaimer: string;
+            /** @description the numbers behind the call, so a user can disagree with the classifier and say why */
+            evidence?: Record<string, never>;
+        };
+        /** @description `max(p99.5 of this market's window fills, $500 floor)`. Below 40 fills in the window the relative term is DISCARDED and the floor applies alone (`sampleOk: false`), because a p99.5 of five fills is a statement about five fills. `reason` names the term that won, so a threshold is reproducible instead of trusted. */
+        WhaleThreshold: {
+            thresholdMicro: number;
+            fills: number;
+            medianMicro?: number;
+            p995Micro?: number;
+            /** @description the p99.5 term, before the floor */
+            relativeMicro?: number;
+            /** @description the absolute floor ($500) or a size-bucket override */
+            floorMicro?: number;
+            /** @description false when the window has too few fills for a percentile */
+            sampleOk?: boolean;
+            /** @description 'relative' (default) or 'multiple' when the caller supplied N x median */
+            mode?: string;
+            multiple?: number | null;
+            /** @enum {string} */
+            reason: "relative" | "absolute_floor" | "absolute_fallback";
+            rule: string;
+        };
+        /** @description one fill row of the terminal tape. Same names and kinds as `DurableFill` (`price`, `shares` and `notional` as decimal strings), plus the market's own identity for the one-click jump, the labels with their rules, and the threshold the row was judged against. `tsMs` + `lagMs` replace `venueTs` + `ingestMs`: the tape renders one timestamp and how far behind the feed is, and shipping two clocks to a client that needs one is how a client ends up comparing them. */
+        TerminalFill: {
+            /** @description venue clock, ms - the same clock the cursor uses */
+            tsMs: number;
+            /** @description ingest minus venue; the freshness indicator's number */
+            lagMs?: number;
+            conditionId?: string;
+            tokenId?: string;
+            /** @description our id, for the row's market link; '' when the market is not in our catalogue */
+            marketId: string;
+            marketSlug?: string;
+            /** @description venue text, rendered as sanitised PLAIN TEXT by the client */
+            question?: string;
+            category?: string;
+            /** @description the market's tick, because a price string cannot be rendered without it */
+            tick: string;
+            /** @enum {string} */
+            side: "BUY" | "SELL";
+            outcome?: string;
+            price: components["schemas"]["Price"];
+            shares: string;
+            /** @description micro-USDC, exact; the field the whale rule is expressed against */
+            notionalMicro: number;
+            anonWallet: string;
+            labels?: components["schemas"]["LabelFact"][];
+            /** @enum {string} */
+            source?: "rest" | "ws";
+            thresholdMicro: number;
+            /** @description the sentence the badge tooltip shows */
+            thresholdRule?: string;
+            /** @enum {string} */
+            thresholdReason?: "relative" | "absolute_floor" | "absolute_fallback";
+            /** @enum {string} */
+            severity?: "info" | "notice" | "urgent";
+            /** @description notional / threshold, in bps; 10000 = exactly at the threshold */
+            ratioBps?: number;
+            /** @description the severity formula, stated on every row that carries a severity */
+            rule?: string;
+            /** @description notionalMicro >= thresholdMicro, computed server-side so no client re-derives it */
+            isWhale: boolean;
+        };
+        TapeCounts: {
+            returned: number;
+            whales: number;
+            /** @description computed from limit+1, not inferred from a full page: a page that ends on a boundary is not a hasMore */
+            hasMore: boolean;
+            overThresholdOnPage?: number;
+        };
+        FacetBucket: {
+            value: string;
+            fills: number;
+            notionalMicro: number;
+        };
+        FacetMarket: {
+            marketId: string;
+            slug?: string;
+            question?: string;
+            category?: string;
+            fills: number;
+            notionalMicro: number;
+            whales?: number;
+            thresholdMicro: number;
+            thresholdRule?: string;
+            thresholdReason?: string;
+            /**
+             * @description the market's own size class, derived from its median fill; D4's tunable defaults hang off it, so a $500 floor on a market whose median fill is $4 and on one whose median is $900 are the same number and not the same rule
+             * @enum {string}
+             */
+            sizeBucket?: "small" | "mid" | "large";
+            bucketFloorMicro?: number;
+        };
+        TapeFacets: {
+            marketId?: string | null;
+            windowMs?: number;
+            fills: number;
+            sampleMax?: number;
+            /** @description true when the window held more fills than the in-process sample cap; the counts are then of the sample, and a facet count that quietly means something else is a facet count nobody can trust */
+            sampled?: boolean;
+            medianNotionalMicro: number;
+            p95NotionalMicro?: number;
+            maxNotionalMicro?: number;
+            whale: components["schemas"]["WhaleThreshold"];
+            severityRule?: string;
+            sides: components["schemas"]["FacetBucket"][];
+            outcomes?: components["schemas"]["FacetBucket"][];
+            categories: components["schemas"]["FacetBucket"][];
+            sources?: components["schemas"]["FacetBucket"][];
+            wallets?: (components["schemas"]["FacetBucket"] & {
+                anonWallet: string;
+                labels?: components["schemas"]["LabelFact"][];
+            })[];
+            markets?: components["schemas"]["FacetMarket"][];
+            /** @description label, how many wallets carry it, and how many fills they made - the counts a user needs to judge whether a filter is worth applying */
+            classifications: {
+                label: string;
+                wallets: number;
+                fills: number;
+                rule?: string;
+                disclaimer?: string;
+            }[];
+        };
+        WhaleFeed: {
+            /** @enum {string} */
+            scope: "global" | "market";
+            marketId?: string | null;
+            windowMs: number;
+            multiple?: number | null;
+            rows: components["schemas"]["TerminalFill"][];
+            counts: {
+                overThreshold: number;
+                returned: number;
+                marketsWithFills: number;
+            };
+            /** @description per market id, the threshold this feed applied; present even for markets the page cut off, so a missing row is explicable */
+            thresholds: {
+                [key: string]: components["schemas"]["WhaleThreshold"];
+            };
+        };
+        /** @description one window of the metric set D3 requires to be recomputed as a WHOLE when the window changes. Every field is here for every window: a switcher that swaps some numbers and leaves others is a screen that cannot be read. */
+        TraderMetric: {
+            fills: number;
+            /** @description settled markets this wallet traded - the denominator of the win rate, per MARKET and not per fill, because a wallet that bought six times and sold once made one decision */
+            resolvedMarkets: number;
+            wins: number;
+            /** @description null below the sample gate. Never rendered as a percentage: "2 of 3" is not 67% */
+            winRateBps?: number | null;
+            insufficientSample: boolean;
+            /** @description the sentence the UI shows instead of a win rate */
+            sampleNote?: string;
+            sampleGate: number;
+            volumeMicro: number;
+            /** @description settled markets only */
+            realisedMicro: number;
+            /** @description open positions at the last mark we hold; 0 when none */
+            unrealisedMicro: number;
+            bestMicro?: number;
+            worstMicro?: number;
+            maxDrawdownMicro: number;
+            avgHoldMs: number;
+            medianHoldMs?: number;
+            openFills?: number;
+            matchedPositions?: number;
+            distinctMarkets?: number;
+            categories?: number;
+            /** @enum {string} */
+            source?: "rollup" | "sampled";
+            asOfMs?: number;
+            computedMs?: number;
+            /** @description the materialised row's value, when one exists */
+            storedWinRateBps?: number | null;
+        };
+        /** @description one point of the cumulative realised curve. `peakMicro` and `drawdownMicro` are REQUIRED: the prompt's constraint is that drawdown appears wherever PnL appears, and the way to make that structural is for a curve point to be unable to exist without it. */
+        CurvePoint: {
+            tsMs: number;
+            cumMicro: number;
+            peakMicro: number;
+            drawdownMicro: number;
+            openPositions?: number;
+        };
+        TraderDossier: {
+            anonWallet: string;
+            /** @enum {string} */
+            window: "7d" | "30d" | "90d" | "all";
+            windows: string[];
+            metrics: {
+                [key: string]: components["schemas"]["TraderMetric"];
+            };
+            curve: components["schemas"]["CurvePoint"][];
+            curveWindow?: string;
+            /** @enum {string} */
+            curveSource: "rollup" | "sampled";
+            maxDrawdownMicro: number;
+            /** @description category shares in bps, with a denominator of the sum of |realised| per category so the shares of a mixed win/loss book add to 10000 */
+            breakdown: {
+                category: string;
+                fills: number;
+                notionalMicro: number;
+                realisedMicro: number;
+                shareBps: number;
+            }[];
+            positions: components["schemas"]["Position"][];
+            fills: components["schemas"]["TraderFill"][];
+            /** @description the behaviour labels that ARE publishable, each with its methodology. `insider_suspect` is computed and stored but never published: a false accusation about a named person is not a feature, and the classifier's own false-positive rate is the reason the disclaimer exists. */
+            behaviour: components["schemas"]["LabelFact"][];
+            /** @description the sentence behind every number, shipped with the numbers it explains rather than behind a link a user has to go and find */
+            methodology: {
+                [key: string]: unknown;
+            };
+        };
+        TraderFill: components["schemas"]["TerminalFill"] & {
+            /** @description false while the market is open; realised is then 0 and not a guess */
+            resolved: boolean;
+            winner?: boolean | null;
+            realisedMicro: number;
+        };
+        Position: {
+            marketId?: string;
+            marketSlug?: string;
+            question?: string;
+            outcome?: string;
+            tokenId?: string;
+            size: string;
+            avgEntry: components["schemas"]["Price"];
+            /** @description the last fill WE have seen, as a price string; empty when we have none. Empty and "0" are different claims: empty is about our data, 0 is about the market. */
+            mark: string;
+            /** @enum {string} */
+            markSource?: "last_fill" | "unknown";
+            costBasisMicro: number;
+            valueMicro: number;
+            unrealisedMicro: number;
+            unrealisedBps?: number;
+            /** @description false when the mark is off the market's tick - a stale book's mark */
+            onTick?: boolean;
+            /** @description negative once the market has ended */
+            endsInMs: number;
+            shareOfPortfolioBps?: number;
+        };
+        /** @description what this SOURCE's copies actually cost, measured on our own attempts: our fill price against theirs, in bps. Shown in the UI BEFORE the confirm, and the default is "skip instead of chase" - a copier who chases turns a good source's record into a bad copier's result. */
+        SlippageFacts: {
+            samples: number;
+            medianSlippageBps: number;
+            p90SlippageBps?: number;
+            worstSlippageBps?: number;
+            copied?: number;
+            skipped?: number;
+            skipRateBps: number;
+            medianFillMicro?: number;
+            /** @description the policy default, stated rather than implied */
+            default: string;
+            /** @description the sentence the confirm dialog renders */
+            warning: string;
+        };
+        SourceStats: {
+            /** @description the source's OWN record, including the windows where it lost money. A copy screen that shows only winners is the feature working as a trap. */
+            windows: {
+                windowDays: number;
+                closedTrades: number;
+                realisedMicro: number;
+                feesMicro?: number;
+                netAfterFeesMicro: number;
+                maxDrawdownMicro: number;
+                longestLosingStreak?: number;
+                avgLatencyMs?: number;
+                winRateBps?: number | null;
+                insufficientSample: boolean;
+                sampleNote?: string;
+                /** @description net return per unit of drawdown, in bps - the ranking this list is sorted by. Raw PnL is deliberately not the sort: $50k with a $40k drawdown and $50k with a $4k drawdown are not the same product, and ordering by the first sells the second as a surprise. */
+                riskAdjustedBps?: number;
+                riskAdjustedNote?: string;
+            }[];
+            /** @description the sentence that says HOW the list is sorted, in the payload */
+            ranking: string;
+        };
+        CopySource: {
+            /** @description a pseudonym; an address is never returned (P10 gate c2) */
+            anonWallet: string;
+            windowDays: number;
+            closedTrades: number;
+            realisedMicro: number;
+            feesMicro: number;
+            /** @description signed, and returned negative when it is negative */
+            netAfterFeesMicro: number;
+            /** @description the denominator of the risk-adjusted ratio, stated */
+            maxDrawdownMicro: number;
+            longestLosingStreak: number;
+            avgLatencyMs: number;
+            /** @description null when the source is below the sample gate; the reason is in sampleNote */
+            winRateBps: number | null;
+            insufficientSample: boolean;
+            sampleNote: string;
+            sampleGate: number;
+            riskAdjustedBps: number;
+            riskAdjustedRule: string;
+            copierCount: number;
+            currentlyCopying: boolean;
+            myConfigs: number;
+            updatedMs: number;
+            rank: number;
+        };
+        CopyConfig: {
+            configId: string;
+            sourceAnon: string;
+            /** @enum {string} */
+            mode: "cap" | "ratio";
+            ratioBps?: number | null;
+            maxOrderMicro?: number;
+            maxDailyMicro?: number;
+            enabled: boolean;
+            createdMs?: number;
+            pausedReason?: string | null;
+            /** @description true until the guards call has both an acknowledgement and dry-run history. A config with no guard row is DRY-RUN by construction - the default is safe because the alternative default is a config that starts trading the moment it is read. */
+            dryRun: boolean;
+            guardsFromRow?: boolean;
+            skipIfMovedCents?: number;
+            doNotEnterWithinHours?: number;
+            categoryFilter?: string;
+            minPriceMicro?: number | null;
+            maxPriceMicro?: number | null;
+            takeProfitMicro?: number | null;
+            stopLossMicro?: number | null;
+            warning?: components["schemas"]["SlippageFacts"];
+            sourceStats?: components["schemas"]["SourceStats"];
+        };
+        /** @description one row of the monitor. `dryRun: true` means the engine WOULD have done this; the two lists are separate because a merged one is how a simulation gets read as a trade. */
+        CopyEvent: {
+            action: string;
+            /** @description why it was skipped/refused, in the engine's own words */
+            reason?: string;
+            deviationBps?: number;
+            atMs: number;
+            /** @description empty on a skip and on a dry run: an event with no intent never reached the venue */
+            intentId?: string;
+            marketId?: string;
+            shares?: string;
+            price?: components["schemas"]["Price"];
+            sourcePrice?: components["schemas"]["Price"];
+            dryRun: boolean;
+        };
+        Portfolio: {
+            positions: components["schemas"]["Position"][];
+            /** @description event-level exposure for negRisk events: exactly one outcome pays, so the ceiling is the best leg and NOT the sum of the legs' quoted values, which is a number that cannot happen */
+            negRiskGroups: {
+                eventId: string;
+                eventTitle?: string;
+                legs: number;
+                valueMicro: number;
+                costBasisMicro: number;
+                maxPayoutMicro: number;
+                unrealisedMicro?: number;
+            }[];
+            orders: {
+                intentId: string;
+                marketId?: string;
+                state: string;
+                reason?: string | null;
+                shares?: string;
+                price?: components["schemas"]["Price"];
+                createdMs?: number;
+                notionalMicro?: number;
+                unknownLifecycle?: boolean;
+            }[];
+            /** @description rows the venue reported in a state we do not model. Returned, never filtered: a table that hides them claims every order resolved. */
+            unknownLifecycle: {
+                venueOrderId?: string;
+                intentId: string;
+                state: string;
+                reason?: string;
+                showAsWorking: boolean;
+                atMs: number;
+                unknownLifecycle?: boolean;
+            }[];
+            pnlCurve: components["schemas"]["CurvePoint"][];
+            maxDrawdownMicro?: number;
+            totals: {
+                valueMicro: number;
+                cashMicro: number;
+                equityMicro: number;
+                unrealisedMicro: number;
+                costBasisMicro: number;
+            };
+            /** @description holding pUSD, named and valued in the payload rather than drawn as an unnamed second line: a benchmark a user cannot identify is decoration */
+            benchmark: {
+                kind: string;
+                valueMicro: number;
+                rateBps: number;
+                note: string;
+            };
+            /** @description the column list, so the export a user downloads is the export they were shown. The rows are produced by the client from the same payload: an export endpoint that re-queries is an export that can disagree with the screen. */
+            csv: {
+                columns: string[];
+                note: string;
+            };
+            /** @description where to send a user with no positions (the markets page) */
+            emptyState: string;
+        };
+        WhaleView: {
+            viewId: string;
+            name: string;
+            filters: {
+                [key: string]: unknown;
+            };
+            /** @enum {string|null} */
+            channel?: "telegram" | "email" | "webhook" | null;
+            /** @enum {string} */
+            severity: "info" | "notice" | "urgent";
+            /** @enum {string} */
+            scope: "global" | "market";
+            marketId?: string | null;
+            ruleId?: string | null;
+            createdMs: number;
+            /** @description false for a view bound to no rule, or to a rule with no target: an alert with no target is a notification about nothing */
+            notifies: boolean;
+            firesPerWindow?: number | null;
+            ruleWindowMs?: number | null;
+            ruleEnabled?: boolean | null;
+        };
         /**
          * @description price in (0,1) USDC as a dot-decimal string with at most 6 decimals. Strings are not a stylistic
          *     choice: the venue's own client types these as float (py-clob-client-v2 1.1.0), and we refuse to let
@@ -707,11 +1454,60 @@ export interface components {
                 immutable?: boolean;
             };
         };
+        /** @description One wallet in one ranking. `winRateBps` is null below the sample gate and `insufficientSample` says so, because a win rate off three resolved markets is a coin that landed twice. `matched` names the markets this wallet was found in, so "shared exposure" is checkable rather than asserted. */
+        RadarRow: {
+            anonWallet: string;
+            matched: {
+                marketId: string;
+                question: string;
+            }[];
+            fills: number;
+            boughtMicro: number;
+            soldMicro: number;
+            /** @description realised only; an open position contributes nothing */
+            realisedMicro: number;
+            winRateBps: number | null;
+            insufficientSample: boolean;
+            labels: components["schemas"]["LabelFact"][];
+            rank: number;
+            /** @description the sentence that explains this row's position in this ranking */
+            reason: string;
+        };
+        RadarResult: {
+            items: components["schemas"]["RadarRow"][];
+            /** @enum {string} */
+            ranking: "active" | "profit" | "earliest" | "overlap";
+            rankings: {
+                [key: string]: components["schemas"]["RadarRow"][];
+            };
+            rankingsMeta: {
+                id: string;
+                label: string;
+                question: string;
+            }[];
+            /** @description wallets the profit ranking will not place, each with the gate's own sentence */
+            unranked: Record<string, never>[];
+            markets: string[];
+            scanned: number;
+            sampleGate: number;
+            quota: {
+                plan: string;
+                usedToday: number;
+                perDay: number;
+                cached: boolean;
+                jobId: string | null;
+                pollMs: number;
+                note: string;
+            };
+            costNote: string;
+        } & {
+            [key: string]: unknown;
+        };
         Error: {
             /** @description no `detail` field, ever: that is where a Python message would leak. Logs carry the code and the request id instead. */
             error: {
                 /** @enum {string} */
-                code: "RISK_HALT" | "MARKET_NOT_ACCEPTING" | "NO_ORDER_BOOK" | "STALE_QUOTE" | "BAD_SIDE" | "UNKNOWN_TICK" | "OFF_TICK" | "BAD_MARKET_META" | "BELOW_MIN_SIZE" | "ZERO_SIZE" | "BAD_AMOUNT" | "OVER_ORDER_CAP" | "PRICE_FAR_FROM_MID" | "TOO_MANY_OPEN" | "DAILY_CAP" | "IDEM_CONFLICT" | "IDEM_IN_PROGRESS" | "IDEM_KEY_REQUIRED" | "RISK_UNAVAILABLE" | "SIGNER_UNAVAILABLE" | "BAD_REASON" | "NOT_FOUND" | "VALIDATION" | "INTERNAL" | "UNAUTHENTICATED" | "SESSION_STALE" | "SESSION_REVOKED" | "SESSION_MISMATCH" | "ADMIN_REQUIRED" | "LOGIN_FAILED" | "ACCOUNT_LOCKED" | "TOTP_REQUIRED" | "TOTP_INVALID" | "TOTP_LOCKED" | "ADDRESS_COOLDOWN" | "ADDRESS_LIMIT" | "REMOVE_DURING_COOLDOWN" | "NO_SUCH_RESOURCE" | "REFRESH_UNKNOWN" | "REFRESH_REUSED" | "REFRESH_EXPIRED" | "TELEGRAM_REPLAY" | "TELEGRAM_INVALID" | "SECURITY_ENV_MISSING" | "KEYSTORE_TAMPER" | "BREAK_GLASS_DENIED" | "AUTHZ_UNDECLARED";
+                code: "RISK_HALT" | "MARKET_NOT_ACCEPTING" | "NO_ORDER_BOOK" | "STALE_QUOTE" | "BAD_SIDE" | "UNKNOWN_TICK" | "OFF_TICK" | "BAD_MARKET_META" | "BELOW_MIN_SIZE" | "ZERO_SIZE" | "BAD_AMOUNT" | "OVER_ORDER_CAP" | "PRICE_FAR_FROM_MID" | "TOO_MANY_OPEN" | "DAILY_CAP" | "IDEM_CONFLICT" | "IDEM_IN_PROGRESS" | "IDEM_KEY_REQUIRED" | "RISK_UNAVAILABLE" | "SIGNER_UNAVAILABLE" | "BAD_REASON" | "NOT_FOUND" | "REFUSED" | "VALIDATION" | "INTERNAL" | "UNAUTHENTICATED" | "SESSION_STALE" | "SESSION_REVOKED" | "SESSION_MISMATCH" | "ADMIN_REQUIRED" | "LOGIN_FAILED" | "ACCOUNT_LOCKED" | "TOTP_REQUIRED" | "TOTP_INVALID" | "TOTP_LOCKED" | "ADDRESS_COOLDOWN" | "ADDRESS_LIMIT" | "REMOVE_DURING_COOLDOWN" | "NO_SUCH_RESOURCE" | "REFRESH_UNKNOWN" | "REFRESH_REUSED" | "REFRESH_EXPIRED" | "TELEGRAM_REPLAY" | "TELEGRAM_INVALID" | "SECURITY_ENV_MISSING" | "KEYSTORE_TAMPER" | "BREAK_GLASS_DENIED" | "AUTHZ_UNDECLARED" | "BAD_FIELD" | "QUOTA_EXCEEDED" | "RADAR_SCOPE";
                 /** @description user-safe by construction */
                 message: string;
                 retryable: boolean;
@@ -749,6 +1545,15 @@ export interface components {
         };
         /** @description request rejected before any money logic ran */
         Validation: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description the account's budget for this operation is spent. `QUOTA_EXCEEDED` carries the plan, the numbers used, and the fact that a cached repeat is free - a 429 that says only "spent" leaves the user unable to tell whether the next scan costs anything. */
+        RateLimited: {
             headers: {
                 [name: string]: unknown;
             };
@@ -2201,6 +3006,569 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
+        };
+    };
+    getTapeFills: {
+        parameters: {
+            query?: {
+                /** @description when present, only this market's fills; the market must exist (404 otherwise) */
+                marketId?: string;
+                /** @description exclusive cursor = the VENUE's clock (`ts_ms`). Mixing it with our ingest clock produces a duplicate or a hole, and a hole in a tape reads as a suppressed trade. */
+                since?: number;
+                /** @description how far back the response (and the whale threshold it ships) reaches. Capped at 24h: the threshold is computed from a bounded in-process sample, and a bound that is not enforced is a bound that becomes a table scan the first time somebody asks for 30 days. */
+                windowMs?: number;
+                limit?: number;
+                side?: "BUY" | "SELL";
+                outcome?: string;
+                category?: string;
+                /** @description only fills whose wallet carries this PUBLISHABLE label; an unpublishable one matches nothing */
+                label?: "whale" | "smart_money" | "new_wallet" | "cluster" | "wash_like";
+                /** @description a pseudonym from `anonWallet`, never an address. An unknown value is a 404 rather than an empty page, because "no fills" and "no such trader" are different answers. */
+                wallet?: string;
+                /** @description absolute floor in micro-USDC (D2's absolute filter, alongside the relative whale rule) */
+                minNotionalMicro?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description fills, newest first, each carrying the whale threshold it was judged against */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Stamped"] & {
+                        rows: components["schemas"]["TerminalFill"][];
+                        counts: components["schemas"]["TapeCounts"];
+                        windowMs: number;
+                        /** @description exclusive venue-clock cursor */
+                        nextCursor?: number | null;
+                        filterNote: string;
+                    };
+                };
+            };
+            404: components["responses"]["NotFound"];
+            422: components["responses"]["Validation"];
+            500: components["responses"]["Internal"];
+        };
+    };
+    getTapeFacets: {
+        parameters: {
+            query?: {
+                marketId?: string;
+                windowMs?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description the window's distribution, its thresholds and its facets */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Stamped"] & components["schemas"]["TapeFacets"];
+                };
+            };
+            404: components["responses"]["NotFound"];
+            422: components["responses"]["Validation"];
+            500: components["responses"]["Internal"];
+        };
+    };
+    getWhales: {
+        parameters: {
+            query?: {
+                /** @description per-market mode; absent means the global feed */
+                marketId?: string;
+                windowMs?: number;
+                /** @description relative term as a whole multiple of the market's median fill (20 = 20x). Bounded, because "10,000x the median" is a filter that can never match and a control that cannot match anything is a broken control. */
+                multiple?: number;
+                minSeverity?: "info" | "notice" | "urgent";
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description the feed and the rule it was computed with */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Stamped"] & components["schemas"]["WhaleFeed"];
+                };
+            };
+            404: components["responses"]["NotFound"];
+            422: components["responses"]["Validation"];
+            500: components["responses"]["Internal"];
+        };
+    };
+    getTrader: {
+        parameters: {
+            query?: {
+                /** @description which window `curve`, `positions` and `breakdown` describe; all four metrics always ship */
+                window?: "7d" | "30d" | "90d" | "all";
+            };
+            header?: never;
+            path: {
+                anon: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description the dossier */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Stamped"] & components["schemas"]["TraderDossier"];
+                };
+            };
+            404: components["responses"]["NotFound"];
+            422: components["responses"]["Validation"];
+            500: components["responses"]["Internal"];
+        };
+    };
+    listCopySources: {
+        parameters: {
+            query?: {
+                windowDays?: number;
+                sort?: "riskAdjusted" | "netAfterFees" | "closedTrades" | "drawdown";
+                onlyCopying?: boolean;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description ranked sources, each with its drawdown, its gate and its losing windows */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Stamped"] & {
+                        rows: components["schemas"]["CopySource"][];
+                        count: number;
+                        windowDays: number;
+                        sort: string;
+                        sorts: string[];
+                        sortNote: string;
+                        ranking: string;
+                        sampleGate: number;
+                        emptyNote: string;
+                        note: string;
+                    };
+                };
+            };
+            401: components["responses"]["Denied"];
+            422: components["responses"]["Validation"];
+            500: components["responses"]["Internal"];
+        };
+    };
+    listCopyConfigs: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description configs for this account */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Stamped"] & {
+                        items: components["schemas"]["CopyConfig"][];
+                        count: number;
+                        note: string;
+                    };
+                };
+            };
+            401: components["responses"]["Denied"];
+            404: components["responses"]["NotFound"];
+            422: components["responses"]["Validation"];
+            500: components["responses"]["Internal"];
+        };
+    };
+    createCopyConfig: {
+        parameters: {
+            query?: never;
+            header?: {
+                /**
+                 * @description 8-128 chars of [A-Za-z0-9_-]. Required on every mutating endpoint; the 400 for its absence is part
+                 *     of the contract so a client cannot "just try without it" once and conclude it is optional.
+                 */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @description the pseudonym from `anonWallet` */
+                    sourceAnon: string;
+                    /**
+                     * @default cap
+                     * @enum {string}
+                     */
+                    mode?: "cap" | "ratio";
+                    /** @description required when mode=ratio; the multiplier in basis points (10000 = 1x mirror) */
+                    ratioBps?: number;
+                    /** @description per-trade cap, micro-USDC */
+                    maxOrderMicro: number;
+                    /** @description daily cap, micro-USDC */
+                    maxDailyMicro: number;
+                    blockedMarkets?: string[];
+                };
+            };
+        };
+        responses: {
+            /** @description the config, its warning, and the source's record */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Stamped"] & {
+                        configId: string;
+                        sourceAnon: string;
+                        mode?: string;
+                        /**
+                         * @description creation is dry-run by construction; the const is the contract's promise
+                         * @constant
+                         */
+                        dryRun: true;
+                        maxOrderMicro?: number;
+                        maxDailyMicro?: number;
+                        warning: components["schemas"]["SlippageFacts"];
+                        sourceStats: components["schemas"]["SourceStats"];
+                        next: string;
+                    };
+                };
+            };
+            /** @description missing Idempotency-Key; a malformed one is a 422 naming the field */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            401: components["responses"]["Denied"];
+            404: components["responses"]["NotFound"];
+            422: components["responses"]["Validation"];
+            500: components["responses"]["Internal"];
+        };
+    };
+    setCopyGuards: {
+        parameters: {
+            query?: never;
+            header?: {
+                /**
+                 * @description 8-128 chars of [A-Za-z0-9_-]. Required on every mutating endpoint; the 400 for its absence is part
+                 *     of the contract so a client cannot "just try without it" once and conclude it is optional.
+                 */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    configId: string;
+                    /** @description false is the only way live copying starts, and it needs the two conditions above */
+                    dryRun?: boolean;
+                    acknowledgeSlippage?: boolean;
+                    /** @description skip the copy if the price moved this many cents against us before we could act. DEFAULT 2, and the default is "skip instead of chase": a copied fill that chases is the one that turns a good source's record into a bad copier's. */
+                    skipIfMovedCents?: number;
+                    /** @description default 24. Entering a market that resolves in minutes is a coin flip with fees. */
+                    doNotEnterWithinHours?: number;
+                    /** @description only copy into this category; '' means every category */
+                    categoryFilter?: string;
+                    minPriceMicro?: number;
+                    maxPriceMicro?: number;
+                    takeProfitMicro?: number;
+                    stopLossMicro?: number;
+                };
+            };
+        };
+        responses: {
+            /** @description the config with its guards; `dryRun:false` means live copying has begun */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Stamped"] & components["schemas"]["CopyConfig"];
+                };
+            };
+            /** @description missing Idempotency-Key; a malformed one is a 422 naming the field */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            401: components["responses"]["Denied"];
+            404: components["responses"]["NotFound"];
+            /** @description REFUSED - the state does not allow this yet (no acknowledged slippage, or no dry-run history for this config). Distinct from 400 on purpose: the body was well-formed and the request is refused by the state, and a client that retries a 400 forever is worse than one that knows to wait. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            422: components["responses"]["Validation"];
+            500: components["responses"]["Internal"];
+        };
+    };
+    getCopyMonitor: {
+        parameters: {
+            query: {
+                configId: string;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description both lists, the slippage the source produced, and why the skips were skipped */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Stamped"] & {
+                        configId: string;
+                        sourceAnon: string;
+                        live: components["schemas"]["CopyEvent"][];
+                        wouldDo: components["schemas"]["CopyEvent"][];
+                        /** @description the subset of `live` the engine refused to copy, with the engine's reason */
+                        skips: components["schemas"]["CopyEvent"][];
+                        slippage: components["schemas"]["SlippageFacts"];
+                        sourceStats: components["schemas"]["SourceStats"];
+                        skipReasons: string[];
+                    };
+                };
+            };
+            401: components["responses"]["Denied"];
+            404: components["responses"]["NotFound"];
+            500: components["responses"]["Internal"];
+        };
+    };
+    getPortfolio: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description positions, groups, orders, curve, totals, benchmark */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Stamped"] & components["schemas"]["Portfolio"];
+                };
+            };
+            401: components["responses"]["Denied"];
+            500: components["responses"]["Internal"];
+        };
+    };
+    createRadarRun: {
+        parameters: {
+            query?: never;
+            header?: {
+                /**
+                 * @description 8-128 chars of [A-Za-z0-9_-]. Required on every mutating endpoint; the 400 for its absence is part
+                 *     of the contract so a client cannot "just try without it" once and conclude it is optional.
+                 */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    marketIds: string[];
+                    /** @enum {string} */
+                    ranking?: "active" | "profit" | "earliest" | "overlap";
+                };
+            };
+        };
+        responses: {
+            /** @description the rankings; `quota.jobId` is set when the scan was enqueued */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Stamped"] & components["schemas"]["RadarResult"];
+                };
+            };
+            /** @description missing Idempotency-Key; a malformed one is a 422 naming the field */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            401: components["responses"]["Denied"];
+            422: components["responses"]["Validation"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+        };
+    };
+    getRadarRun: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description the scan's result */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Stamped"] & components["schemas"]["RadarResult"];
+                };
+            };
+            401: components["responses"]["Denied"];
+            404: components["responses"]["NotFound"];
+            500: components["responses"]["Internal"];
+        };
+    };
+    listWhaleViews: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description saved views */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Stamped"] & {
+                        items: components["schemas"]["WhaleView"][];
+                        count: number;
+                    };
+                };
+            };
+            401: components["responses"]["Denied"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Validation"];
+            500: components["responses"]["Internal"];
+        };
+    };
+    createWhaleView: {
+        parameters: {
+            query?: never;
+            header?: {
+                /**
+                 * @description 8-128 chars of [A-Za-z0-9_-]. Required on every mutating endpoint; the 400 for its absence is part
+                 *     of the contract so a client cannot "just try without it" once and conclude it is optional.
+                 */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    name: string;
+                    /**
+                     * @default notice
+                     * @enum {string}
+                     */
+                    minSeverity?: "info" | "notice" | "urgent";
+                    minNotionalMicro?: number;
+                    multiple?: number;
+                    /** @description per-market view; absent means a global one */
+                    marketId?: string;
+                    /**
+                     * @description when present this view NOTIFIES, which requires a target - a per-market view sets one. A global view with a channel is refused (the schema's own rule, `rule_has_target`).
+                     * @enum {string}
+                     */
+                    channel?: "telegram" | "email" | "webhook";
+                    /**
+                     * @default notice
+                     * @enum {string}
+                     */
+                    severity?: "info" | "notice" | "urgent";
+                    firesPerWindow?: number;
+                    ruleWindowMs?: number;
+                };
+            };
+        };
+        responses: {
+            /** @description the saved view, with the rule it created */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Stamped"] & components["schemas"]["WhaleView"];
+                };
+            };
+            /** @description missing Idempotency-Key; a malformed one is a 422 naming the field */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            401: components["responses"]["Denied"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Validation"];
+            500: components["responses"]["Internal"];
         };
     };
 }

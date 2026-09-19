@@ -1,5 +1,5 @@
 import { notFound } from "next/navigation";
-import { t } from "@/i18n/t";
+import { t } from "@/i18n/terminal";
 import { serverRead } from "@/api/server-read";
 import { TraderDossierView } from "@/terminal/DossierView";
 import type { TraderDossier } from "@/terminal/wire";

@@ -12,7 +12,14 @@
  * unused", which looked like dead copy, and a *missing* one would have been reported as nothing at all. A
  * checker that silently reads too little is worse than no checker, because the build still says ok.
  *
- * `--self-test` plants the two cases that must fail and fails if they do not.
+ * The third revision adds the route-family rule. `en.ts` is loaded by every route; `en.terminal.ts` is loaded
+ * only by the routes that import `@/i18n/terminal`. So a `terminal.*` key asked for by a file that imports
+ * `@/i18n/t` would render the key itself — the same class of bug as a missing key, and it is invisible to a
+ * dictionary-only check because the key IS declared. The split is worth it: the terminal's 319 keys were riding
+ * along in `/markets`, which renders no terminal surface, and the measured first-load cost of the initial route
+ * went over the P08 budget because of it.
+ *
+ * `--self-test` plants the three cases that must fail and fails if any is not caught.
  */
 import { readFileSync, readdirSync, statSync, existsSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import path from "node:path";
@@ -79,15 +86,28 @@ export function checkTree(root) {
   if (!existsSync(dictPath)) return { fatal: "src/i18n/en.ts missing" };
   const dictText = readFileSync(dictPath, "utf8");
   const declared = new Set([...dictText.matchAll(/^\s{2}"([^"]+)":/gm)].map((m) => m[1]));
+  // The route-family dictionary is part of the same key space: a key may live in either file, and a duplicate
+  // across the two is a failure because `lookup()` would only ever reach one of them.
+  const familyPath = path.join(root, "src/i18n/en.terminal.ts");
+  const familyText = existsSync(familyPath) ? readFileSync(familyPath, "utf8") : "";
+  const family = new Set([...familyText.matchAll(/^\s{2}"([^"]+)":/gm)].map((m) => m[1]));
+  for (const k of family) declared.add(k);
+  const duplicated = [...family].filter((k) => new Set([...dictText.matchAll(/^\s{2}"([^"]+)":/gm)].map((m) => m[1])).has(k));
   const used = new Map();
   const dynamic = [];
+  const misplaced = [];
   for (const dir of ["src", "app"]) {
     const abs = path.join(root, dir);
     if (!existsSync(abs)) continue;
     for (const file of walk(abs, ["i18n"])) {
       const text = stripComments(readFileSync(file, "utf8"));
+      const registersFamily = /from\s+"@\/i18n\/terminal"/.test(text);
       for (const m of text.matchAll(USED_KEY)) {
         if (!used.has(m[1])) used.set(m[1], path.relative(root, file));
+        if (m[1].startsWith("terminal.") && !registersFamily) {
+          misplaced.push(`${path.relative(root, file)} asks for "${m[1]}" and imports t from "@/i18n/t", ` +
+            `so the terminal dictionary is not in this route's graph — it would render the key itself`);
+        }
       }
       for (const m of text.matchAll(ANY_CALL)) {
         const arg = m[1].trim();
@@ -100,7 +120,7 @@ export function checkTree(root) {
   const missing = [...used.keys()].filter((k) => !declared.has(k)).sort();
   const unused = [...declared].filter((k) => !used.has(k)).sort();
   const malformed = [...declared].filter((k) => !KEY_SHAPE.test(k)).sort();
-  return { declared, used, missing, unused, malformed, dynamic };
+  return { declared, used, missing, unused, malformed, dynamic, misplaced, duplicated };
 }
 
 function report(result) {
@@ -111,9 +131,14 @@ function report(result) {
   for (const k of result.malformed) console.error(`i18n-check: key "${k}" is not screen.component.element[#variant][.state]`);
   for (const k of result.missing) console.error(`i18n-check: ${result.used.get(k)} asks for "${k}" and en.ts has no such key`);
   for (const d of result.dynamic) console.error(`i18n-check: dynamic key, unchecked by definition — ${d}`);
+  for (const m of result.misplaced ?? []) console.error(`i18n-check: ${m}`);
+  for (const k of result.duplicated ?? []) console.error(`i18n-check: "${k}" is declared in both en.ts and en.terminal.ts; only one can win the lookup`);
   for (const k of result.unused) console.warn(`i18n-check (advisory): "${k}" is declared and unused`);
-  if (result.missing.length || result.malformed.length || result.dynamic.length) {
-    console.error(`i18n-check: FAIL (${result.missing.length} missing, ${result.malformed.length} malformed, ${result.dynamic.length} dynamic)`);
+  const misplaced = result.misplaced?.length ?? 0;
+  const duplicated = result.duplicated?.length ?? 0;
+  if (result.missing.length || result.malformed.length || result.dynamic.length || misplaced || duplicated) {
+    console.error(`i18n-check: FAIL (${result.missing.length} missing, ${result.malformed.length} malformed, ` +
+      `${result.dynamic.length} dynamic, ${misplaced} without their route family, ${duplicated} declared twice)`);
     return 1;
   }
   console.log(`i18n-check: ok (${result.declared.size} keys, ${result.used.size} used, ${result.unused.length} unused-advisory)`);
@@ -131,6 +156,16 @@ function selfTest() {
     mkdirSync(path.join(dir, "src/i18n"), { recursive: true });
     mkdirSync(path.join(dir, "src/ui"), { recursive: true });
     writeFileSync(path.join(dir, "src/i18n/en.ts"), 'export const en = {\n  "widget.plain.found": "here",\n};\n');
+    // A declared key that would still render as itself, because the file asking for it never pulls in the
+    // dictionary that holds it. This is the case a dictionary-only check cannot see.
+    writeFileSync(path.join(dir, "src/i18n/en.terminal.ts"), 'export const enTerminal = {\n  "terminal.tape.planted": "here",\n};\n');
+    writeFileSync(
+      path.join(dir, "src/ui/PlantedFamily.tsx"),
+      'import { t } from "@/i18n/t";\n' +
+      'export function PlantedFamily() {\n' +
+      '  return <p>{t("terminal.tape.planted")}</p>;\n' +
+      "}\n",
+    );
     writeFileSync(
       path.join(dir, "src/ui/Planted.tsx"),
       'import { t } from "@/i18n/t";\n' +
@@ -145,10 +180,11 @@ function selfTest() {
     // A comment-only key must not appear as used, and a comment's example of a dynamic call must not be
     // reported as one. Both are the "checker reads too much" failure, which P08 met already in §2.8.
     const clean = !out.used?.has("widget.plain.inComment") && (out.dynamic?.length ?? 0) === 0;
-    const ok = caughtMissing && clean;
+    const caughtFamily = (out.misplaced?.length ?? 0) === 1;
+    const ok = caughtMissing && clean && caughtFamily;
     console.log(ok
-      ? "i18n-check --self-test: ok (planted plain + interpolated keys caught; prose in comments ignored)"
-      : `i18n-check --self-test: FAIL — missing=${JSON.stringify(out.missing ?? out.fatal)} usedComment=${out.used?.has("widget.plain.inComment")} dynamic=${JSON.stringify(out.dynamic)}`);
+      ? "i18n-check --self-test: ok (planted plain + interpolated keys caught; a terminal key outside its route family caught; prose in comments ignored)"
+      : `i18n-check --self-test: FAIL — missing=${JSON.stringify(out.missing ?? out.fatal)} usedComment=${out.used?.has("widget.plain.inComment")} dynamic=${JSON.stringify(out.dynamic)} misplaced=${JSON.stringify(out.misplaced)}`);
     return ok ? 0 : 1;
   } finally {
     rmSync(dir, { recursive: true, force: true });

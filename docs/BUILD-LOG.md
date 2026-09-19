@@ -430,6 +430,44 @@ is now the first thing done after touching a route. A second finding came out of
 budget test creates its own account, and the new `idempotency_keys` row hits an FK to `users`, so a made-up uid
 that spent budget fine now 500'd. The test creates the account; a real user always has a row.
 
+**Then the phase's loose ends, which were not loose ends.**
+Closing P10 meant re-running the gates that P09 and P10 built on top of, and both of them had been describing a
+tree that had moved.
+
+*Re-running P08 failed it* — 12/15, four regressions from two phases of work on top of it. `schema.gen.ts` was
+stale against the contract (regenerated); the terminal's stylesheet and layout shipped a `44px`, a `4.5rem` and
+two `6px` literals past the token scan (now `--pgm-min-touch-target`, `--pgm-space-16` and `var(--pgm-space-2)`,
+because the design system owns dimensions and 6px was on nobody's grid); the live tape rendered a `kind="price"`
+with a freshness and **no age**, so a price could say "stale" without saying how old (the row now carries
+`ageMs`, the same quantity the header shows); and the P08 bundle artefact described a build that no longer
+existed. Its own parser also crashed before running a single check: `brace_at` read a `//` comment containing an
+apostrophe as an unterminated string, which is exactly the class of bug the comment in that function already
+documents once. All four fixed, P08 re-recorded at **15/15**, P09 **7/7**, P10 **11/11**.
+
+*And the P08 first-load number had genuinely gone over budget*: `/markets` measured **204.4 KB against a 200 KB
+budget**, because `en.ts` is one object that every route that calls `t()` imports — the terminal's 319 keys were
+riding along in a page that renders no terminal surface. The dictionary is now split by route family
+(`en.ts` + `en.terminal.ts`, registered by `src/i18n/terminal.ts`), and `scripts/i18n-check.mjs` fails the build
+when a `terminal.*` key is asked for by a file that does not import the family — a missing key's failure mode
+reached from the other direction. Measured after: `/markets` 199.1 KB, everything else 188.5–191.6 KB, splitting
+still proven.
+
+*The measurement tool was measuring a stranger.* The first re-record said "money layer absent" on every route,
+which the build contradicted: a `next start` from an earlier run still held port 3111, `waitReady()` asked the
+port and believed the answer, and the run described the *previous* build. `measure-first-load.mjs` now probes the
+port before spawning and refuses to measure a server it did not start. The gate's c15 also learned to name the
+test file that failed instead of only counting it — which is how a genuinely flaky `CopyView.test.tsx` (the copy
+screen's monitor assertion raced the monitor fetch; ~1 run in 5) was found and fixed rather than dismissed as
+load.
+
+**Two claims changed status in this pass.** The 60fps line is no longer only prose: `npm run measure:tape` drives
+the tape's real functions at 200 fills/second and records **2.134 ms of JavaScript per second of load** against a
+16.7 ms frame (worst release 0.884 ms), `c11` fails an artefact that lacks the numbers *or* the caveat that
+paint/layout/compositing are unmeasured, and `src/terminal/perf.test.ts` asserts the same budgets in the suite.
+And the pixel half is still `[UNVERIFIED]`: a browser cannot run here — Playwright's Chromium download fails its
+host-requirements check — so the honest statement is "the JS half is measured, the pixels are not", in the
+artefact, in the gate, and in `docs/P10-frontend-terminal.md` §2.12.
+
 **Verified at the idempotency commit.** `python3 -m unittest discover -s tests` **783 tests OK**; `make p10`
 **10/10** re-recorded to `docs/verification/P10-gate.txt`; `check-openapi` **293 passed, 0 failed** over a
 37-path contract.

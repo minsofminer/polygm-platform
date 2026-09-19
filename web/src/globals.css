@@ -904,7 +904,8 @@ body {
   display: flex;
   gap: var(--pgm-space-1);
   align-items: center;
-  min-height: 44px;               /* ROW_H in tape.ts: the virtual window's arithmetic and this must agree */
+  min-height: var(--pgm-min-touch-target);   /* ROW_H in tape.ts must agree with this: the virtual window's arithmetic
+                                                depends on it, and 44px is also the touch target P03 refuses to scale down */
   flex-wrap: wrap;
 }
 
@@ -1078,7 +1079,7 @@ body {
 .pgm-whales__ratio {
   display: grid;
   font-family: var(--pgm-font-dense);
-  min-width: 4.5rem;
+  min-width: var(--pgm-space-16);     /* a stable column for the ratio, on the spacing grid */
 }
 
 .pgm-whales__refusal,

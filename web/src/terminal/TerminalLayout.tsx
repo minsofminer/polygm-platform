@@ -17,7 +17,7 @@
  *    an older build that had four rails must not be applied to a three-rail screen and collapse one to zero.
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { t } from "@/i18n/t";
+import { t } from "@/i18n/terminal";
 
 export const LAYOUT_VERSION = 1;
 export const RAIL_MIN = 0.1;
@@ -189,7 +189,11 @@ export function TerminalLayout({ userId, left, center, right, header }: Props) {
   return (
     <div
       className="pgm-terminal"
-      style={{ gridTemplateColumns: `${cols.left * 100}% 6px ${cols.center * 100}% 6px ${cols.right * 100}%` }}
+      // The gutters are the drag handles. `var(--pgm-space-2)` rather than a px literal: P08's c5 scans every
+      // shipped file for dimension literals, and it was right to fail this one — the handle is a dimension the
+      // design system owns, and 6px was not on its grid or in its tokens.
+      style={{ gridTemplateColumns: `${cols.left * 100}% var(--pgm-space-2) ${cols.center * 100}% ` +
+        `var(--pgm-space-2) ${cols.right * 100}%` }}
     >
       {header}
       <aside className="pgm-terminal__panel pgm-terminal__panel--left" aria-label={t("terminal.tabs.watchlists")}>

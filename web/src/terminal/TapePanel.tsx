@@ -21,7 +21,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Number as NumberView } from "@/num/Number";
 import { StaleIndicator } from "@/num/StaleIndicator";
 import { freshnessOf, type Freshness } from "@/api/envelope";
-import { t } from "@/i18n/t";
+import { t } from "@/i18n/terminal";
 import { useTape } from "./useTerminal";
 import {
   EMPTY_FILTERS,
@@ -134,6 +134,9 @@ export function TapePanel({
   }, [rows, sound, followed]);
 
   const fresh: Freshness = stamp ? freshnessOf(stamp, Date.now()) : "unknown";
+  // The age rides with the freshness: a row's price cannot say "stale" without saying how old, and P08's c10
+  // fails a `kind="price"` that has a freshness and no age. Same quantity the header shows, same clock.
+  const ageMs = stamp ? Math.max(0, Date.now() - stamp.asOf) : null;
   const win = useMemo(() => virtualWindow(rows.length, scrollTop, viewportH), [rows.length, scrollTop, viewportH]);
   const median = filters.marketId
     ? (facets?.markets.find((m) => m.marketId === filters.marketId)?.thresholdMicro ?? 0)
@@ -143,7 +146,7 @@ export function TapePanel({
     <section className="pgm-tape" aria-label={C.label}>
       <header className="pgm-tape__head">
         <h2>{C.title}</h2>
-        <StaleIndicator freshness={fresh} ageMs={stamp ? Math.max(0, Date.now() - stamp.asOf) : null} />
+        <StaleIndicator freshness={fresh} ageMs={ageMs} />
         <span className="pgm-tape__rate" title={C.rateHint}>
           {t("terminal.tape.row.rate", { n: arrivalRate(rows, Date.now()) })}
         </span>
@@ -179,6 +182,7 @@ export function TapePanel({
             key={`${row.conditionId}-${row.tsMs}-${row.anonWallet}-${row.notionalMicro}`}
             row={row}
             fresh={fresh}
+            ageMs={ageMs}
             open={openTooltip === row.anonWallet + row.tsMs}
             onOpen={setOpenTooltip}
             onSelectMarket={onSelectMarket}
@@ -303,6 +307,7 @@ function FilterBar({
 function TapeRow({
   row,
   fresh,
+  ageMs,
   open,
   onOpen,
   onSelectMarket,
@@ -311,6 +316,7 @@ function TapeRow({
 }: {
   row: TerminalFill;
   fresh: Freshness;
+  ageMs: number | null;
   open: boolean;
   onOpen: (key: string | null) => void;
   onSelectMarket?: (marketId: string) => void;
@@ -369,7 +375,8 @@ function TapeRow({
       <span className="pgm-tape__outcome">{row.outcome}</span>
       {/* The row's own freshness, never a hardcoded "live": a tape whose stamp has gone stale must render its
           prices as such, which is the P05/P08 rule this phase inherits. */}
-      <NumberView kind="price" value={priceUnitsFor(row.price, row.tick)} tick={row.tick} freshness={fresh} />
+      <NumberView kind="price" value={priceUnitsFor(row.price, row.tick)} tick={row.tick} freshness={fresh}
+        staleMs={ageMs} />
       <NumberView kind="size" value={sharesWhole(row.shares)} />
       <span className="pgm-tape__notional" title={thresholdSentence(row)}>
         {formatMicro(row.notionalMicro)}

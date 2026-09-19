@@ -29,6 +29,22 @@ if (!existsSync(path.join(ROOT, ".next", "BUILD_ID"))) {
   process.exit(1);
 }
 
+// A stale server on this port used to be measured as if it were the build in front of us: `waitReady()`
+// asked the port and got an answer, from an OLD process serving an OLD `.next`. The second run of this script
+// after a rebuild therefore reported numbers for the tree before it, which is the one failure a measurement
+// tool must not have. Speaking to the port before spawning is the check, and a child that dies early (the port
+// is held by something that is not HTTP) is a hard error rather than a silent measurement of a stranger.
+try {
+  const probe = await fetch(BASE + "/", { signal: AbortSignal.timeout(1500) });
+  if (probe.status < 500) {
+    console.error(`measure-first-load: something is already serving ${BASE} (http ${probe.status}). ` +
+      "Kill it first — measuring its build would describe a tree that is not this one.");
+    process.exit(1);
+  }
+} catch {
+  /* nothing there: the port is ours */
+}
+
 const server = spawn(process.execPath, [path.join(ROOT, "node_modules", "next", "dist", "bin", "next"), "start", "-p", String(PORT), "-H", "127.0.0.1"], {
   cwd: ROOT,
   env: { ...process.env, NEXT_TELEMETRY_DISABLED: "1", NODE_ENV: "production" },
@@ -65,6 +81,10 @@ function assets(html) {
 try {
   if (!(await waitReady())) {
     console.error("measure-first-load: the server never answered on port " + PORT + "\n" + serverLog.slice(-1200));
+    process.exit(1);
+  }
+  if (server.exitCode !== null) {
+    console.error("measure-first-load: `next start` exited (" + server.exitCode + ") instead of serving\n" + serverLog.slice(-1200));
     process.exit(1);
   }
 

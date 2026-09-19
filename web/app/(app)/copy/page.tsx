@@ -1,4 +1,4 @@
-import { t } from "@/i18n/t";
+import { t } from "@/i18n/terminal";
 import { CopyView } from "@/terminal/CopyView";
 
 export const dynamic = "force-dynamic";

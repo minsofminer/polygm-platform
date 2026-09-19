@@ -133,8 +133,20 @@ def tree_files(web: Path, exts=(".ts", ".tsx", ".css")):
 
 
 def brace_at(text: str, start: int) -> int:
-    """Index just past the `}` matching the `{` at `start`. String-literal aware, because a `}` inside a
-    route's note string ended the first version of this parser and silently dropped the rest of the ledger."""
+    """Index just past the `}` matching the `{` at `start`. String-literal *and comment* aware.
+
+    Two versions of this parser died on `web/src/api/routes.ts` and each death is the same lesson: a scanner
+    that reads prose as code reports a structure that is not there.
+
+      1. a `}` inside a route's `note` string ended the match and silently dropped the rest of the ledger, so
+         quote tracking went in;
+      2. a comment containing an apostrophe — "the radar's two routes are `built: false`" — opened a string
+         that never closed, so the whole file looked like an unterminated literal and the gate raised
+         `unbalanced braces` before it ran a single check. That one arrived from P10's own comment, which is
+         how a P08 parser found a bug two phases later: the file both gates read keeps growing.
+
+    Comments are skipped rather than tracked, because nothing inside one can be a brace that matters.
+    """
     depth, i, quote = 0, start, None
     while i < len(text):
         c = text[i]
@@ -144,7 +156,18 @@ def brace_at(text: str, start: int) -> int:
                 continue
             if c == quote:
                 quote = None
-        elif c in "\"'`":
+            i += 1
+            continue
+        two = text[i:i + 2]
+        if two == "//":
+            while i < len(text) and text[i] != "\n":
+                i += 1
+            continue
+        if two == "/*":
+            end = text.find("*/", i + 2)
+            i = len(text) if end == -1 else end + 2
+            continue
+        if c in "\"'`":
             quote = c
         elif c == "{":
             depth += 1
@@ -1173,7 +1196,19 @@ def c15_the_test_suite_is_green_and_big_enough_to_mean_it(ctx) -> tuple:
     m = re.search(r"Tests\s+(\d+) passed(?:.*?(\d+) skipped)?", out, re.S)
     problems = []
     if not m:
-        problems.append("no `Tests N passed` line: " + (out.strip().splitlines()[-1][:160] if out.strip() else "no output"))
+        # Name the failing file. Without this the gate said "1 failed | 32 passed" and the *identity* of the
+        # failure — the only part that can be acted on — was in the truncated output. A gate that reports a
+        # count and withholds the name sends the reader to run the suite by hand, which is what happened.
+        fails = [re.sub(r"\s+", " ", ln).strip() for ln in out.splitlines()
+                 if re.search(r"^\s*(FAIL|❯|×)\s", ln) or " failed)" in ln or re.match(r"^\s*FAIL ", ln)]
+        fnames = []
+        for ln in out.splitlines():
+            fm = re.search(r"(src/[\w./-]+\.test\.tsx?)", ln)
+            if fm and ("failed" in ln.lower() or "✗" in ln or "×" in ln):
+                fnames.append(fm.group(1))
+        named = sorted(set(fnames))[:3] or fails[:3]
+        problems.append("no `Tests N passed` line: "
+                        + ("; ".join(named) if named else (out.strip().splitlines()[-1][:160] if out.strip() else "no output")))
     else:
         if int(m.group(1)) < 80:
             problems.append("only %s tests ran — the phase's rules need more than that to be covered" % m.group(1))

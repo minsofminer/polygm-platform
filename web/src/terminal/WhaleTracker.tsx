@@ -12,7 +12,7 @@
  *    form refuses to offer a channel without a market before the request, because the API refuses it after.
  */
 import { useCallback, useMemo, useState } from "react";
-import { t } from "@/i18n/t";
+import { t } from "@/i18n/terminal";
 import { freshnessOf } from "@/api/envelope";
 import { Number } from "@/num/Number";
 import { StaleIndicator } from "@/num/StaleIndicator";

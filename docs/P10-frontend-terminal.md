@@ -167,6 +167,51 @@ cache TTL is above zero). The tape keeps its last good rows and renders them und
 emptying: an empty tape on one dropped request reads as "the market stopped", which is a different and worse
 claim than "this is ten seconds old".
 
+### 2.11 The dictionary is split by route family, because the measurement said so
+
+Re-recording the P08 first-load artefact once the phase's screens had landed came back **204.4 KB against a
+200 KB budget, on `/markets`** — a route that renders no terminal surface at all. The cause was the dictionary:
+`en.ts` is one object that every component calling `t()` imports, so all 664 keys sat in the graph of every
+route, and the terminal's copy was **319 of them**. The tape's sentences, the radar's refusals, the copy engine's
+warnings: all of it was shipping to a page that never renders a fill.
+
+So the dictionary is two files. `en.ts` holds the shell, auth, wallet, market and event copy; `en.terminal.ts`
+holds the 319 `terminal.*` keys, and `src/i18n/terminal.ts` registers it and re-exports `t`. A terminal file
+imports `t` from there, and that import is the edge that pulls the bytes into its route's graph — the same
+mechanism that keeps the money layer off the landing document. Measured after the split: `/markets` 199.1 KB,
+`/`, `/tma` and `/profile` 188.5–191.6 KB, all under budget, route-level splitting still proven.
+
+`scripts/i18n-check.mjs` grew the rule that keeps it from rotting: a `terminal.*` key asked for by a file that
+imports `@/i18n/t` **fails the build**, because that file would render the key itself — a missing key's failure
+mode reached from the other direction. Its `--self-test` plants exactly that case alongside the two it already
+planted, and the check reports the same shape as before (`ok (664 keys, 621 used, 43 unused-advisory)`) because
+the two files are one key space.
+
+**And the measurement tool had the bug this phase keeps finding in other people's code.** The first re-record
+said 178.9 KB and "money layer absent" for every route, which is not what the build says. A `next start` from an
+earlier run was still holding port 3111; `waitReady()` asked the port, got an answer, and measured *that*
+process's build — the one from before the change. A tool whose whole job is to describe the tree in front of it
+was silently describing a tree that no longer existed, which is the same class of failure as the stale bundle
+artefact P09's c7 has a rule about. `measure-first-load.mjs` now probes the port before spawning and refuses to
+measure a server it did not start.
+
+### 2.12 The 60fps line, measured as far as this environment allows
+
+`npm run measure:tape` drives the tape's real functions — `coalesceFills`, `arrivalRate`, `applyFilters`,
+`virtualWindow`, imported through esbuild rather than re-implemented — at **200 fills/second for 10 seconds**,
+and writes `docs/verification/P10-perf.txt`. Measured: **2.134 ms of JavaScript per second of load** against a
+16.7 ms frame, worst second 3.554 ms, worst single batch release **0.884 ms**, 33 rows mounted for a 700px
+viewport out of 400 buffered.
+
+What that is: the JavaScript half of the frame budget, met with about an order of magnitude of headroom, plus
+the structural bound that makes it believable (batching above 20 fills/s, a 400-row buffer, a virtual window that
+does not grow with the buffer). What it is not: a rendering measurement. Paint, layout and compositing are absent
+from that number, and **no browser exists in this environment** — a Playwright Chromium download fails its
+host-requirements check, which is why P08's numbers are byte counts too. The artefact says both things in its own
+text, and the gate's new `c11` parses the caveat: an artefact with numbers but no caveat fails, so the file cannot
+quietly upgrade itself into a rendering claim. `src/terminal/perf.test.ts` asserts the same budgets inside
+`npm run test`, which is what makes a regression fail a build rather than a review.
+
 ## 3. What the phase's own tools caught
 
 * **`_market_rows()` returns a dict keyed by condition id.** The radar iterated it as a list and every scan was a
@@ -191,13 +236,17 @@ claim than "this is ten seconds old".
 
 ## 4. Where the numbers come from
 
-* `docs/verification/P10-gate.txt` — the recorded gate run (10/10).
+* `docs/verification/P10-gate.txt` — the recorded gate run (11/11).
 * `python3 -m unittest discover -s tests` — 783 tests, 25 of them the radar's, 54 the terminal API's (7 of those
   the discovery endpoint, 5 the idempotency record half).
-* `cd web && npx vitest run` — 288 tests (32 files); the terminal owns 70 of them, file by file: `tape.test.ts` 21,
+* `cd web && npx vitest run` — 291 tests (33 files), three of them the tape's frame budget; the terminal owns 73 of
+  them, file by file: `tape.test.ts` 21,
   `dossier.test.ts` 21, `whales.test.ts` 17, `DossierView.test.tsx` 7, `WhaleTracker.test.tsx` 4.
-  `npm run i18n:check` — 474 keys, 0 missing, 0 dynamic.
+  `npm run i18n:check` — `ok (664 keys, 621 used, 43 unused-advisory)` over the two dictionaries, with the
+  route-family rule in force.
 * `python3 tools/check-openapi.py` — 293 passed, 0 failed, over a 37-path contract.
+* `cd web && npm run measure` — first-load 188.5 / 199.1 / 191.6 / 191.6 KB, `status: pass`, route-level splitting
+  proven; `npm run measure:tape` — 2.134 ms per second of load at 200 fills/s, `status: pass`.
 * Seeded tape (post `make migrate && make seed`): 159 markets, 1,090 fills, four wallets, 133 markets with ≥4
   fills.
 
@@ -205,9 +254,10 @@ claim than "this is ten seconds old".
 
 1. **D8, D9** (automation and alerts) — the kit puts the rule engine in P11's scope; the P10 screens depend on
    that API, so they land with it rather than against a surface that does not exist.
-2. **A web-side gate check.** `c10` covers the radar's cost control; the D1–D7 components are covered by
-   `vitest` and `npm run build`, which is not the same thing as a browser. A gate check that reads the terminal's
-   own components (the 60 fps claim, the resize persistence, the mobile tab parity) is the next one to add, and
-   until then the 60 fps requirement is **`[UNVERIFIED]`** — no browser has been in the loop.
+2. **The pixel half of the 60fps line, and the rest of the browser pass.** `c11` reads a measured budget for the
+   tape's own JavaScript, and `vitest` fails when it regresses. Paint, layout and compositing are still
+   **`[UNVERIFIED]`**: the sandbox cannot run a browser (Playwright's host requirements fail to validate), so
+   resize persistence, mobile tab parity and the perceived frame rate are claims about code, not measurements.
+   The first machine with a browser closes this; nothing else in P10 does.
 3. **The bundle hash in `docs/verification/P08-build.txt`** predates D1–D7; it needs one line re-recorded so the
    P08 record and the shipped web build are the same artifact.

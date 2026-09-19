@@ -5,10 +5,14 @@
  *
  * `t()` returns the key when the entry is absent — that is deliberate. A silent fallback to English of a
  * *different* language would be the bug; here a missing key is visible in the DOM and fails the build.
+ *
+ * Lookups go through `registry.ts` rather than the dictionary object, so a route-family dictionary (`en.terminal`)
+ * reaches `t()` without `t()` importing it — see that file for why the split exists and `terminal.ts` for how a
+ * terminal route opts in.
  */
-import { en } from "./en";
+import { lookup } from "./registry";
 
 export function t(key: string, vars: Record<string, string | number> = {}): string {
-  const template = (en as Record<string, string>)[key] ?? key;
+  const template = lookup(key) ?? key;
   return template.replace(/\{(\w+)\}/g, (whole, name: string) => (name in vars ? String(vars[name]) : whole));
 }

@@ -12,7 +12,7 @@
  * own from the same fields: two renderings of one rule is how a tooltip and a badge end up disagreeing.
  */
 import { useCallback, useMemo, useState } from "react";
-import { t } from "@/i18n/t";
+import { t } from "@/i18n/terminal";
 import { freshnessOf } from "@/api/envelope";
 import { microToCents } from "@/money/cents";
 import { Number } from "@/num/Number";
