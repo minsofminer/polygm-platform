@@ -25,12 +25,14 @@ from fastapi import Body, FastAPI, Header, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
+from polygm_core.classify import labels as _labels
 from polygm_core.config.flags import FlagStore, Flags
 from polygm_core.ledger.ledger import IntentState
 from polygm_core.money.cents import MoneyError, ScaleError, fmt_usdc, parse_usdc, price_ticks
 from polygm_core.risk.gate import Intent, Limits, MarketState, evaluate, norm_tick
 from polygm_core.risk.idempotency import Idem
 from polygm_core.security import authz as _authz
+from polygm_core.security import pseudonym as _pseudo
 from polygm_core.security import keys as _keys
 from polygm_core.security import passwords as _pwd
 from polygm_core.security import redact as _redact
@@ -38,6 +40,7 @@ from polygm_core.security import sanitise as _san
 from polygm_core.security import telegram as _tg
 from polygm_core.security import totp as _totp
 from polygm_core.security.store import ACCESS_TTL_MS, SecStore, hash_token as _hash_token, token_string as _token_string
+from polygm_core.terminal import metrics as _tm
 
 # The only place the non-stdlib security primitives are imported. A missing dependency is a refusal on the
 # paths that need it (503 SECURITY_ENV_MISSING), and with `PGM_REQUIRE_SECURITY_ENV=1` it is a refusal to boot.
@@ -73,6 +76,11 @@ CODES = {
     "RISK_UNAVAILABLE": ("risk check unavailable", 503, True),
     "SIGNER_UNAVAILABLE": ("signing is unavailable; trading disabled", 503, True),
     "NOT_FOUND": ("no such market", 404, False),
+    # P10. A refusal is not a validation error: the body was well-formed and the state said no. 409 with a
+    # reason, because "you cannot do this yet" and "you sent nonsense" are different messages to a client that
+    # is deciding whether to change the request or change the account's history first.
+    "REFUSED": ("this action is refused by a guard; the reason is in the log against the request id",
+                409, False),
     "BAD_REASON": ("a kill-switch change needs a reason of 4-400 characters", 422, False),
     # P07. Each of these is a *user-safe* sentence: the detail a client needs is here, and the detail an
     # attacker would like is in the log line, behind the request id.
@@ -208,6 +216,10 @@ for _t in (READYZ_RESPONSES, LIST_RESPONSES, TAPE_RESPONSES, KILL_RESPONSES, MAR
 del _t
 
 
+#: The one code whose `detail` is authored for the user rather than for the log. See `err`.
+_PUBLIC_DETAIL_CODES = frozenset({"REFUSED"})
+
+
 def err(code: str, request_id: str, *, detail: str | None = None, where: list[str] | None = None,
         retry_after_s: int | None = None) -> JSONResponse:
     """One envelope shape, always. `detail` is accepted for internal callers but deliberately NOT put in the
@@ -220,6 +232,13 @@ def err(code: str, request_id: str, *, detail: str | None = None, where: list[st
     msg, status, retry = CODES.get(code, ("request failed", 400, False))
     if where:
         msg = msg + " (" + ", ".join(where) + ")"
+    # P10 widens the rule by exactly one code. `REFUSED` means "the request was well formed and the state said
+    # no", and a refusal a user cannot act on is indistinguishable from a bug: the client has to be told WHICH
+    # guard fired (`acknowledgeSlippage`, "no dry-run history yet"). The sentence is authored at the call site,
+    # carries no user input, and this is the only code allowed to do it - `detail` on every other code still
+    # goes to the log and never to the body, which is what keeps a Python message out of a response.
+    if detail and code in _PUBLIC_DETAIL_CODES:
+        msg = msg + ": " + detail
     # A constant `Retry-After: 2` on a 15-minute lockout is an instruction to hammer us: the header has to say
     # what the server actually means. Clamped, because a client that trusts us should not be told to wait a year.
     headers = {}
@@ -567,7 +586,7 @@ def _anon(wallet: str) -> str:
     only way a fill log may show a counterparty at all: the venue's payload carries the address, and an API
     that echoes it turns a public tape into an address book of our users' counterparties.
     """
-    return "w_" + hashlib.sha256(("polygm-anon:" + str(wallet)).encode()).hexdigest()[:10]
+    return _pseudo.anon(str(wallet))
 
 
 def _shares(micro: int) -> str:
@@ -2209,3 +2228,1297 @@ def kill_switch(request: Request, body: dict = Body(...), x_admin: str | None = 
         _db.execute("UPDATE order_intents SET state='rejected', risk_code='RISK_HALT' "
                     "WHERE state IN ('pending','queued')")
     return {"engaged": bool(engaged), "atMs": _now_ms()}
+# ============================================================================================ #
+# P10 · the terminal's read surfaces, the copy confirm gate, and the portfolio
+#
+# Three rules from the phase's prompt are enforced HERE rather than in a component, because a component can be
+# rewritten by somebody who has not read the prompt:
+#
+#   1. **No address ever leaves.** Every wallet that crosses the wire goes through `_anon` (a keyed hash), and
+#      the reverse resolution (`_wallet_for_anon`) is a lookup on our side. `tests/test_terminal_api.py` greps
+#      every P10 payload for a `0x…` shape, so an endpoint that forgets is a red test rather than a review note.
+#   2. **A win rate is gated, or absent.** `_tm.win_rate` returns None below the sample gate, WITH a reason
+#      string that the UI renders where the percentage would have been.
+#   3. **A curve carries its drawdown.** `_tm.drawdown_overlay` builds the points, so `peakMicro` and
+#      `drawdownMicro` are on every one of them and no chart can draw PnL without the overlay.
+#
+# The whale rule is relative with an absolute FALLBACK: `max(p99.5 of the market's window fills, a floor)`,
+# and below `WHALE_MIN_SAMPLE` fills the percentile is discarded rather than reported. The reason string comes
+# back with every threshold, and the row carries the sentence the tooltip shows, because a badge whose rule is
+# not visible is an accusation rather than a datum.
+# ============================================================================================ #
+
+TAPE_FILL_LIMIT = 500
+#: A facet query is a scan of the window's fills, so the window is capped rather than merely discouraged. The
+#: cap is 24h and the API answers 422 beyond it: a silent clamp would render a 30-day filter as a 24-hour one.
+TAPE_MAX_WINDOW_MS = 86_400_000
+TAPE_DEFAULT_WINDOW_MS = 3_600_000
+TRADER_FILL_LIMIT = 5_000
+
+TAPE_FILLS_RESPONSES = {404: {"description": "unknown market, or an unknown wallet pseudonym"},
+                        422: {"description": "windowMs above 24h, limit above 500, or a bad filter value"}}
+FACETS_RESPONSES = {404: {"description": "unknown market"},
+                    422: {"description": "windowMs above 24h"}}
+WHALES_RESPONSES = {404: {"description": "unknown market"},
+                    422: {"description": "scope=market without a marketId, or a bad multiple"}}
+TRADER_RESPONSES = {404: {"description": "no trader with that pseudonym in the stored tape"},
+                    422: {"description": "unknown window"}}
+# The collection GET and POST share this table on purpose: `tools/check-openapi.py` maps one path to one
+# table, and both verbs genuinely answer both statuses - GET 404s on an unknown `configId` filter and 422s on a
+# bad `limit`, POST 404s on an unknown source and 422s on a bad body. Sharing a table with a lie in it would be
+# worse than sharing one where both entries are true for both verbs.
+COPY_CREATE_RESPONSES = {404: {"description": "unknown source pseudonym, or an unknown configId filter"},
+                         422: {"description": "missing field, an unknown field, or maxOrder above maxDaily"}}
+COPY_GUARD_RESPONSES = {404: {"description": "no such config for this account"},
+                        409: {"description": "refused: the state does not allow this yet (no acknowledgement, "
+                                             "or no dry-run history)"},
+                        422: {"description": "missing field or an out-of-range guard"}}
+COPY_MONITOR_RESPONSES = {404: {"description": "no such config for this account"}}
+PORTFOLIO_RESPONSES = {}
+WHALE_VIEW_RESPONSES = {404: {"description": "no such market or rule"},
+                        422: {"description": "a notifying view needs a market scope"}}
+
+COPY_CREATE_REQUIRED = ("sourceAnon", "maxOrderMicro", "maxDailyMicro")
+COPY_CREATE_PROPS = {"sourceAnon": {"type": "string", "minLength": 4, "maxLength": 64},
+                     "mode": {"type": "string", "enum": ["cap", "ratio"]},
+                     "ratioBps": {"type": "integer", "minimum": 1, "maximum": 10000},
+                     "maxOrderMicro": {"type": "integer", "minimum": 1_000_000},
+                     "maxDailyMicro": {"type": "integer", "minimum": 1_000_000},
+                     "blockedMarkets": {"type": "array", "items": {"type": "string"}, "maxItems": 50}}
+COPY_GUARD_REQUIRED = ("configId",)
+COPY_GUARD_PROPS = {"configId": {"type": "string", "minLength": 1, "maxLength": 64},
+                    "dryRun": {"type": "boolean"},
+                    "acknowledgeSlippage": {"type": "boolean"},
+                    "skipIfMovedCents": {"type": "integer", "minimum": 0, "maximum": 50},
+                    "doNotEnterWithinHours": {"type": "integer", "minimum": 0, "maximum": 168},
+                    "categoryFilter": {"type": "string", "maxLength": 48},
+                    "minPriceMicro": {"type": "integer", "minimum": 1, "maximum": 999999},
+                    "maxPriceMicro": {"type": "integer", "minimum": 1, "maximum": 999999},
+                    "takeProfitMicro": {"type": "integer", "minimum": 1, "maximum": 999999},
+                    "stopLossMicro": {"type": "integer", "minimum": 1, "maximum": 999999}}
+WHALE_VIEW_REQUIRED = ("name",)
+WHALE_VIEW_PROPS = {"name": {"type": "string", "minLength": 1, "maxLength": 48},
+                    "severity": {"type": "string", "enum": ["info", "notice", "urgent"]},
+                    "channel": {"type": "string", "enum": ["telegram", "email", "webhook"]},
+                    "scope": {"type": "string", "enum": ["global", "market"]},
+                    "marketId": {"type": "string", "maxLength": 64},
+                    "filters": {"type": "object"},
+                    "createRule": {"type": "boolean"},
+                    "ruleId": {"type": "string", "maxLength": 64},
+                    "firesPerWindow": {"type": "integer", "minimum": 1, "maximum": 24},
+                    "windowMs": {"type": "integer", "minimum": 60000}}
+
+_LABEL_FACTS = {c["label"]: c for c in _labels.catalogue()}
+
+
+def _market_rows() -> dict[str, dict]:
+    """condition id → the market fields every P10 row needs, with LEFT joins throughout.
+
+    LEFT and not INNER on purpose: a market whose P09 surfaces have not been written yet still has a tape, and
+    an INNER join would render its fills as rows with no market — which reads as "this fill belongs nowhere"
+    rather than "we have not classified this market yet".
+    """
+    out: dict[str, dict] = {}
+    for (mid, cond, slug, question, tick, end_ts, category, last_price, vol7d) in _db.execute(
+            "SELECT m.id, m.condition_id, m.slug, m.question, m.minimum_tick_size, m.end_ts,"
+            " COALESCE(mm.category,''), a.last_price_micro, COALESCE(a.volume_7d_micro, 0)"
+            " FROM markets m LEFT JOIN market_meta mm ON mm.market_id = m.id"
+            " LEFT JOIN market_activity a ON a.market_id = m.id").fetchall():
+        out[str(cond)] = {"marketId": str(mid), "marketSlug": str(slug), "question": str(question),
+                          "category": str(category), "tick": norm_tick(tick), "endsMs": int(end_ts or 0),
+                          "lastPriceMicro": (None if last_price is None else _tm._int(last_price)),
+                          "volume7dMicro": _tm._int(vol7d)}
+    return out
+
+
+def _label_catalogue() -> list[dict]:
+    """Every label with its rule and disclaimer. Served by facets, so the filter bar can explain a filter it is
+    offering BEFORE it is applied — the tooltip after the fact is too late to inform the click."""
+    return list(_labels.catalogue())
+
+
+def _label_facts(labels: list) -> list[dict]:
+    """Label names (as `wallet_labels` stores them) → the full fact a badge renders.
+
+    An unknown name yields an empty rule rather than being dropped: a label whose rule we cannot state is a
+    label the UI must render as unexplained, and silently removing it would hide the gap.
+    """
+    out = []
+    for name in labels or []:
+        fact = _LABEL_FACTS.get(str(name))
+        if fact is None:
+            continue
+        out.append({"label": fact["label"], "rule": fact["rule"], "disclaimer": fact["disclaimer"],
+                    "confidence": 1000, "publishable": fact["publishable"]})
+    return out
+
+
+def _labels_by_wallet() -> dict[str, list[dict]]:
+    """Every PUBLISHABLE label, keyed by wallet, with its rule and its disclaimer attached.
+
+    `publishable=0` rows exist and are NOT returned: the classifier marks a label unpublishable when its own
+    evidence is too thin (or when naming it in public would be an accusation), and an API that ships it anyway
+    makes that decision meaningless.
+    """
+    out: dict[str, list[dict]] = {}
+    for (wallet, label, conf, ev, _pub) in _db.execute(
+            "SELECT wallet, label, confidence, evidence_json, publishable FROM wallet_labels"
+            " WHERE publishable=1").fetchall():
+        fact = _LABEL_FACTS.get(str(label))
+        if fact is None:
+            continue
+        out.setdefault(str(wallet), []).append(
+            {"label": str(label), "confidence": _tm._int(conf), "publishable": True,
+             "evidence": _json_load(ev), "rule": fact["rule"], "disclaimer": fact["disclaimer"]})
+    return out
+
+
+def _json_load(text) -> dict:
+    if not isinstance(text, str) or not text:
+        return {}
+    try:
+        out = json.loads(text)
+    except ValueError:
+        return {}
+    return out if isinstance(out, dict) else {}
+
+
+def _is_anon(text: str) -> bool:
+    return _pseudo.is_anon(text)
+
+
+def _wallet_for_anon(anon_id: str) -> str | None:
+    """The address behind a pseudonym, or None. The reverse lookup is ours to make and nobody else's.
+
+    Two sources, in order: `wallet_pseudonyms` (the pairs we have resolved, so this is an indexed read), then
+    the wallets the tape and the label table mention. An address does not live in the payload — it never does —
+    so the lookup is the only way a client's click on a pseudonym becomes a query.
+    """
+    wanted = str(anon_id or "")
+    if not _pseudo.is_anon(wanted):
+        return None
+    row = _db.execute("SELECT wallet_id FROM wallet_pseudonyms WHERE anon_id=?", (wanted,)).fetchone()
+    if row is not None:
+        return str(row[0])
+    seen: set[str] = set()
+    for (wallet,) in _db.execute("SELECT DISTINCT wallet FROM tape_fills LIMIT 4000").fetchall():
+        seen.add(str(wallet))
+    for (wallet,) in _db.execute("SELECT DISTINCT wallet FROM wallet_labels").fetchall():
+        seen.add(str(wallet))
+    for wallet in sorted(seen):
+        if _anon(wallet) == wanted:
+            return wallet
+    return None
+
+
+def _window_fills(since_ms: int, *, market_id: str | None = None) -> list[dict]:
+    """Fills in `[since_ms, now]`, as INTERNAL dicts (micro integers).
+
+    Internal, because every caller does integer arithmetic on these rows; `_fill_out` is the one place they
+    become strings on the way out.
+    """
+    cond = None
+    if market_id:
+        row = _db.execute("SELECT condition_id FROM markets WHERE id=?", (str(market_id),)).fetchone()
+        if row is None:
+            return []
+        cond = str(row[0])
+    sql = ("SELECT f.ts_ms, f.condition_id, f.token_id, f.side, COALESCE(f.outcome,''), f.price_micro,"
+           " f.size_micro, f.usd_notional_micro, f.wallet, f.source, f.ingest_ms FROM tape_fills f"
+           " WHERE f.ts_ms >= ?")
+    args: list = [_tm._int(since_ms)]
+    if cond:
+        sql += " AND f.condition_id = ?"
+        args.append(cond)
+    sql += " ORDER BY f.ts_ms DESC, f.rowid DESC"
+    markets = _market_rows()
+    out = []
+    for (ts, cnd, token, side, outcome, price, size, notional, wallet, source, ingest_ms) in \
+            _db.execute(sql, tuple(args)).fetchall():
+        m = markets.get(str(cnd), {})
+        out.append({"tsMs": _tm._int(ts), "conditionId": str(cnd), "tokenId": str(token),
+                    "marketId": m.get("marketId", ""), "marketSlug": m.get("marketSlug", ""),
+                    "question": m.get("question", ""), "category": m.get("category", ""),
+                    "tick": m.get("tick", "0.01"), "side": str(side), "outcome": str(outcome),
+                    "priceMicro": _tm._int(price), "sizeMicro": _tm._int(size),
+                    "notionalMicro": _tm._int(notional), "anonWallet": _anon(str(wallet)),
+                    "wallet": str(wallet), "source": str(source),
+                    "lagMs": max(0, _tm._int(ingest_ms) - _tm._int(ts))})
+    return out
+
+
+def _fill_out(f: dict) -> dict:
+    """One fill on the wire: the same names and kinds as `/v1/markets/{id}/fills`.
+
+    `price` and `shares` are DECIMAL STRINGS (the contract's rule 2 — a JSON number is a float the moment a
+    client does arithmetic with it) and `notionalMicro` is an INTEGER, because that is the number the whale
+    rule is defined against and rounding it to cents would move a fill across its own threshold. The wallet's
+    labels ride along with their rules, since a badge without its rule is a horoscope.
+    """
+    return {"tsMs": f["tsMs"], "conditionId": f["conditionId"], "tokenId": f["tokenId"],
+            "marketId": f["marketId"], "marketSlug": f["marketSlug"], "question": f["question"],
+            "category": f["category"], "tick": f["tick"], "side": f["side"], "outcome": f["outcome"],
+            "price": fmt_usdc(f["priceMicro"]), "shares": _shares(f["sizeMicro"]),
+            "notionalMicro": f["notionalMicro"], "anonWallet": f["anonWallet"],
+            "labels": f.get("labels") or [], "source": f["source"], "lagMs": f["lagMs"]}
+
+
+def _position_out(row: dict) -> dict:
+    """One position on the wire. `size`/`avgEntry`/`mark` are strings; the micro integers that survive are the
+    ones the arithmetic produced (`unrealisedMicro`, `valueMicro`), not display values.
+
+    `mark` is EMPTY when there is no mark: an empty string renders as "no mark", while 0 renders as a price of
+    zero, and those are different claims about the world.
+    """
+    return {"size": _shares(row["sizeMicro"]), "avgEntry": fmt_usdc(row["avgEntryMicro"]),
+            "mark": (fmt_usdc(row["markMicro"]) if row["markMicro"] else ""),
+            "costBasisMicro": row["costBasisMicro"], "valueMicro": row["valueMicro"],
+            "unrealisedMicro": row["unrealisedMicro"], "unrealisedBps": row["unrealisedBps"],
+            "onTick": row["onTick"], "endsInMs": row["endsInMs"]}
+
+
+def _thresholds(fills: list[dict], *, multiple: int | None = None) -> dict[str, dict]:
+    """Per-market whale threshold, from that market's own fills in the window.
+
+    The rule and the reason come back with the number, because "why is $500 the threshold here" is a question
+    the badge has to answer next to the badge. The floor is the SIZE BUCKET's, not one number for the venue: a
+    market whose median fill is $4 and one whose median is $900 need different floors to mean the same thing by
+    "whale". `multiple` switches the relative term to N x the median (D4's tunable view); the floor applies
+    either way, and `reason` says which term won.
+    """
+    by_market: dict[str, list[int]] = {}
+    for f in fills:
+        by_market.setdefault(str(f["conditionId"]), []).append(_tm._int(f["notionalMicro"]))
+    out: dict[str, dict] = {}
+    for cond, notionals in by_market.items():
+        med = _tm.median_micro(notionals)
+        t = _tm.whale_threshold_micro(p995=_tm.percentile_micro(notionals, 995, 1000), median=med,
+                                      fills=len(notionals), mode=("multiple" if multiple else "relative"),
+                                      multiple=multiple, floor_micro=_tm.bucket_floor_micro(med))
+        t["sizeBucket"] = _tm.market_size_bucket(med)
+        t["bucketFloorMicro"] = _tm.bucket_floor_micro(med)
+        out[cond] = t
+    return out
+
+
+def _rows_out(fills: list[dict], thresholds: dict[str, dict], *, annotated: bool) -> list[dict]:
+    """The wire rows, with the whale judgement attached when asked for.
+
+    `isWhale` is computed HERE and never by the client: two implementations of one threshold is one
+    implementation and one bug, and the client's would be the one nobody tests.
+    """
+    labels = _labels_by_wallet()
+    out = []
+    for f in fills:
+        row = _fill_out(f)
+        row["labels"] = labels.get(f["wallet"], [])
+        if annotated:
+            t = thresholds.get(f["conditionId"]) or _tm.whale_threshold_micro()
+            row["thresholdMicro"] = t["thresholdMicro"]
+            row["thresholdRule"] = t["rule"]
+            row["thresholdReason"] = t["reason"]
+            sev = _tm.whale_severity(f["notionalMicro"], t["thresholdMicro"])
+            row["severity"] = sev["severity"]
+            row["ratioBps"] = sev["ratioBps"]
+            row["rule"] = sev["rule"]
+            row["isWhale"] = f["notionalMicro"] >= t["thresholdMicro"]
+        out.append(row)
+    return out
+
+
+def _bucket(rows: list[dict], key: str, limit: int) -> list[dict]:
+    """Facet counts for one column, zero-fill buckets REMOVED.
+
+    A facet that offers an option with nothing behind it is a filter that produces an empty screen, and the
+    user concludes the filter is broken rather than the market quiet. Counts are what make a filter honest.
+    """
+    agg: dict[str, dict] = {}
+    for r in rows:
+        val = str(r.get(key) or "")
+        d = agg.setdefault(val, {"value": val, "fills": 0, "notionalMicro": 0})
+        d["fills"] += 1
+        d["notionalMicro"] += _tm._int(r["notionalMicro"])
+    return sorted(agg.values(), key=lambda d: (-d["notionalMicro"], d["value"]))[:limit]
+
+
+@app.get("/v1/tape/fills", responses=TAPE_FILLS_RESPONSES)
+def get_tape_fills(request: Request,
+                   marketId: str | None = Query(default=None, max_length=128),
+                   since: int | None = Query(default=None, ge=0),
+                   limit: int = Query(default=64, ge=1, le=TAPE_FILL_LIMIT),
+                   side: str | None = Query(default=None, pattern="^(BUY|SELL)$"),
+                   outcome: str | None = Query(default=None, max_length=64),
+                   category: str | None = Query(default=None, max_length=48),
+                   label: str | None = Query(default=None, max_length=32),
+                   wallet: str | None = Query(default=None, max_length=64),
+                   minNotionalMicro: int | None = Query(default=None, ge=0),
+                   windowMs: int = Query(default=TAPE_DEFAULT_WINDOW_MS, ge=1, le=TAPE_MAX_WINDOW_MS)):
+    """The market-wide tape D2 is built on: every fill we hold, filterable, newest first.
+
+    `/v1/tape` is per-market and reads the P04 fixture; this reads the durable `tape_fills` log and is the only
+    tape the terminal uses. `since` is exclusive and in the VENUE's clock (`ts_ms`), matching both earlier tape
+    endpoints: the two clocks differ by the ingest lag, and a client that mixes them sees a duplicate or a hole.
+
+    Filtering happens here rather than in the client for three reasons that all showed up in the design pass: a
+    filter applied after a `LIMIT` silently hides matches; the relative whale threshold needs the same window
+    the rows came from; and the count behind a filter is a fact the user cannot compute.
+    """
+    rid = request.state.request_id
+    if marketId and _db.execute("SELECT 1 FROM markets WHERE id=?", (marketId,)).fetchone() is None:
+        return err("NOT_FOUND", rid)
+    upper = since if since is not None else _now_ms() + 1
+    lower = upper - _tm._int(windowMs)
+    window = _window_fills(lower, market_id=marketId)
+    rows = window
+    if since is not None:
+        rows = [f for f in rows if f["tsMs"] < upper]               # `since` is exclusive, like `/v1/tape`
+    if side:
+        rows = [f for f in rows if f["side"] == side]
+    if outcome:
+        rows = [f for f in rows if f["outcome"] == outcome]
+    if category:
+        rows = [f for f in rows if f["category"] == category]
+    if minNotionalMicro is not None:
+        rows = [f for f in rows if f["notionalMicro"] >= _tm._int(minNotionalMicro)]
+    if wallet:
+        target = _wallet_for_anon(wallet)
+        if target is None:
+            return err("NOT_FOUND", rid, detail="unknown wallet pseudonym")
+        rows = [f for f in rows if f["wallet"] == target]
+    labels = _labels_by_wallet()
+    if label:
+        rows = [f for f in rows if label in [lab["label"] for lab in labels.get(f["wallet"], [])]]
+    has_more = len(rows) > limit
+    page = rows[:limit]
+    # The thresholds come from the WINDOW's fills and not from the page: a threshold computed from the 64 rows
+    # on screen would move as you scroll, and a badge that changes while you look at it is worse than none.
+    thresholds = _thresholds(window)
+    out = _rows_out(page, thresholds, annotated=True)
+    return _stamped({"cacheKey": "tape-fills:%s:%s:%s" % (marketId or "*", since, limit), "rows": out,
+                     "counts": {"returned": len(out), "whales": sum(1 for r in out if r["isWhale"]),
+                                "hasMore": has_more,
+                                "overThresholdOnPage": sum(1 for r in out if r["isWhale"])},
+                     "windowMs": _tm._int(windowMs), "filterNote": (
+                         "filters apply before the limit, so these counts describe this page; the window's own "
+                         "totals are on /v1/tape/facets"),
+                     "nextCursor": (page[-1]["tsMs"] if has_more and page else None)},
+                    ttl_ms=500, stale_ms=flags().stale_ms_tape,
+                    as_of_ms=(max((r["tsMs"] for r in page), default=None)))
+
+
+@app.get("/v1/tape/facets", responses=FACETS_RESPONSES)
+def get_tape_facets(request: Request,
+                    marketId: str | None = Query(default=None, max_length=128),
+                    windowMs: int = Query(default=TAPE_DEFAULT_WINDOW_MS, ge=1, le=TAPE_MAX_WINDOW_MS)):
+    """What is in the window: the distribution, every filter's options with counts, and the label catalogue.
+
+    Served as ONE payload because a filter bar assembled from six requests is a filter bar showing six different
+    windows. This is also where the whale threshold is defined for a window, so a screen can state the rule
+    before the first fill arrives and a user can see how many whales a filter would show before committing.
+    """
+    rid = request.state.request_id
+    if marketId and _db.execute("SELECT 1 FROM markets WHERE id=?", (marketId,)).fetchone() is None:
+        return err("NOT_FOUND", rid)
+    now = _now_ms()
+    fills = _window_fills(now - _tm._int(windowMs), market_id=marketId)
+    notionals = [_tm._int(f["notionalMicro"]) for f in fills]
+    med = _tm.median_micro(notionals)
+    thresholds = _thresholds(fills)
+    # The window-level threshold is the same rule with the venue-wide floor: a global number cannot carry a
+    # per-market bucket, and pretending otherwise would be a threshold that means different things per row.
+    whale = _tm.whale_threshold_micro(p995=_tm.percentile_micro(notionals, 995, 1000), median=med,
+                                      fills=len(notionals))
+    labels = _labels_by_wallet()
+    wallets: dict[str, dict] = {}
+    for f in fills:
+        d = wallets.setdefault(f["wallet"], {"anonWallet": f["anonWallet"], "fills": 0, "notionalMicro": 0,
+                                             "labels": labels.get(f["wallet"], [])})
+        d["fills"] += 1
+        d["notionalMicro"] += f["notionalMicro"]
+    markets = []
+    for cond, t in thresholds.items():
+        rows = [f for f in fills if f["conditionId"] == cond]
+        sample = rows[0]
+        markets.append({"marketId": sample["marketId"], "slug": sample["marketSlug"],
+                        "question": sample["question"], "category": sample["category"], "fills": len(rows),
+                        "notionalMicro": sum(f["notionalMicro"] for f in rows),
+                        # Per MARKET: the count of fills over THAT market's own threshold, which is the number
+                        # a per-market view shows. A global count here would make every market look the same.
+                        "whales": sum(1 for f in rows if f["notionalMicro"] >= t["thresholdMicro"]),
+                        "thresholdMicro": t["thresholdMicro"], "thresholdRule": t["rule"],
+                        "thresholdReason": t["reason"], "sizeBucket": t["sizeBucket"],
+                        "bucketFloorMicro": t["bucketFloorMicro"]})
+    markets.sort(key=lambda m: (-m["notionalMicro"], m["marketId"]))
+    by_label: dict[str, dict] = {}
+    for wallet, facts in labels.items():
+        n = sum(1 for f in fills if f["wallet"] == wallet)
+        if not n:
+            continue
+        for fact in facts:
+            d = by_label.setdefault(fact["label"], {"label": fact["label"], "wallets": 0, "fills": 0,
+                                                    "rule": fact["rule"], "disclaimer": fact["disclaimer"]})
+            d["wallets"] += 1
+            d["fills"] += n
+    return _stamped({"cacheKey": "facets:%s:%s" % (marketId or "*", windowMs), "marketId": marketId,
+                     "windowMs": _tm._int(windowMs), "fills": len(fills),
+                     "sampleMax": TAPE_FILL_LIMIT, "sampled": len(fills) > TAPE_FILL_LIMIT,
+                     "medianNotionalMicro": med, "p95NotionalMicro": _tm.percentile_micro(notionals, 95, 100),
+                     "maxNotionalMicro": max(notionals, default=0), "whale": whale,
+                     "severityRule": _tm.whale_severity(0, 1)["rule"],
+                     "sampleNote": ("counts describe the fills we hold in this window; the threshold is "
+                                    "computed from the same rows, so a filter and its threshold can never "
+                                    "disagree"),
+                     "sides": _bucket(fills, "side", 8), "outcomes": _bucket(fills, "outcome", 24),
+                     "categories": _bucket(fills, "category", 24), "sources": _bucket(fills, "source", 8),
+                     "wallets": sorted(wallets.values(),
+                                       key=lambda d: (-d["notionalMicro"], d["anonWallet"]))[:24],
+                     "markets": markets[:40],
+                     "classifications": sorted(by_label.values(),
+                                               key=lambda d: (-d["fills"], d["label"])),
+                     "classificationsAll": _label_catalogue()},
+                    ttl_ms=1_000, stale_ms=flags().stale_ms_tape,
+                    as_of_ms=(max((f["tsMs"] for f in fills), default=None)))
+
+
+@app.get("/v1/whales", responses=WHALES_RESPONSES)
+def get_whales(request: Request,
+               scope: str = Query(default="global", pattern="^(global|market)$"),
+               marketId: str | None = Query(default=None, max_length=128),
+               windowMs: int = Query(default=TAPE_DEFAULT_WINDOW_MS, ge=1, le=TAPE_MAX_WINDOW_MS),
+               multiple: int | None = Query(default=None, ge=2, le=1000),
+               minSeverity: str = Query(default="info", pattern="^(info|notice|urgent)$"),
+               limit: int = Query(default=50, ge=1, le=200)):
+    """D4's feed: every fill at or above ITS OWN market's threshold, biggest first.
+
+    The thresholds travel with the response so a global feed cannot imply a global rule — $5,000 is a whale in
+    one market and the median fill in another, and a feed that hides which one it used cannot be tuned.
+    `multiple` switches the relative term to N x the market's median (D4's tunable view).
+    """
+    rid = request.state.request_id
+    if scope == "market" and not marketId:
+        # A market-scoped feed without a market is not a global feed; it is a missing parameter, and answering
+        # it with something reasonable is how a screen ends up showing the wrong scope with no error anywhere.
+        return err("VALIDATION", rid, detail="scope=market needs a marketId")
+    if marketId and _db.execute("SELECT 1 FROM markets WHERE id=?", (marketId,)).fetchone() is None:
+        return err("NOT_FOUND", rid)
+    now = _now_ms()
+    fills = _window_fills(now - _tm._int(windowMs), market_id=marketId)
+    thresholds = _thresholds(fills, multiple=multiple)
+    severity_floor = {"info": 0, "notice": _tm.SEVERITY_NOTICE_BPS, "urgent": _tm.SEVERITY_URGENT_BPS}
+    rows = []
+    for f in fills:
+        t = thresholds.get(f["conditionId"])
+        if t is None or f["notionalMicro"] < t["thresholdMicro"]:
+            continue
+        sev = _tm.whale_severity(f["notionalMicro"], t["thresholdMicro"])
+        if sev["ratioBps"] < severity_floor[str(minSeverity)]:
+            continue
+        rows.append((f, t, sev))
+    rows.sort(key=lambda r: (-r[0]["notionalMicro"], -r[0]["tsMs"]))
+    labels = _labels_by_wallet()
+    out = []
+    for f, t, sev in rows[:limit]:
+        row = _fill_out(f)
+        row["labels"] = labels.get(f["wallet"], [])
+        row.update({"thresholdMicro": t["thresholdMicro"], "thresholdRule": t["rule"],
+                    "thresholdReason": t["reason"], "severity": sev["severity"], "ratioBps": sev["ratioBps"],
+                    "rule": sev["rule"], "isWhale": True})
+        out.append(row)
+    return _stamped({"cacheKey": "whales:%s:%s:%s:%s:%s" % (scope, marketId or "*", minSeverity, windowMs,
+                                                            multiple or 0),
+                     "scope": scope, "marketId": marketId, "windowMs": _tm._int(windowMs),
+                     "multiple": multiple, "rows": out,
+                     "counts": {"overThreshold": len(rows), "returned": len(out),
+                                "marketsWithFills": len(thresholds)},
+                     "thresholds": thresholds, "severityRule": _tm.whale_severity(0, 1)["rule"]},
+                    ttl_ms=1_000, stale_ms=flags().stale_ms_tape,
+                    as_of_ms=(max((f["tsMs"] for f, _t, _s in rows), default=None)))
+
+
+
+# ------------------------------------------------------------------------ D3 · the trader's dossier
+WINDOW_DAYS = _tm.WINDOW_DAYS
+
+
+def _trader_fills(wallet: str) -> list[dict]:
+    """Every fill we hold for one wallet, as internal rows carrying their settlement.
+
+    `is_winner` is NULL until a market resolves, and that NULL is what makes `resolved` False rather than
+    False-by-default: an open position's realised PnL is 0 because nothing has been realised, not because it
+    broke even. A win is `(shares − cost)` on a winning buy and `−cost` on a losing one, mirrored for a sell,
+    all of it integer arithmetic on micro.
+    """
+    rows = _db.execute(
+        "SELECT f.ts_ms, f.condition_id, f.token_id, COALESCE(f.outcome,''), f.side, f.price_micro,"
+        " f.size_micro, f.usd_notional_micro, f.source, m.id, t.is_winner, m.minimum_tick_size,"
+        " COALESCE(mm.category,''), m.end_ts"
+        " FROM tape_fills f JOIN markets m ON m.condition_id = f.condition_id"
+        " JOIN tokens t ON t.token_id = f.token_id"
+        " LEFT JOIN market_meta mm ON mm.market_id = m.id"
+        " WHERE f.wallet = ? ORDER BY f.ts_ms ASC, f.rowid ASC LIMIT ?",
+        (str(wallet), TRADER_FILL_LIMIT)).fetchall()
+    out = []
+    for (ts, cond, token, outcome, side, price, size, notional, source, mid, winner, tick, category,
+         end_ts) in rows:
+        resolved = winner is not None and int(winner) >= 0
+        won = bool(int(winner)) if resolved else False
+        shares, cost = _tm._int(size), _tm._int(notional)
+        if not resolved:
+            realised = 0
+        elif str(side) == "BUY":
+            realised = (shares - cost) if won else -cost
+        else:
+            realised = (cost - shares) if won else cost
+        out.append({"tsMs": _tm._int(ts), "conditionId": str(cond), "tokenId": str(token),
+                    "marketId": str(mid), "marketSlug": "", "question": "", "category": str(category),
+                    "tick": norm_tick(tick), "side": str(side), "outcome": str(outcome),
+                    "priceMicro": _tm._int(price), "sizeMicro": shares, "notionalMicro": cost,
+                    "anonWallet": _anon(wallet), "labels": [], "source": str(source), "lagMs": 0,
+                    "wallet": str(wallet), "winner": (won if resolved else None), "resolved": resolved,
+                    "realisedMicro": realised, "endsMs": _tm._int(end_ts)})
+    return out
+
+
+def _trader_curve(fills: list[dict]) -> list[dict]:
+    """The cumulative REALISED curve, per day, with its drawdown attached to every point.
+
+    Realised only: an unrealised mark is a price somebody else's book printed, and mixing it into a PnL line is
+    how a curve becomes a forecast. Points come from `drawdown_overlay`, so the overlay cannot be omitted by a
+    caller that forgot — it is not a separate step to forget.
+    """
+    buckets: dict[int, int] = {}
+    for f in fills:
+        day = f["tsMs"] // 86_400_000 * 86_400_000
+        buckets[day] = buckets.get(day, 0) + _tm._int(f["realisedMicro"])
+    points, running = [], 0
+    for day in sorted(buckets):
+        running += buckets[day]
+        points.append({"tsMs": day, "cumMicro": running, "openPositions": 0})
+    return _tm.drawdown_overlay(points)
+
+
+def _open_positions(fills: list[dict], marks: dict) -> list[dict]:
+    """Positions still open, marked at the last fill we hold for that market.
+
+    A position that nets to zero or below is dropped rather than shown: our tape is a slice of a venue's
+    history (we started recording at some point, and the wallet traded before that), so a net SELL is far more
+    likely to be an earlier buy we never saw than a short — and a screen that invents a short position from a
+    partial tape is a screen that lies with confidence.
+    """
+    net: dict[tuple, dict] = {}
+    for f in fills:
+        key = (f["marketId"], f["outcome"])
+        d = net.setdefault(key, {"marketId": f["marketId"], "outcome": f["outcome"], "sizeMicro": 0,
+                                 "costMicro": 0, "tokenId": f["tokenId"], "tick": f["tick"],
+                                 "resolved": f["resolved"], "winner": f["winner"],
+                                 "category": f["category"], "lastMs": 0})
+        sign = 1 if f["side"] == "BUY" else -1
+        d["sizeMicro"] += sign * f["sizeMicro"]
+        d["costMicro"] += sign * f["notionalMicro"]
+        d["lastMs"] = max(d["lastMs"], f["tsMs"])
+    out = []
+    for (_mid, _outcome), d in sorted(net.items()):
+        if d["sizeMicro"] <= 0 or d["resolved"]:
+            continue
+        m = marks.get(d["marketId"], {})
+        raw = m.get("lastPriceMicro")
+        mark = _tm._int(raw) if raw is not None else 0
+        avg_entry = (d["costMicro"] * 1_000_000 // d["sizeMicro"]) if d["sizeMicro"] else 0
+        row = _tm.portfolio_row(size_micro=d["sizeMicro"], avg_entry_micro=avg_entry, mark_micro=mark,
+                                tick_micro=_tick_micro(d["tick"]),
+                                ends_in_ms=(m.get("endsMs", 0) - _now_ms()),
+                                cost_basis_micro=d["costMicro"])
+        out.append({"marketId": d["marketId"], "marketSlug": m.get("marketSlug", ""),
+                    "question": m.get("question", ""), "outcome": d["outcome"], "tokenId": d["tokenId"],
+                    "category": d["category"], "resolved": False, "winner": None,
+                    "markSource": "last_fill" if mark else "unknown", **_position_out(row)})
+    return out
+
+
+def _tick_micro(tick) -> int:
+    """A tick as micro-units, so a mark can be checked against it without a float anywhere near money."""
+    return _tick_units_per_hundredth(norm_tick(tick))
+
+
+def _tick_units_per_hundredth(tick: str) -> int:
+    # `norm_tick` returns "0.001" or "0.01"; both are exact strings, and the micro value follows from the
+    # number of decimal places rather than from a parse.
+    return 10_000 if str(tick).count("0") >= 2 and str(tick).endswith("01") else 1_000
+
+
+def _hold_pairs(fills: list[dict]) -> list[dict]:
+    """entry→exit pairs for the hold-time statistic.
+
+    A settled market's exit is its own end time (that is when the position stopped existing) and an open one is
+    left OPEN rather than paired: `hold_stats` counts open fills instead of averaging them in as zeros, because
+    an unfinished trade is not a fast one.
+    """
+    first: dict[tuple, dict] = {}
+    for f in fills:
+        first.setdefault((f["marketId"], f["outcome"]), {"entryMs": f["tsMs"], "exitMs": None})
+    for (market, _outcome), d in first.items():
+        last_sell = [f for f in fills if f["marketId"] == market and f["side"] == "SELL"]
+        if last_sell:
+            d["exitMs"] = max(f["tsMs"] for f in last_sell)
+    return list(first.values())
+
+
+def _trader_window(fills: list[dict], lo: int, marks: dict) -> dict:
+    """One window of the D3 metric set. Every field is computed for every window — a switcher that swaps some
+    numbers and leaves others is a screen that cannot be read as a whole."""
+    window = [f for f in fills if f["tsMs"] >= lo]
+    settled = [f for f in window if f["resolved"]]
+    by_market: dict[str, int] = {}
+    for f in settled:
+        by_market[f["marketId"]] = by_market.get(f["marketId"], 0) + _tm._int(f["realisedMicro"])
+    resolved_markets, wins = len(by_market), sum(1 for v in by_market.values() if v > 0)
+    gate = _tm.win_rate(wins, resolved_markets)
+    realised = [_tm._int(f["realisedMicro"]) for f in settled]
+    positions = _open_positions(window, marks)
+    holds = _tm.hold_stats(_hold_pairs(window))
+    curve = _trader_curve(window)
+    return {"fills": len(window), "resolvedMarkets": resolved_markets, "wins": wins,
+            "winRateBps": gate["bps"], "insufficientSample": gate["insufficientSample"],
+            "sampleNote": gate["reason"], "sampleGate": _tm.SAMPLE_GATE,
+            "volumeMicro": sum(_tm._int(f["notionalMicro"]) for f in window),
+            "realisedMicro": sum(realised),
+            "unrealisedMicro": sum(p["unrealisedMicro"] for p in positions),
+            "bestMicro": max(realised, default=0), "worstMicro": min(realised, default=0),
+            "maxDrawdownMicro": _tm.max_drawdown_micro(curve),
+            "avgHoldMs": holds["avgHoldMs"], "medianHoldMs": holds["medianHoldMs"],
+            "openFills": holds["openFills"], "matchedPositions": holds["matchedPositions"],
+            "distinctMarkets": len({f["marketId"] for f in window}),
+            "categories": len({f["category"] for f in window if f["category"]}),
+            "source": "sampled", "asOfMs": (max((f["tsMs"] for f in window), default=0)),
+            "computedMs": _now_ms(), "storedWinRateBps": None}
+
+
+def _methodology() -> dict:
+    """The methodology, shipped WITH the numbers it explains.
+
+    A link alone is not enough: the prompt asks for a visible methodology on every behaviour metric, and the
+    cheapest way to make something visible is to put it in the same object as the figure that depends on it.
+    """
+    return {"path": "/methodology/trader-metrics",
+            "winRate": ("per settled MARKET, not per fill: a wallet that bought six times and sold once made one "
+                        "decision. Suppressed below %d settled markets." % _tm.SAMPLE_GATE),
+            "realised": ("from settled markets only: (shares − cost) for a winning buy, −cost for a losing one, "
+                         "mirrored for a sell. Integer micro-USDC throughout."),
+            "unrealised": ("net size marked at the last fill we saw in that market; a mark we do not have is "
+                           "reported as unknown rather than as zero"),
+            "drawdown": ("the distance below the running high-water mark of the cumulative realised curve, "
+                         "computed per point so it cannot be drawn without the curve"),
+            "hold": "entry→exit per (market, outcome); open positions are counted, not averaged in as zero",
+            "whale": ("notional at or above max(p99.5 of the market's window fills, the size-bucket floor); "
+                      "below %d fills in the window the floor applies alone" % _tm.WHALE_MIN_SAMPLE),
+            "labels": _label_catalogue()}
+
+
+@app.get("/v1/traders/{anon}", responses=TRADER_RESPONSES)
+def get_trader(anon: str, request: Request,
+               window: str = Query(default="30d", pattern="^(7d|30d|90d|all)$")):
+    """D3's dossier: one wallet, four windows of the same metric set, the curve with its drawdown, the open
+    positions, the behaviour labels with their rules, and the methodology behind every number.
+
+    Two rules are structural here rather than decorative:
+      * a win rate is `null` WITH A REASON below the sample gate, never a percentage;
+      * the curve arrives carrying `peakMicro` and `drawdownMicro` per point, so no chart can draw PnL without
+        the overlay.
+
+    The header carries the pseudonym and never the address: `/v1/tape/fills` names traders the same way, and a
+    screen that resolved one to an address would make the other pointless.
+    """
+    rid = request.state.request_id
+    wallet = _wallet_for_anon(anon)
+    if wallet is None:
+        return err("NOT_FOUND", rid, detail="no trader with that pseudonym in the stored tape")
+    fills = _trader_fills(wallet)
+    if not fills:
+        return err("NOT_FOUND", rid, detail="this pseudonym has no fills in the stored tape")
+    now = _now_ms()
+    marks = _market_rows()
+    metrics = {}
+    for key in _tm.WINDOW_KEYS:
+        days = WINDOW_DAYS[key]
+        metrics[key] = _trader_window(fills, 0 if days is None else now - days * 86_400_000, marks)
+    days = WINDOW_DAYS[window]
+    lo = 0 if days is None else now - days * 86_400_000
+    window_fills = [f for f in fills if f["tsMs"] >= lo]
+    curve = _trader_curve(window_fills)
+    positions = _open_positions(window_fills, marks)
+    labels = []
+    for (label, conf, ev) in _db.execute(
+            "SELECT label, confidence, evidence_json FROM wallet_labels WHERE wallet=? AND publishable=1"
+            " ORDER BY label", (wallet,)).fetchall():
+        fact = _LABEL_FACTS.get(str(label))
+        if fact is None:
+            continue
+        labels.append({"label": str(label), "rule": fact["rule"], "disclaimer": fact["disclaimer"],
+                       "confidence": _tm._int(conf), "evidence": _json_load(ev), "publishable": True})
+    return _stamped({"cacheKey": "trader:%s:%s" % (anon, window), "anonWallet": anon, "window": window,
+                     "windows": list(_tm.WINDOW_KEYS), "sampleGate": _tm.SAMPLE_GATE, "metrics": metrics,
+                     "curve": curve, "curveWindow": window, "curveSource": "sampled",
+                     "maxDrawdownMicro": _tm.max_drawdown_micro(curve),
+                     "breakdown": _tm.category_breakdown(
+                         [{"category": f["category"], "notionalMicro": f["notionalMicro"],
+                           "realisedMicro": f["realisedMicro"]} for f in window_fills]),
+                     "positions": positions,
+                     "fills": [{**_fill_out(f), "winner": f["winner"], "resolved": f["resolved"],
+                                "realisedMicro": f["realisedMicro"]}
+                               for f in reversed(window_fills[-40:])],
+                     "behaviour": labels, "methodology": _methodology()},
+                    ttl_ms=5_000, stale_ms=max(flags().stale_ms_tape, 5_000),
+                    as_of_ms=(max((f["tsMs"] for f in window_fills), default=None)))
+
+
+# ------------------------------------------------------------------------ D7 · copy trading
+def _copy_guard(config_id: str) -> dict | None:
+    row = _db.execute("SELECT dry_run, skip_if_moved_cents, do_not_enter_within_hours, category_filter,"
+                      " min_price_micro, max_price_micro, take_profit_micro, stop_loss_micro, live_since_ms,"
+                      " updated_ms FROM copy_config_guards WHERE config_id=?", (str(config_id),)).fetchone()
+    if row is None:
+        return None
+    keys = ("dry_run", "skip_if_moved_cents", "do_not_enter_within_hours", "category_filter",
+            "min_price_micro", "max_price_micro", "take_profit_micro", "stop_loss_micro", "live_since_ms",
+            "updated_ms")
+    out = dict(zip(keys, row))
+    for k in ("min_price_micro", "max_price_micro", "take_profit_micro", "stop_loss_micro"):
+        out[k] = None if out[k] is None else _tm._int(out[k])
+    out["dry_run"] = bool(out["dry_run"])
+    return out
+
+
+def _config_owned(config_id: str, uid: str) -> tuple | None:
+    return _db.execute("SELECT id, user_id, source_user, mode, ratio_bps, max_order_micro, max_daily_micro,"
+                       " blocked_markets, enabled, created_ms FROM copy_configs WHERE id=? AND user_id=?",
+                       (str(config_id), str(uid))).fetchone()
+
+
+def _source_stats(anon_id: str) -> dict:
+    """A source's own record, with its losing windows intact and its win rate gated like everything else.
+
+    `riskAdjustedBps` is net-after-fees per unit of drawdown, and it is what D7's discovery list sorts by. Raw
+    PnL is deliberately NOT the sort: $50k through a $40k drawdown and $50k through a $4k one are not the same
+    product, and a list ordered by the first sells the second as a surprise.
+    """
+    wallet = _wallet_for_anon(anon_id)
+    rows = [] if wallet is None else _db.execute(
+        "SELECT window_days, closed_trades, win_rate_bp, realized_pnl_micro, fees_micro,"
+        " net_after_fees_micro, max_drawdown_micro, longest_losing_streak, avg_latency_ms, updated_ms"
+        " FROM copy_source_stats WHERE source_user_id=? ORDER BY window_days", (str(wallet),)).fetchall()
+    windows = []
+    for (days, closed, wr_bp, realised, fees, net, dd, streak, latency, updated) in rows:
+        gate = _tm.win_rate(int(wr_bp or 0) * int(closed or 0) // 10_000, _tm._int(closed))
+        windows.append({"windowDays": _tm._int(days), "closedTrades": _tm._int(closed),
+                        "realisedMicro": _tm._int(realised), "feesMicro": _tm._int(fees),
+                        "netAfterFeesMicro": _tm._int(net), "maxDrawdownMicro": _tm._int(dd),
+                        "longestLosingStreak": _tm._int(streak), "avgLatencyMs": _tm._int(latency),
+                        "winRateBps": gate["bps"], "insufficientSample": gate["insufficientSample"],
+                        "sampleNote": gate["reason"],
+                        "riskAdjustedBps": _tm._int(net) * 10_000 // max(1, _tm._int(dd)),
+                        "riskAdjustedNote": ("net after fees per unit of drawdown; a source can be profitable "
+                                             "and still rank low here, which is the point of ranking this way"),
+                        "updatedMs": _tm._int(updated)})
+    return {"windows": windows,
+            "ranking": ("sources are ranked risk-adjusted - net after fees per unit of drawdown - and NOT by "
+                        "raw PnL; the ranking is stated here because a list that does not say how it is sorted "
+                        "is a list that implies the obvious one")}
+
+
+def _copy_warning(source_wallet: str) -> dict:
+    """The slippage this source's copies actually produced, measured on OUR attempts.
+
+    Shown BEFORE the confirm, never after: the question "is copying this person worth it" is answered by the
+    distribution of our own deviations from their prices, and a dialog that asks it after the fact is a receipt.
+    """
+    devs, copied, skipped = [], 0, 0
+    for (action, dev) in _db.execute("SELECT action, deviation_bps FROM copy_events WHERE source_user_id=?",
+                                     (str(source_wallet),)).fetchall():
+        if str(action) == "copied":
+            copied += 1
+            devs.append(_tm._int(dev))
+        elif str(action) == "skipped":
+            skipped += 1
+    fills = [_tm._int(r[0]) for r in _db.execute(
+        "SELECT would_size_micro * would_price_micro / 1000000 FROM copy_dry_runs WHERE source_user_id=?",
+        (str(source_wallet),)).fetchall()]
+    return _tm.copy_slippage_warning(deviations_bps=devs, copied=copied, skipped=skipped, fill_micros=fills)
+
+
+def _copy_config_out(row: tuple) -> dict:
+    (cid, _uid, source, mode, ratio, max_order, max_daily, _blocked, enabled, created) = row
+    guard = _copy_guard(str(cid)) or {"dry_run": True, "skip_if_moved_cents": 2, "do_not_enter_within_hours": 24,
+                                      "category_filter": "", "min_price_micro": None, "max_price_micro": None,
+                                      "take_profit_micro": None, "stop_loss_micro": None, "live_since_ms": None}
+    return {"configId": str(cid), "sourceAnon": _anon(str(source)), "mode": str(mode),
+            "ratioBps": (None if ratio is None else _tm._int(ratio)),
+            "maxOrderMicro": _tm._int(max_order), "maxDailyMicro": _tm._int(max_daily),
+            "enabled": bool(enabled), "createdMs": _tm._int(created),
+            # A config with NO guard row is a dry run: the safe state is the one you get by not writing
+            # anything, and `guardsFromRow` says which of the two ways we arrived here.
+            "dryRun": bool(guard["dry_run"]), "guardsFromRow": _copy_guard(str(cid)) is not None,
+            "skipIfMovedCents": _tm._int(guard["skip_if_moved_cents"]),
+            "doNotEnterWithinHours": _tm._int(guard["do_not_enter_within_hours"]),
+            "categoryFilter": str(guard["category_filter"]),
+            "minPriceMicro": guard["min_price_micro"], "maxPriceMicro": guard["max_price_micro"],
+            "takeProfitMicro": guard["take_profit_micro"], "stopLossMicro": guard["stop_loss_micro"],
+            "warning": _copy_warning(str(source)), "sourceStats": _source_stats(_anon(str(source)))}
+
+
+@app.get("/v1/copy/configs", responses=COPY_CREATE_RESPONSES)
+def list_copy_configs(request: Request,
+                      configId: str | None = Query(default=None, max_length=64),
+                      limit: int = Query(default=50, ge=1, le=200)):
+    """This account's copy configs, each with the pre-confirm warning and the source's record.
+
+    The record includes the windows where the source LOST money. A copy screen that only shows winners is the
+    feature working as a trap, and the fixture's 7-day window is negative for exactly that reason.
+    """
+    rid = request.state.request_id
+    uid, _row, e = _principal(request)
+    if e:
+        return e
+    if configId and _config_owned(configId, str(uid)) is None:
+        return err("NOT_FOUND", rid, detail="no such config for this account")
+    rows = _db.execute("SELECT id, user_id, source_user, mode, ratio_bps, max_order_micro, max_daily_micro,"
+                       " blocked_markets, enabled, created_ms FROM copy_configs WHERE user_id=?"
+                       + (" AND id=?" if configId else "") + " ORDER BY created_ms DESC LIMIT ?",
+                       ((str(uid), str(configId), limit) if configId else (str(uid), limit))).fetchall()
+    items = [_copy_config_out(r) for r in rows]
+    return _stamped({"items": items, "count": len(items),
+                     "note": ("`dryRun` is per config: creation is always dry-run, and going live needs both an "
+                              "acknowledged slippage warning and dry-run history this account produced")},
+                    ttl_ms=0, stale_ms=0)
+
+
+@app.post("/v1/copy/configs", status_code=200, responses=COPY_CREATE_RESPONSES,
+           openapi_extra=_body_schema(COPY_CREATE_REQUIRED, COPY_CREATE_PROPS))
+def create_copy_config(request: Request, body: dict = Body(...)):
+    """Create a copy config. It is ALWAYS a dry run — and the response says so, in a field and in a sentence.
+
+    The prompt's rule is that the latency/slippage warning appears in the UI before the confirm. The API's half
+    of that promise is here: the response carries the warning and the source's record, and there is no field in
+    the create schema that turns copying live. Turning it live is a second call with two conditions on it.
+    """
+    rid = request.state.request_id
+    bad = _check_body(body, COPY_CREATE_REQUIRED, rid, allowed=tuple(COPY_CREATE_PROPS))
+    if bad is not None:
+        return bad
+    bad = _check_props(body, COPY_CREATE_PROPS, rid)
+    if bad is not None:
+        return bad
+    uid, _row, e = _principal(request)
+    if e:
+        return e
+    anon_id = str(body["sourceAnon"]).strip()
+    source_wallet = _wallet_for_anon(anon_id)
+    if source_wallet is None:
+        return err("NOT_FOUND", rid, detail="unknown source pseudonym")
+    mode = str(body.get("mode") or "cap")
+    ratio = body.get("ratioBps")
+    if mode == "ratio" and not ratio:
+        return err("VALIDATION", rid, detail="mode=ratio needs ratioBps")
+    max_order, max_daily = _tm._int(body["maxOrderMicro"]), _tm._int(body["maxDailyMicro"])
+    if max_order > max_daily:
+        # A per-order cap above the daily cap is not a stricter limit, it is a config that cannot fire twice
+        # without breaching its own budget. Refused, rather than silently clamped.
+        return err("VALIDATION", rid, detail="maxOrderMicro must not exceed maxDailyMicro")
+    cid = "cfg-" + uuid.uuid4().hex[:12]
+    _db.execute("INSERT INTO copy_configs (id, user_id, source_user, mode, ratio_bps, max_order_micro,"
+                " max_daily_micro, blocked_markets, enabled, created_ms) VALUES (?,?,?,?,?,?,?,?,0,?)",
+                (cid, str(uid), source_wallet, mode, (None if ratio is None else _tm._int(ratio)), max_order,
+                 max_daily, json.dumps(list(body.get("blockedMarkets") or [])), _now_ms()))
+    return _stamped({"configId": cid, "sourceAnon": anon_id, "mode": mode, "dryRun": True,
+                     "maxOrderMicro": max_order, "maxDailyMicro": max_daily,
+                     "warning": _copy_warning(source_wallet), "sourceStats": _source_stats(anon_id),
+                     "next": ("this config starts as a dry-run: it records what it WOULD have done on"
+                              " /v1/copy/configs/monitor and sends nothing to the venue")},
+                    ttl_ms=0, stale_ms=0)
+
+
+@app.post("/v1/copy/configs/guards", status_code=200, responses=COPY_GUARD_RESPONSES,
+           openapi_extra=_body_schema(COPY_GUARD_REQUIRED, COPY_GUARD_PROPS))
+def set_copy_guards(request: Request, body: dict = Body(...)):
+    """Set a config's guard rails, including turning dry-run OFF — the only path by which live copying begins.
+
+    Refused (409 `REFUSED`) unless the caller sends `acknowledgeSlippage: true` AND the config already has
+    dry-run events recorded. The second condition is the interesting one: nobody goes live before the system has
+    shown them, in their own account, what the strategy would have done. A dialog that asks "are you sure?"
+    costs nothing and prevents nothing; a required dry-run history is evidence.
+    """
+    rid = request.state.request_id
+    bad = _check_body(body, COPY_GUARD_REQUIRED, rid, allowed=tuple(COPY_GUARD_PROPS))
+    if bad is not None:
+        return bad
+    bad = _check_props(body, COPY_GUARD_PROPS, rid)
+    if bad is not None:
+        return bad
+    uid, _row, e = _principal(request)
+    if e:
+        return e
+    cid = str(body["configId"])
+    row = _config_owned(cid, str(uid))
+    if row is None:
+        return err("NOT_FOUND", rid, detail="no such config for this account")
+    source = _anon(str(row[2]))
+    current = _copy_guard(cid) or {"dry_run": True, "skip_if_moved_cents": 2, "do_not_enter_within_hours": 24,
+                                   "category_filter": "", "min_price_micro": None, "max_price_micro": None,
+                                   "take_profit_micro": None, "stop_loss_micro": None, "live_since_ms": None}
+    want_dry = bool(body.get("dryRun", current["dry_run"]))
+    dry_runs = _tm._int(_db.execute("SELECT COUNT(*) FROM copy_dry_runs WHERE config_id=?",
+                                    (cid,)).fetchone()[0])
+    if not want_dry:
+        if not body.get("acknowledgeSlippage"):
+            return err("REFUSED", rid, detail=(
+                "refused: going live needs acknowledgeSlippage=true - the confidence a copy screen should "
+                "require is the confidence that comes from having read what this source's copies actually cost"))
+        if dry_runs == 0:
+            return err("REFUSED", rid, detail=(
+                "refused: this config has no dry-run history yet. Copying somebody is a decision the product "
+                "will not let you make blind, so it must first record - in your own account - what it would "
+                "have done"))
+    ranges = {"skipIfMovedCents": (0, 50), "doNotEnterWithinHours": (0, 168), "minPriceMicro": (1, 999_999),
+              "maxPriceMicro": (1, 999_999), "takeProfitMicro": (1, 999_999), "stopLossMicro": (1, 999_999)}
+    for key, (lo, hi) in ranges.items():
+        if key in body and body[key] is not None:            # `_check_props` does not walk integers
+            v = _tm._int(body[key])
+            if not lo <= v <= hi:
+                return err("VALIDATION", rid, where=["%s must be %d-%d" % (key, lo, hi)])
+    for key, lo in (("maxOrderMicro", 1_000_000), ("maxDailyMicro", 1_000_000)):
+        if key in body and _tm._int(body[key]) < lo:
+            return err("VALIDATION", rid, where=["%s must be at least %d micro-USDC" % (key, lo)])
+    if body.get("mode") == "ratio" and not (1 <= _tm._int(body.get("ratioBps") or 0) <= 10_000):
+        return err("VALIDATION", rid, where=["ratioBps must be 1-10000"])
+    fields = ("dry_run", "skip_if_moved_cents", "do_not_enter_within_hours", "category_filter", "min_price_micro",
+              "max_price_micro", "take_profit_micro", "stop_loss_micro", "live_since_ms")
+    values: dict = {"dry_run": (0 if not want_dry else 1),
+                    "skip_if_moved_cents": _tm._int(body.get("skipIfMovedCents", current["skip_if_moved_cents"])),
+                    "do_not_enter_within_hours": _tm._int(body.get("doNotEnterWithinHours",
+                                                                   current["do_not_enter_within_hours"])),
+                    "category_filter": str(body.get("categoryFilter", current["category_filter"])),
+                    "min_price_micro": _as_opt_int(body.get("minPriceMicro", current["min_price_micro"])),
+                    "max_price_micro": _as_opt_int(body.get("maxPriceMicro", current["max_price_micro"])),
+                    "take_profit_micro": _as_opt_int(body.get("takeProfitMicro", current["take_profit_micro"])),
+                    "stop_loss_micro": _as_opt_int(body.get("stopLossMicro", current["stop_loss_micro"])),
+                    "live_since_ms": (_now_ms() if not want_dry else current["live_since_ms"])}
+    # `config_id` plus the nine guard columns: the placeholder count has to match the column list exactly, and
+    # the first version of this statement had one `?` too few for the id (an `OperationalError: N values for
+    # N+1 columns` that the tests caught immediately and a reader never would have).
+    _db.execute("INSERT INTO copy_config_guards (config_id,%s,updated_ms) VALUES (?,%s,?)"
+                " ON CONFLICT(config_id) DO UPDATE SET %s, updated_ms=excluded.updated_ms"
+                % (",".join(fields), ",".join(["?"] * len(fields)),
+                   ",".join("%s=excluded.%s" % (f, f) for f in fields)),
+                (cid, *[values[f] for f in fields], _now_ms()))
+    if not want_dry:
+        # `enabled` is the engine's own switch (P06); the guard row is what arms the order path. Both move
+        # together, because a config that is "enabled" while its guard says dry-run is a config whose state
+        # depends on which reader you ask.
+        _db.execute("UPDATE copy_configs SET enabled=1 WHERE id=?", (cid,))
+    guard = _copy_guard(cid) or {}
+    return _stamped({"configId": cid, "dryRun": bool(guard.get("dry_run", True)),
+                     "enabled": True, "dryRuns": dry_runs, "guards": guard,
+                     "warning": _copy_warning(_wallet_for_anon(source) or ""),
+                     "note": ("live copying is armed" if not want_dry else
+                              "still a dry run: nothing will be sent to the venue")},
+                    ttl_ms=0, stale_ms=0)
+
+
+def _as_opt_int(value):
+    return None if value is None else _tm._int(value)
+
+
+@app.get("/v1/copy/configs/monitor", responses=COPY_MONITOR_RESPONSES)
+def copy_monitor(request: Request, configId: str = Query(min_length=1, max_length=64),
+                 limit: int = Query(default=50, ge=1, le=200)):
+    """Per-source monitor: source price vs our fill vs slippage, and every skip with its reason.
+
+    Real fills (`copy_events`) and would-be fills (`copy_dry_runs`) are returned as two lists rather than one
+    time-ordered stream, because the one thing this screen must never allow is mistaking a simulation for a
+    trade — and a merged list is exactly how that happens. `dryRun` is on every row for the same reason, and a
+    copied event with an empty `intentId` never reached the venue.
+    """
+    rid = request.state.request_id
+    uid, _row, e = _principal(request)
+    if e:
+        return e
+    row = _config_owned(configId, str(uid))
+    if row is None:
+        return err("NOT_FOUND", rid, detail="no such config for this account")
+    source = str(row[2])
+    # `copier_id` carries the CONFIG id, and that is what the engine's own `_day_counts` reads: keying this
+    # query on the user id would show every config's events on every config's screen.
+    live = []
+    for (action, reason, dev, at, intent) in _db.execute(
+            "SELECT action, reason, deviation_bps, at_ms, intent_id FROM copy_events"
+            " WHERE copier_id=? ORDER BY at_ms DESC LIMIT ?", (str(configId), limit)).fetchall():
+        live.append({"action": str(action), "reason": str(reason), "deviationBps": _tm._int(dev),
+                     "atMs": _tm._int(at), "intentId": str(intent), "dryRun": False})
+    would = []
+    for (action, size, price, src_price, dev, reason, at, mid) in _db.execute(
+            "SELECT would_action, would_size_micro, would_price_micro, source_price_micro, deviation_bps,"
+            " reason, at_ms, market_id FROM copy_dry_runs WHERE config_id=? ORDER BY at_ms DESC LIMIT ?",
+            (str(configId), limit)).fetchall():
+        would.append({"action": str(action), "shares": _shares(_tm._int(size)),
+                      "price": fmt_usdc(_tm._int(price)), "sourcePrice": fmt_usdc(_tm._int(src_price)),
+                      "deviationBps": _tm._int(dev), "reason": str(reason), "atMs": _tm._int(at),
+                      "marketId": str(mid), "dryRun": True})
+    skipped = [r for r in live if r["action"] == "skipped"]
+    copied = [r for r in live if r["action"] == "copied"]
+    return _stamped({"configId": str(configId), "sourceAnon": _anon(source), "live": live, "wouldDo": would,
+                     "skips": skipped,
+                     "slippage": _tm.copy_slippage_warning(deviations_bps=[r["deviationBps"] for r in copied],
+                                                           copied=len(copied), skipped=len(skipped)),
+                     "sourceStats": _source_stats(_anon(source)),
+                     "skipReasons": sorted({r["reason"] for r in skipped if r["reason"]})},
+                    ttl_ms=0, stale_ms=0)
+
+
+
+# ------------------------------------------------------------------------ D6 · the portfolio
+@app.get("/v1/me/portfolio", responses=PORTFOLIO_RESPONSES)
+def get_portfolio(request: Request):
+    """D6's data: positions marked, grouped by event where the event is negRisk, the order history with its
+    unknown rows INTACT, the realised curve, and the benchmark.
+
+    The benchmark is holding pUSD — a flat line at the cash that was deposited, valued at 1.0000 — and it is
+    stated in the payload rather than drawn as an unnamed second line: a benchmark a user cannot identify is
+    decoration. Rows whose lifecycle we cannot name are returned, not filtered: a P06 finding is that the venue
+    reports states we do not model, and a table that hides those rows is a table claiming every order resolved.
+    """
+    uid, _row, e = _principal(request)
+    if e:
+        return e
+    marks = _market_rows()
+    positions = []
+    for (token, mid, shares, basis, outcome) in _db.execute(
+            "SELECT l.token_id, l.market_id, SUM(l.shares_open_micro), SUM(l.basis_micro), t.outcome"
+            " FROM position_lots l LEFT JOIN tokens t ON t.token_id = l.token_id"
+            " WHERE l.user_id = ? AND l.shares_open_micro > 0 GROUP BY l.token_id, l.market_id, t.outcome",
+            (str(uid),)).fetchall():
+        size, cost = _tm._int(shares), _tm._int(basis)
+        m = marks.get(_condition_for_market(mid), {})
+        raw = m.get("lastPriceMicro")
+        mark = _tm._int(raw) if raw is not None else 0
+        avg_entry = (cost * 1_000_000 // size) if size else 0
+        row = _tm.portfolio_row(size_micro=size, avg_entry_micro=avg_entry, mark_micro=mark,
+                                tick_micro=_tick_micro(m.get("tick", "0.01")),
+                                ends_in_ms=(m.get("endsMs", 0) - _now_ms()), cost_basis_micro=cost)
+        positions.append({"tokenId": str(token), "marketId": str(mid), "marketSlug": m.get("marketSlug", ""),
+                          "question": m.get("question", ""), "outcome": str(outcome),
+                          "category": m.get("category", ""), "resolved": False, "winner": None,
+                          "markSource": "last_fill" if mark else "unknown", **_position_out(row)})
+    total_value = sum(p["valueMicro"] for p in positions)
+    for p in positions:
+        p["shareOfPortfolioBps"] = (p["valueMicro"] * 10_000 // total_value) if total_value else 0
+    groups = _neg_risk_groups(positions)
+    orders = []
+    for (oid, mid, state, reason, size, price, created, notional) in _db.execute(
+            "SELECT id, market_id, state, COALESCE(risk_code,''), size_micro, price_micro, created_ms,"
+            " COALESCE(notional_micro,0) FROM order_intents WHERE user_id=? ORDER BY created_ms DESC LIMIT 100",
+            (str(uid),)).fetchall():
+        orders.append({"intentId": str(oid), "marketId": str(mid), "state": str(state),
+                       "reason": (str(reason) or None), "shares": _shares(_tm._int(size)),
+                       "price": fmt_usdc(_tm._int(price)), "createdMs": _tm._int(created),
+                       "notionalMicro": _tm._int(notional), "unknownLifecycle": False})
+    unknown = []
+    # `order_lifecycle`'s own columns: the venue id is `order_id` ('' while the venue has not answered), the
+    # state machine includes `unknown`, and `show_as_working` is written WITH the state so a read path cannot
+    # guess. These rows are returned rather than filtered: a table that hides them claims every order resolved,
+    # and the reason a user needs is usually in `reason`.
+    for (order_id, intent, state, reason, working, at) in _db.execute(
+            "SELECT order_id, intent_id, state, COALESCE(reason,''), show_as_working, at_ms FROM order_lifecycle"
+            " WHERE user_id=? AND state IN ('unknown','partial') ORDER BY at_ms DESC LIMIT 50",
+            (str(uid),)).fetchall():
+        unknown.append({"venueOrderId": str(order_id), "intentId": str(intent), "state": str(state),
+                        "reason": str(reason), "showAsWorking": bool(working), "atMs": _tm._int(at),
+                        "unknownLifecycle": True})
+    cash = _tm._int(_db.execute("SELECT COALESCE(SUM(amount_micro),0) FROM cash_ledger WHERE user_id=?",
+                                (str(uid),)).fetchone()[0])
+    # The equity curve, per day, from the ledger the money path already writes. `cash_ledger` has `created_ms`,
+    # not `at_ms` — reading the wrong column here produced a working query that returned nothing, which is the
+    # failure mode that looks like "the user has no history".
+    buckets: dict[int, int] = {}
+    for (created, amount) in _db.execute(
+            "SELECT created_ms, amount_micro FROM cash_ledger WHERE user_id=? ORDER BY created_ms",
+            (str(uid),)).fetchall():
+        day = _tm._int(created) // 86_400_000 * 86_400_000
+        buckets[day] = buckets.get(day, 0) + _tm._int(amount)
+    curve, running = [], 0
+    for day in sorted(buckets):
+        running += buckets[day]
+        curve.append({"tsMs": day, "cumMicro": running, "openPositions": 0})
+    curve = _tm.drawdown_overlay(curve)
+    invested = sum(p["costBasisMicro"] for p in positions)
+    return _stamped({"positions": positions, "negRiskGroups": groups, "orders": orders,
+                     "unknownLifecycle": unknown, "pnlCurve": curve,
+                     "maxDrawdownMicro": _tm.max_drawdown_micro(curve),
+                     "totals": {"valueMicro": total_value, "cashMicro": cash,
+                                "equityMicro": cash + total_value,
+                                "unrealisedMicro": sum(p["unrealisedMicro"] for p in positions),
+                                "costBasisMicro": invested},
+                     "benchmark": {"kind": "hold_pusd", "valueMicro": cash, "rateBps": 0,
+                                   "note": ("holding pUSD: the deposited cash at 1.0000, unchanged. It is "
+                                            "stated because a benchmark a user cannot identify is decoration, "
+                                            "and pUSD is what the money is when it is not at risk")},
+                     "csv": {"columns": ["intentId", "marketId", "state", "shares", "price",
+                                         "notionalMicro", "createdMs"],
+                             "note": ("columns are in micro-USDC where the name says Micro; the export is "
+                                      "produced from this same payload so the file cannot disagree with the "
+                                      "screen it was downloaded from")},
+                     "emptyState": "/markets - browse markets and place a first order to start a portfolio"},
+                    ttl_ms=0, stale_ms=0)
+
+
+def _condition_for_market(market_id: str) -> str:
+    row = _db.execute("SELECT condition_id FROM markets WHERE id=?", (str(market_id),)).fetchone()
+    return str(row[0]) if row else ""
+
+
+def _neg_risk_groups(positions: list[dict]) -> list[dict]:
+    """Event-level exposure, for the events where exactly one outcome can pay.
+
+    A long-Yes book across k outcomes of a negRisk event is ONE position with k legs; summing the legs' quoted
+    values shows a payout that cannot happen, which is the same class of error as a PnL curve without its
+    drawdown.
+    """
+    if not positions:
+        return []
+    rows = _db.execute("SELECT id, COALESCE(event_id,''), COALESCE(neg_risk,0) FROM markets").fetchall()
+    event_of = {str(mid): str(ev) for mid, ev, neg in rows if ev and neg}
+    by_event: dict[str, list[dict]] = {}
+    for p in positions:
+        ev = event_of.get(str(p["marketId"]))
+        if ev:
+            by_event.setdefault(ev, []).append({"sizeMicro": p["sizeMicro"], "valueMicro": p["valueMicro"],
+                                                "costBasisMicro": p["costBasisMicro"]})
+    out = []
+    for ev, legs in by_event.items():
+        title = _db.execute("SELECT title FROM events WHERE id=?", (ev,)).fetchone()
+        out.append(_tm.neg_risk_group(legs, event_id=ev, event_title=(str(title[0]) if title else ev)))
+    return out
+
+
+# ------------------------------------------------------------------------ D4 · saved whale views
+@app.get("/v1/whale-views", responses=WHALE_VIEW_RESPONSES)
+def list_whale_views(request: Request,
+                     viewId: str | None = Query(default=None, max_length=64),
+                     limit: int = Query(default=50, ge=1, le=200)):
+    """The saved views, each with its rule's budget, so a user can see how noisy an alert is allowed to be."""
+    rid = request.state.request_id
+    uid, _row, e = _principal(request)
+    if e:
+        return e
+    if viewId and _db.execute("SELECT 1 FROM whale_views WHERE id=? AND user_id=?",
+                              (str(viewId), str(uid))).fetchone() is None:
+        return err("NOT_FOUND", rid, detail="no such view for this account")
+    items = []
+    for (vid, name, filters, channel, severity, scope, market_id, rule_id, created, fires, window,
+         enabled) in _db.execute(
+            "SELECT v.id, v.name, v.filters_json, v.channel, v.severity, v.scope, v.market_id, v.rule_id,"
+            " v.created_ms, r.fires_per_window, r.window_ms, r.enabled FROM whale_views v"
+            " LEFT JOIN alert_rules r ON r.id = v.rule_id WHERE v.user_id=?"
+            + (" AND v.id=?" if viewId else "") + " ORDER BY v.created_ms DESC LIMIT ?",
+            ((str(uid), str(viewId), limit) if viewId else (str(uid), limit))).fetchall():
+        items.append({"viewId": str(vid), "name": str(name), "filters": _json_load(filters),
+                      "channel": str(channel), "severity": str(severity), "scope": str(scope),
+                      "marketId": (None if market_id is None else str(market_id)),
+                      "ruleId": (None if rule_id is None else str(rule_id)), "createdMs": _tm._int(created),
+                      # A view notifies only when it is bound to a rule, and `alert_rules` requires a target:
+                      # an alert with no target is a notification about nothing.
+                      "notifies": rule_id is not None,
+                      "firesPerWindow": (None if fires is None else _tm._int(fires)),
+                      "ruleWindowMs": (None if window is None else _tm._int(window)),
+                      "ruleEnabled": (None if enabled is None else bool(enabled))})
+    return _stamped({"items": items, "count": len(items)}, ttl_ms=0, stale_ms=0)
+
+
+@app.post("/v1/whale-views", status_code=200, responses=WHALE_VIEW_RESPONSES,
+           openapi_extra=_body_schema(WHALE_VIEW_REQUIRED, WHALE_VIEW_PROPS))
+def create_whale_view(request: Request, body: dict = Body(...)):
+    """D4's saved view, plus the inline alert rule it may create.
+
+    A view is a filter with a name. A view that *notifies* must own an `alert_rules` row, and this endpoint can
+    create that row in the same request (`createRule: true`) so a user never has to walk a second screen to get
+    an alert. What it will not do is notify without a rule: P05's budget rule is what stops a tracker becoming
+    a firehose, and a feature that bypassed it would undo that phase.
+    """
+    rid = request.state.request_id
+    bad = _check_body(body, WHALE_VIEW_REQUIRED, rid, allowed=tuple(WHALE_VIEW_PROPS))
+    if bad is not None:
+        return bad
+    bad = _check_props(body, WHALE_VIEW_PROPS, rid)
+    if bad is not None:
+        return bad
+    uid, _row, e = _principal(request)
+    if e:
+        return e
+    scope = str(body.get("scope") or ("market" if body.get("marketId") else "global"))
+    market_id = body.get("marketId")
+    if scope == "market":
+        if not market_id or _db.execute("SELECT 1 FROM markets WHERE id=?",
+                                        (str(market_id),)).fetchone() is None:
+            return err("VALIDATION", rid, detail="scope=market needs an existing marketId")
+    elif market_id:
+        return err("VALIDATION", rid, detail="a global view must not carry a marketId")
+    rule_id = body.get("ruleId")
+    if rule_id and _db.execute("SELECT 1 FROM alert_rules WHERE id=?", (str(rule_id),)).fetchone() is None:
+        return err("VALIDATION", rid, detail="unknown ruleId")
+    if body.get("createRule") and not rule_id:
+        if scope != "market":
+            # `alert_rules` carries a CHECK (`rule_has_target`): a rule must name a market or an event, because
+            # a rule with no target matches everything and fires on everything. The schema is right and the UI
+            # is what has to change, so this refuses with the reason instead of inventing a wildcard.
+            return err("VALIDATION", rid,
+                       detail=("a notifying view needs a market: alert_rules requires a market or event target,"
+                               " so save a global view as a filter or scope it to a market"))
+        fires = _tm._int(body.get("firesPerWindow", 4))
+        window = _tm._int(body.get("windowMs", 3_600_000))
+        if not (1 <= fires <= 24 and window >= 60_000):
+            return err("VALIDATION", rid, detail="firesPerWindow 1-24 and windowMs 60000 or more")
+        rule_id = "wr-" + uuid.uuid4().hex[:12]
+        # The severity, channel and filters live in `params_json`: P04's rule table has a window cap, a kind and
+        # a target, and a column per future knob would be a schema that grows with the UI.
+        _db.execute("INSERT INTO alert_rules (id, user_id, market_id, event_id, kind, fires_per_window,"
+                    " window_ms, params_json, enabled, created_ms) VALUES (?,?,?,?,?,?,?,?,1,?)",
+                    (str(rule_id), str(uid), str(market_id), None, "whale_fill", fires, window,
+                     json.dumps({"severity": str(body.get("severity") or "notice"),
+                                 "channel": str(body.get("channel") or "telegram"),
+                                 "filters": body.get("filters") or {}, "source": "whale_view"}),
+                     _now_ms()))
+    view_id = "wv-" + uuid.uuid4().hex[:12]
+    _db.execute("INSERT INTO whale_views (id, user_id, name, filters_json, channel, severity, scope,"
+                " market_id, rule_id, created_ms) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                (view_id, str(uid), str(body["name"]).strip(), json.dumps(body.get("filters") or {}),
+                 str(body.get("channel") or "telegram"), str(body.get("severity") or "notice"), scope,
+                 (str(market_id) if scope == "market" else None), (str(rule_id) if rule_id else None),
+                 _now_ms()))
+    return _stamped({"viewId": view_id, "ruleId": (str(rule_id) if rule_id else None),
+                     "notifies": bool(rule_id),
+                     "note": ("a saved view without a rule is a filter you look at; with a rule it is an alert."
+                              " This one is %s." % ("bound to a rule" if rule_id else "a filter only"))},
+                    ttl_ms=0, stale_ms=0)
+
+
+# The P10 routes' auth levels. Every served route needs a row here or the request fails closed with
+# `AUTHZ_UNDECLARED`, which is the correct default and an infuriating one to debug — so the four public reads
+# (a tape, its facets, the whale feed and a pseudonymous dossier: all of them reveal only what the venue
+# already publishes) and the six user-scoped ones are declared next to the routes that use them.
+_levels_p10 = {
+    "GET /v1/tape/fills": (_authz.PUBLIC, ""),
+    "GET /v1/tape/facets": (_authz.PUBLIC, ""),
+    "GET /v1/whales": (_authz.PUBLIC, ""),
+    "GET /v1/traders/{anon}": (_authz.PUBLIC, ""),
+    "GET /v1/copy/configs": (_authz.USER, ""),
+    "POST /v1/copy/configs": (_authz.USER, ""),
+    "POST /v1/copy/configs/guards": (_authz.USER, "scoped:config_id"),
+    "GET /v1/copy/configs/monitor": (_authz.USER, "scoped:config_id"),
+    "GET /v1/me/portfolio": (_authz.USER, ""),
+    "GET /v1/whale-views": (_authz.USER, ""),
+    "POST /v1/whale-views": (_authz.USER, ""),
+}
+for _t in (TAPE_FILLS_RESPONSES, FACETS_RESPONSES, WHALES_RESPONSES, TRADER_RESPONSES, COPY_CREATE_RESPONSES,
+           COPY_GUARD_RESPONSES, COPY_MONITOR_RESPONSES, PORTFOLIO_RESPONSES, WHALE_VIEW_RESPONSES):
+    _t.update(_INTERNAL)                       # every route can 500 through the app-wide handler
+del _t
+_authz.LEVELS_TABLE.update(_levels_p10)
+_authz._MATCHERS.clear()                    # the matchers cache the table; a new row must invalidate it

@@ -219,7 +219,12 @@ class TestBook(SurfacesBase):
         import os
         import seed as seed_mod                      # conftest puts services/api on sys.path
         counts = seed_mod.seed_sqlite(os.environ["PGM_DB_PATH"])
-        self.assertEqual(counts["tape_trades"], counts["tape_fills"])
+        # `tape_trades` is the P04 fixture the gate reads, `tape_fills` the durable ingest log the P09/P10
+        # surfaces read. The seed mirrors one into the other and P10's terminal fixture adds wallet-level fills
+        # with no P04 twin, so the invariant is one-directional and that is the direction that matters: every
+        # trade has fills, and the log is never empty - an empty `tape_fills` renders as "never traded".
+        self.assertGreaterEqual(counts["tape_fills"], counts["tape_trades"])
+        self.assertGreater(counts["tape_trades"], 0)
         con = sqlite3.connect(os.environ["PGM_DB_PATH"])
         try:
             names = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='trigger'")}

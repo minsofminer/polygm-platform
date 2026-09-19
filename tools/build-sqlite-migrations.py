@@ -37,7 +37,11 @@ APPEND_ONLY = ["cash_ledger", "fills", "tape_trades", "builder_attribution", "po
                # P06: the trading plane's evidence tables. Each one exists so a decision made at 3am can be
                # read back; a table you can UPDATE is a table you cannot trust after an incident.
                "wallet_events", "order_lifecycle", "reconcile_actions", "copy_events", "automation_runs",
-               "chain_events", "flag_audit_p06", "kill_switch_drills"]
+               "chain_events", "flag_audit_p06", "kill_switch_drills",
+               # P10: the copy engine's would-be actions and the history of a trader's score. Both are
+               # evidence read back after the fact — "why did it skip that fill" and "why did this wallet
+               # stop being smart money" — so neither may be rewritten.
+               "copy_dry_runs", "trader_metric_snapshots", "wallet_pseudonyms"]
 API_TABLES = {"markets", "events", "tokens", "book_levels", "tape_trades", "users", "idempotency_keys",
               "kill_switch_state", "order_intents", "orders", "fills", "cash_ledger", "position_lots",
               "position_snapshots", "builder_attribution", "feature_flags", "flag_audit", "audit_log",

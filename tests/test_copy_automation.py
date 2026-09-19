@@ -337,6 +337,8 @@ class TestCopyEngineAgainstTheQueue(Harness):
                                                                           self.market))
         self.eng = cp.CopyEngine(self.store, builder_bps=100, fee_rate_bps=0)
 
+    config_id = "c-1"
+
     def add_config(self, *, source: str = "u-src", mode: str = "ratio", ratio_bps: int = 5_000,
                    max_order: int = 25_000_000, max_daily: int = 250_000_000, enabled: bool = True,
                    config_id: str = "c-1", deviation: int = 150, tp: int | None = None,
@@ -399,8 +401,11 @@ class TestCopyEngineAgainstTheQueue(Harness):
         self.assertEqual(again[0]["action"], "skipped")
         self.assertTrue(again[0]["reason"].startswith("duplicate"), again[0]["reason"])
         self.assertEqual(again[0]["intent_id"], first[0]["intent_id"])
-        actions = [r["action"] for r in self.rows("SELECT action FROM copy_events ORDER BY id")]
-        self.assertEqual(actions, ["copied", "skipped"], "the skip is visible in the user's history")
+        actions = [r["action"] for r in self.rows("SELECT action FROM copy_events WHERE copier_id=? "
+                                                  "ORDER BY id", (self.config_id,))]
+        self.assertEqual(actions, ["copied", "skipped"],
+                         "the skip is visible in this config's history, and only this config's: "
+                         "`copier_id` carries the config id, and the seed's demo history is `cfg-seed01`")
 
     def test_a_skipped_copy_still_writes_its_reason(self):
         self.add_config(deviation=50)
@@ -408,7 +413,8 @@ class TestCopyEngineAgainstTheQueue(Harness):
         self.assertEqual(out[0]["action"], "skipped")
         self.assertTrue(out[0]["reason"].startswith("deviation"))
         self.assertEqual(self.rows("SELECT id FROM order_intents"), [])
-        ev = self.rows("SELECT action,reason,deviation_bps FROM copy_events")[0]
+        ev = self.rows("SELECT action,reason,deviation_bps FROM copy_events WHERE copier_id=? ORDER BY id",
+                       (self.config_id,))[0]
         self.assertEqual(ev["action"], "skipped")
         self.assertGreater(ev["deviation_bps"], 50)
         self.assertIn("deviation", self.eng.stats.skipped)
@@ -418,7 +424,8 @@ class TestCopyEngineAgainstTheQueue(Harness):
         # `copy_configs_for_source` filters on enabled, so a paused source produces no evaluation at all; the
         # test exists so that filter cannot be "improved" into evaluating-and-then-skipping without notice.
         self.assertEqual(self.eng.on_source_fill(self.src_fill(), at=self.at + 1), [])
-        self.assertEqual(self.rows("SELECT id FROM copy_events"), [])
+        self.assertEqual(self.rows("SELECT id FROM copy_events WHERE copier_id=?", (self.config_id,)), [],
+                         "no evaluation at all - not even a skip event was written")
 
     def test_take_profit_exit_is_queued_when_the_bid_reaches_it(self):
         self.add_config(tp=1_000)
@@ -468,7 +475,7 @@ class TestCopyEngineAgainstTheQueue(Harness):
         self.assertEqual(r, {"paused_copiers": 2, "notified": 2})
         for cid in ("c-1", "c-2"):
             self.assertIn("source stopped", self.store.copy_config(cid)["paused_reason"])
-        self.assertEqual(self.rows("SELECT action FROM copy_events ORDER BY id"),
+        self.assertEqual(self.rows("SELECT action FROM copy_events WHERE copier_id IN ('c-1','c-2') ORDER BY id"),
                          [{"action": "source_stopped"}, {"action": "source_stopped"}])
 
     def test_an_insider_suspect_label_pauses_without_showing_the_accusation(self):

@@ -23,6 +23,12 @@ def _now_ms() -> int:
     return int(time.time() * 1000)
 
 
+# P10's fixtures live in their own module: this file is the phase-agnostic writer (it knows column orders and
+# trigger juggling), and `seed_terminal` knows what the terminal needs. Merging them here rather than having
+# the terminal module write its own rows keeps ONE writer, which is what makes `make seed` idempotent.
+from seed_terminal import all_rows as terminal_rows                # noqa: E402
+
+
 # token ids are venue-shaped (large decimal strings) because code that assumes they are small ints is the
 # bug we most need a seed to catch.
 MARKETS = [
@@ -306,8 +312,17 @@ def rows() -> dict:
                              m.get("mid") or 500_000, now))
             stats.append((m["condition"], vol, liq, 0, 0, now, "{}", now))
     labels = [(w, lab, conf, "{}", pub, now, now) for w, lab, pub, conf in SEED_WALLETS if lab]
+    # P10. `conditions` is threaded from the markets this function just built, not re-typed in the fixture: a
+    # hand-written condition id joins to no market, and a fill that joins to nothing renders as a blank row
+    # rather than as an error.
+    term = terminal_rows(now, fills, {m["id"]: m["condition"] for m in all_markets})
+    markets += term["markets"]
+    tokens += term["tokens"]
+    meta += term["meta"]
+    fills += term["fills"]
     return {"markets": markets, "tokens": tokens, "book": book, "events": events, "trades": trades,
-            "fills": fills, "labels": labels, "meta": meta, "activity": activity, "stats": stats}
+            "fills": fills, "labels": labels, "meta": meta, "activity": activity, "stats": stats,
+            "terminal": term}
 
 
 # The dev seed must reset the volatile reads every time it runs (see the note further down), but one of those
@@ -320,6 +335,18 @@ def rows() -> dict:
 # inside the seed's own transaction, so a failure anywhere rolls the drop back with everything else. The
 # recreate is asserted below, because "I put it back" is a claim and `sqlite_master` is evidence.
 APPEND_ONLY_RESET = ("tape_trades",)
+
+#: Everything that points at a market row, deleted BEFORE the market itself. `ON DELETE CASCADE` is in the
+#: Postgres DDL and is not in the generated SQLite twin (the transpiler drops it), so a per-engine cascade is
+#: not something the writer can rely on: it deletes children explicitly and works the same on both.
+_TERMINAL_MARKET_CHILDREN = ("tokens", "market_meta", "market_activity", "book_levels", "alert_rules",
+                             "whale_views")
+
+#: Tables the P10 fixture has to CLEAR before it can write its own rows, and which are append-only in the
+#: product — so the seed lifts their triggers for the length of its transaction and puts them back (asserted
+#: below). `copy_events` is here because it is P06's evidence table and the copy history is per-config data: a
+#: re-seed that appended a second copy of it would double every number on the monitor screen.
+_TERMINAL_RESET = ("wallet_pseudonyms", "copy_dry_runs", "copy_events")
 
 
 def _append_only_trigger_sql(table: str) -> tuple[str, str]:
@@ -388,6 +415,60 @@ def seed_sqlite(db_path: str | None = None) -> dict:
         con.executemany("INSERT INTO tape_fills (%s,dedupe_key) VALUES (%s,?)"
                         % (cols_f, ",".join("?" * 13)),
                         [row + ("seed-%s-%d" % (row[0], i),) for i, row in enumerate(r["fills"])])
+        # ---- P10's fixture. Order follows the foreign keys: the copy config before its guards and its
+        # dry runs, the alert rule before the view that points at it.
+        term = r["terminal"]
+        for table in _TERMINAL_RESET:
+            for stmt in ("DROP TRIGGER IF EXISTS append_only_%s_update" % table,
+                         "DROP TRIGGER IF EXISTS append_only_%s_delete" % table):
+                con.execute(stmt)
+        for mid in [m[0] for m in term["markets"]]:
+            for child in _TERMINAL_MARKET_CHILDREN:
+                con.execute("DELETE FROM %s WHERE market_id=?" % child, (mid,))
+            con.execute("DELETE FROM markets WHERE id=?", (mid,))
+        con.execute("DELETE FROM wallet_pseudonyms")
+        con.execute("DELETE FROM copy_dry_runs")
+        con.execute("DELETE FROM copy_events WHERE copier_id IN (SELECT id FROM copy_configs"
+                    " WHERE source_user=? OR id='cfg-seed01')", (term["copy"]["config"][2],))
+        for table in _TERMINAL_RESET:
+            for stmt in _append_only_trigger_sql(table):
+                con.execute(stmt)
+        for row in term["markets"]:
+            con.execute("INSERT INTO markets (id,condition_id,event_id,question,slug,accepting_orders,"
+                        "seconds_delay,enable_order_book,minimum_tick_size,minimum_order_size,fee_type,"
+                        "neg_risk,end_ts,outcomes_json,first_seen_ms,updated_ms)"
+                        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", row)
+        for row in term["tokens"]:
+            con.execute("INSERT OR REPLACE INTO tokens (token_id,market_id,outcome,outcome_index,is_winner)"
+                        " VALUES (?,?,?,?,?)", row)
+        con.executemany("INSERT OR REPLACE INTO market_meta (market_id,category,resolution_source,"
+                        "resolution_criteria,image_url,updated_ms) VALUES (?,?,?,?,?,?)", term["meta"])
+        con.execute("INSERT OR REPLACE INTO copy_configs (id,user_id,source_user,mode,ratio_bps,"
+                    "max_order_micro,max_daily_micro,blocked_markets,enabled,created_ms)"
+                    " VALUES (?,?,?,?,?,?,?,?,?,?)", term["copy"]["config"])
+        con.execute("INSERT OR REPLACE INTO copy_config_guards (config_id,dry_run,skip_if_moved_cents,"
+                    "do_not_enter_within_hours,category_filter,min_price_micro,max_price_micro,"
+                    "take_profit_micro,stop_loss_micro,live_since_ms,updated_ms)"
+                    " VALUES (?,?,?,?,?,?,?,?,?,?,?)", term["copy"]["guard"])
+        con.execute("DELETE FROM copy_source_stats WHERE source_user_id=?", (term["copy"]["config"][2],))
+        con.executemany("INSERT OR REPLACE INTO copy_source_stats (source_user_id,window_days,closed_trades,"
+                        "win_rate_bp,realized_pnl_micro,fees_micro,net_after_fees_micro,max_drawdown_micro,"
+                        "longest_losing_streak,avg_latency_ms,updated_ms) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                        term["copy"]["source_stats"])
+        con.execute("DELETE FROM alert_rules WHERE id LIKE 'rule-whale-%'")
+        con.executemany("INSERT OR REPLACE INTO alert_rules (id,user_id,market_id,event_id,kind,"
+                        "fires_per_window,window_ms,params_json,enabled,created_ms)"
+                        " VALUES (?,?,?,?,?,?,?,?,?,?)", term["rules"])
+        con.execute("DELETE FROM whale_views WHERE id LIKE 'wv-seed-%'")
+        con.executemany("INSERT OR REPLACE INTO whale_views (id,user_id,name,filters_json,channel,severity,"
+                        "scope,market_id,rule_id,created_ms) VALUES (?,?,?,?,?,?,?,?,?,?)", term["views"])
+        con.executemany("INSERT OR REPLACE INTO wallet_pseudonyms (wallet_id,anon_id,first_seen_ms)"
+                        " VALUES (?,?,?)", term["pseudonyms"])
+        con.executemany("INSERT INTO copy_dry_runs (config_id,copier_id,source_user_id,source_intent_id,"
+                        "market_id,would_action,would_size_micro,would_price_micro,source_price_micro,"
+                        "deviation_bps,reason,at_ms) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", term["copy"]["dry_runs"])
+        con.executemany("INSERT INTO copy_events (copier_id,source_user_id,source_intent_id,intent_id,"
+                        "action,reason,deviation_bps,at_ms) VALUES (?,?,?,?,?,?,?,?)", term["copy"]["events"])
         con.execute("DELETE FROM wallet_labels")
         con.executemany("INSERT INTO wallet_labels (wallet,label,confidence,evidence_json,publishable,"
                         "first_seen_ms,last_seen_ms) VALUES (?,?,?,?,?,?,?)", r["labels"])
@@ -417,7 +498,8 @@ def seed_sqlite(db_path: str | None = None) -> dict:
     counts = {t: con.execute("SELECT COUNT(*) FROM " + t).fetchone()[0]
               for t in ("markets", "tokens", "book_levels", "tape_trades", "feature_flags", "entitlements",
                         "events", "market_meta", "market_activity", "market_stats", "tape_fills",
-                        "wallet_labels")}
+                        "wallet_labels", "wallet_pseudonyms", "copy_configs", "copy_config_guards",
+                        "copy_events", "copy_dry_runs", "copy_source_stats", "whale_views", "alert_rules")}
     con.close()
     return counts
 
@@ -516,6 +598,60 @@ def emit_sql() -> str:
         out.append("INSERT INTO wallet_labels (wallet,label,confidence,evidence_json,publishable,"
                    "first_seen_ms,last_seen_ms) VALUES (%s) ON CONFLICT DO NOTHING;"
                    % ", ".join([_pg(v) for v in lab[:-2]] + [NOW_TOKEN, NOW_TOKEN]))
+    # ---- P10's fixture, in the same dependency order as the SQLite writer.
+    term = r["terminal"]
+    for row in term["markets"]:
+        vals = [_pg_time(v) if isinstance(v, int) and v > 10 ** 11 else _pg(v) for v in row]
+        # `DO NOTHING`, not an upsert: a re-applied seed must not rewrite a market's end_ts under a user who is
+        # watching it. The terminal fixture's own rows are deleted and re-inserted by the SQLite writer; here
+        # the file is just applied twice, and idempotent-for-reads is the right shape for a dev database.
+        out.append("INSERT INTO markets (%s) VALUES (%s) ON CONFLICT (id) DO NOTHING;"
+                   % (cols, ", ".join(vals)))
+    for row in term["tokens"]:
+        # Conflict on the COMPOSITE key, not on token_id: a re-seed whose token ids changed would otherwise
+        # collide with the old row on (market_id, outcome_index) and fail with an error that names the wrong
+        # constraint. The composite key is the one that describes "one slot per outcome".
+        out.append("INSERT INTO tokens (token_id,market_id,outcome,outcome_index,is_winner) VALUES (%s) "
+                   "ON CONFLICT (market_id, outcome_index) DO UPDATE SET token_id = EXCLUDED.token_id, "
+                   "is_winner = EXCLUDED.is_winner;" % ", ".join(_pg(v) for v in row))
+    for row in term["meta"]:
+        out.append("INSERT INTO market_meta (market_id,category,resolution_source,resolution_criteria,"
+                   "image_url,updated_ms) VALUES (%s) ON CONFLICT (market_id) DO UPDATE SET category = "
+                   "EXCLUDED.category;" % ", ".join([_pg(v) for v in row[:-1]] + [NOW_TOKEN]))
+    out.append("INSERT INTO copy_configs (id,user_id,source_user,mode,ratio_bps,max_order_micro,"
+               "max_daily_micro,blocked_markets,enabled,created_ms) VALUES (%s) ON CONFLICT (id) DO NOTHING;"
+               % ", ".join([_pg(v) for v in term["copy"]["config"][:-1]] + [NOW_TOKEN]))
+    out.append("INSERT INTO copy_config_guards (config_id,dry_run,skip_if_moved_cents,"
+               "do_not_enter_within_hours,category_filter,min_price_micro,max_price_micro,take_profit_micro,"
+               "stop_loss_micro,live_since_ms,updated_ms) VALUES (%s) ON CONFLICT (config_id) DO NOTHING;"
+               % ", ".join([_pg(v) for v in term["copy"]["guard"][:-1]] + [NOW_TOKEN]))
+    for row in term["copy"]["source_stats"]:
+        out.append("INSERT INTO copy_source_stats (source_user_id,window_days,closed_trades,win_rate_bp,"
+                   "realized_pnl_micro,fees_micro,net_after_fees_micro,max_drawdown_micro,"
+                   "longest_losing_streak,avg_latency_ms,updated_ms) VALUES (%s) "
+                   "ON CONFLICT (source_user_id,window_days) DO UPDATE SET closed_trades = "
+                   "EXCLUDED.closed_trades;"
+                   % ", ".join([_pg(v) for v in row[:-1]] + [NOW_TOKEN]))
+    for row in term["rules"]:
+        out.append("INSERT INTO alert_rules (id,user_id,market_id,event_id,kind,fires_per_window,window_ms,"
+                   "params_json,enabled,created_ms) VALUES (%s) ON CONFLICT (id) DO NOTHING;"
+                   % ", ".join([_pg(v) for v in row[:-1]] + [NOW_TOKEN]))
+    for row in term["views"]:
+        out.append("INSERT INTO whale_views (id,user_id,name,filters_json,channel,severity,scope,market_id,"
+                   "rule_id,created_ms) VALUES (%s) ON CONFLICT (id) DO NOTHING;"
+                   % ", ".join([_pg(v) for v in row[:-1]] + [NOW_TOKEN]))
+    for row in term["pseudonyms"]:
+        out.append("INSERT INTO wallet_pseudonyms (wallet_id,anon_id,first_seen_ms) VALUES (%s) "
+                   "ON CONFLICT (wallet_id) DO NOTHING;" % ", ".join([_pg(v) for v in row[:-1]] + [NOW_TOKEN]))
+    for row in term["copy"]["dry_runs"]:
+        out.append("INSERT INTO copy_dry_runs (config_id,copier_id,source_user_id,source_intent_id,"
+                   "market_id,would_action,would_size_micro,would_price_micro,source_price_micro,"
+                   "deviation_bps,reason,at_ms) VALUES (%s) ON CONFLICT DO NOTHING;"
+                   % ", ".join([_pg(v) for v in row[:-1]] + [_pg_time(row[-1])]))
+    for row in term["copy"]["events"]:
+        out.append("INSERT INTO copy_events (copier_id,source_user_id,source_intent_id,intent_id,action,"
+                   "reason,deviation_bps,at_ms) VALUES (%s);"
+                   % ", ".join([_pg(v) for v in row[:-1]] + [_pg_time(row[-1])]))
     out.append("INSERT INTO entitlements (user_id,plan,max_alerts,max_watchlists,max_automation_rules,"
                "radar_poll_ms,api_rpm,updated_ms) VALUES ('u-demo','trader',12,4,3,5000,120,%s) "
                "ON CONFLICT DO NOTHING;" % NOW_TOKEN)

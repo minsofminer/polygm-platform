@@ -20,6 +20,34 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+#: The label catalogue as the API serves it: for each label, the RULE that produces it in the same arithmetic
+#: the classifier runs, and the disclaimer that has to travel with it. Kept beside the thresholds above and
+#: expressed in their terms, because a rule sentence maintained separately from the code drifts within a phase
+#: and then the tooltip is confidently wrong - which is worse than no tooltip, since it is the part a user is
+#: told to trust.
+RULES = {
+    "whale": ("notional at or above the p99.5 of this market's fills in the window, and never below $500; "
+              "below 40 fills the $500 floor applies alone"),
+    "smart_money": ("at least 20 settled positions, a win rate of 62% or more, at least $5,000 realised, and "
+                    "trades in 3 or more distinct markets"),
+    "new_wallet": "fewer than 7 days of account age and fewer than 15 trades on this platform",
+    "insider_suspect": ("4 or more entries within 900s before a market-moving move, in the direction it moved, "
+                        "at 80% or better, on markets deeper than $25,000 - a pattern, not evidence"),
+    "cluster": "4 or more distinct wallets filling the same market on the same side within 600 seconds",
+    "wash_like": "6 or more round trips on one market with a median gap between the two legs under 45 seconds",
+}
+
+
+def catalogue() -> list[dict]:
+    """Every label with its rule and its disclaimer, in one payload a client can render without deciding
+    anything itself. `publishable` rides along because the UI's two states (show it, or refuse to show it
+    anywhere it could be screenshotted and read as an accusation) are a product decision, not a styling one.
+    """
+    return [{"label": name, "rule": rule, "disclaimer": DISCLAIMERS[name],
+             "publishable": name != "insider_suspect"}
+            for name, rule in sorted(RULES.items())]
+
+
 DISCLAIMERS = {
     "whale": "size relative to this market's recent fills; not a statement about the person",
     "smart_money": "past realised results only; a small sample is noise, and this label is suppressed below it",

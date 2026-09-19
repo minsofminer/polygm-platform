@@ -22,7 +22,10 @@
     "automation_runs",
     "chain_events",
     "flag_audit_p06",
-    "kill_switch_drills"
+    "kill_switch_drills",
+    "copy_dry_runs",
+    "trader_metric_snapshots",
+    "wallet_pseudonyms"
   ],
   "tables": [
     "address_allowlist",
@@ -49,8 +52,10 @@
     "builder_revenue_daily",
     "cash_ledger",
     "chain_events",
+    "copy_config_guards",
     "copy_config_policy",
     "copy_configs",
+    "copy_dry_runs",
     "copy_economics",
     "copy_events",
     "copy_source_stats",
@@ -105,17 +110,22 @@
     "telegram_nonces",
     "tokens",
     "totp_enrollments",
+    "trader_metric_series",
+    "trader_metric_snapshots",
+    "trader_metrics",
     "user_identities",
     "users",
     "venue_fees",
     "wallet_events",
     "wallet_label_history",
     "wallet_labels",
+    "wallet_pseudonyms",
     "wallet_rollups",
     "wallets",
     "wash_findings",
     "watchlist_items",
     "watchlists",
+    "whale_views",
     "withdrawal_addresses",
     "withdrawals"
   ],
@@ -245,6 +255,14 @@
     "0010_market_surfaces.sql": {
       "dropped": [
         "partial/expression index: CREATE INDEX IF NOT EXISTS market_meta_category_ix ON market_meta (cat"
+      ],
+      "check_clauses_reordered": []
+    },
+    "0011_terminal.sql": {
+      "dropped": [
+        "PG-only statement: CREATE TRIGGER append_only_copy_dry_runs BEFORE UPDATE OR DELETE ON copy_dry_r",
+        "PG-only statement: CREATE TRIGGER append_only_trader_metric_snapshots BEFORE UPDATE OR DELETE ON ",
+        "PG-only statement: CREATE TRIGGER append_only_wallet_pseudonyms BEFORE UPDATE OR DELETE ON wallet"
       ],
       "check_clauses_reordered": []
     }

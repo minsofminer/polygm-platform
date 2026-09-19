@@ -69,6 +69,17 @@ TABLE_FOR_PATH = {
     "/v1/wallet/withdrawal-addresses/add": "ADDRESS_RESPONSES",
     "/v1/wallet/withdrawal-addresses/remove": "ADDRESS_RESPONSES",
     "/v1/admin/revoke-sessions": "BREAK_GLASS_RESPONSES",
+    # P10 · the terminal. Every one of these is listed even where two verbs share a path, because a path that
+    # is not in this table is a path the status comparison silently skips.
+    "/v1/tape/fills": "TAPE_FILLS_RESPONSES",
+    "/v1/tape/facets": "FACETS_RESPONSES",
+    "/v1/whales": "WHALES_RESPONSES",
+    "/v1/traders/{anon}": "TRADER_RESPONSES",
+    "/v1/copy/configs": "COPY_CREATE_RESPONSES",
+    "/v1/copy/configs/guards": "COPY_GUARD_RESPONSES",
+    "/v1/copy/configs/monitor": "COPY_MONITOR_RESPONSES",
+    "/v1/me/portfolio": "PORTFOLIO_RESPONSES",
+    "/v1/whale-views": "WHALE_VIEW_RESPONSES",
 }
 
 
@@ -277,21 +288,21 @@ def compare_live(rep: Report, doc: dict, ops: dict) -> None:
             return param_defs.get(ref.rsplit("/", 1)[-1], {}) or {}
         return pp
 
-    wanted: dict[str, tuple[list[str], list[str]]] = {}
+    wanted: dict[tuple[str, str], tuple[list[str], list[str]]] = {}
     for (verb, path), op in ops.items():
         names = sorted({resolve(pp).get("name", "") for pp in (op.get("parameters") or [])
                         if resolve(pp).get("name")})
         body = (((op.get("requestBody") or {}).get("content") or {}).get("application/json") or {})
-        wanted[path] = (names, sorted(((body.get("schema") or {}).get("required") or [])))
+        wanted[(verb.upper(), path)] = (names, sorted(((body.get("schema") or {}).get("required") or [])))
 
     derived = impl.app.openapi()
     for path, item in (derived.get("paths") or {}).items():
-        if path not in wanted or not isinstance(item, dict):
+        if not isinstance(item, dict):
             continue
-        want_names, want_req = wanted[path]
         for verb, op in item.items():
-            if not isinstance(op, dict):
+            if not isinstance(op, dict) or (verb.upper(), path) not in wanted:
                 continue
+            want_names, want_req = wanted[(verb.upper(), path)]
             got = sorted({q.get("name", "") for q in (op.get("parameters") or []) if isinstance(q, dict)})
             rep.check("%s %s: every documented parameter exists in the served spec" % (verb.upper(), path),
                       all(w in got for w in want_names), "yaml %s vs served %s" % (want_names, got))

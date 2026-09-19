@@ -92,3 +92,15 @@ CREATE TRIGGER append_only_flag_audit_p06_delete BEFORE DELETE ON flag_audit_p06
 CREATE TRIGGER append_only_kill_switch_drills_update BEFORE UPDATE ON kill_switch_drills BEGIN SELECT RAISE(ABORT,'append-only table: kill_switch_drills is not updatable'); END;
 
 CREATE TRIGGER append_only_kill_switch_drills_delete BEFORE DELETE ON kill_switch_drills BEGIN SELECT RAISE(ABORT,'append-only table: kill_switch_drills is not deletable'); END;
+
+CREATE TRIGGER append_only_copy_dry_runs_update BEFORE UPDATE ON copy_dry_runs BEGIN SELECT RAISE(ABORT,'append-only table: copy_dry_runs is not updatable'); END;
+
+CREATE TRIGGER append_only_copy_dry_runs_delete BEFORE DELETE ON copy_dry_runs BEGIN SELECT RAISE(ABORT,'append-only table: copy_dry_runs is not deletable'); END;
+
+CREATE TRIGGER append_only_trader_metric_snapshots_update BEFORE UPDATE ON trader_metric_snapshots BEGIN SELECT RAISE(ABORT,'append-only table: trader_metric_snapshots is not updatable'); END;
+
+CREATE TRIGGER append_only_trader_metric_snapshots_delete BEFORE DELETE ON trader_metric_snapshots BEGIN SELECT RAISE(ABORT,'append-only table: trader_metric_snapshots is not deletable'); END;
+
+CREATE TRIGGER append_only_wallet_pseudonyms_update BEFORE UPDATE ON wallet_pseudonyms BEGIN SELECT RAISE(ABORT,'append-only table: wallet_pseudonyms is not updatable'); END;
+
+CREATE TRIGGER append_only_wallet_pseudonyms_delete BEFORE DELETE ON wallet_pseudonyms BEGIN SELECT RAISE(ABORT,'append-only table: wallet_pseudonyms is not deletable'); END;

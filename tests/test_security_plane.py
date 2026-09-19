@@ -74,7 +74,6 @@ PLANNED_NOT_SERVED = [
     "POST /v1/admin/flags",
     "POST /v1/admin/revoke-keys",
     "POST /v1/automation/rules",
-    "POST /v1/copy/config",
     "POST /v1/orders/{intentId}/cancel",
     "POST /v1/wallet/export",
     "POST /v1/wallet/withdraw",
