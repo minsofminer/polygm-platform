@@ -33,7 +33,7 @@ SENTINEL = "@@DROPPED@@"
 # history table, which P06 already has for the states that need one.
 APPEND_ONLY = ["cash_ledger", "fills", "tape_trades", "builder_attribution", "position_snapshots",
                "auth_events", "wash_findings", "broadcast_gates", "backup_restore_tests", "drill_records",
-               "audit_log", "flag_audit", "alert_fires", "kill_switch_state", "referral_events",
+               "audit_log", "flag_audit", "alert_fires", "kill_switch_state",
                # P06: the trading plane's evidence tables. Each one exists so a decision made at 3am can be
                # read back; a table you can UPDATE is a table you cannot trust after an incident.
                "wallet_events", "order_lifecycle", "reconcile_actions", "copy_events", "automation_runs",
@@ -44,12 +44,21 @@ APPEND_ONLY = ["cash_ledger", "fills", "tape_trades", "builder_attribution", "po
                "copy_dry_runs", "trader_metric_snapshots", "wallet_pseudonyms",
                # P11: an exclusion is a decision about somebody's standing, and the question after an incident is
                # "who removed this wallet, when, and why" — which an UPDATE cannot answer.
-               "leaderboard_exclusions"]
+               "leaderboard_exclusions",
+               # P11-D5: an accrual is a claim on revenue we were paid, so the sum of the table must stay the
+               # answer to "what is owed" without anybody having to ask whether a row was edited.
+               # `referral_events` (P04's sketch) is GONE as of 0016 and is deliberately absent from this list:
+               # an append-only promise about a dropped table is a promise about nothing.
+               "referral_accruals"]
 API_TABLES = {"markets", "events", "tokens", "book_levels", "tape_trades", "users", "idempotency_keys",
               "kill_switch_state", "order_intents", "orders", "fills", "cash_ledger", "position_lots",
               "position_snapshots", "builder_attribution", "feature_flags", "flag_audit", "audit_log",
               "entitlements", "alert_rules", "alert_fires", "copy_configs", "automation_rules",
-              "watchlists", "watchlist_items", "referrals", "referral_events", "subscriptions", "balances"}
+              "watchlists", "watchlist_items", "subscriptions", "balances",
+              # P11-D5 replaces P04's `referrals`/`referral_events` sketch with the five tables a referral is
+              # actually made of (0016 records why they could not be evolved in place).
+              "referral_links", "referral_clicks", "referral_signals", "referral_attributions",
+              "referral_accruals", "referral_reviews", "referral_payouts"}
 
 TYPE_MAP = [
     (r"\bBIGSERIAL\b", "INTEGER"),        # INTEGER PRIMARY KEY is the rowid alias => autoincrement

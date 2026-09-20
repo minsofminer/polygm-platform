@@ -36,6 +36,9 @@ from polygm_core.leaderboard import source as _lb_source
 from polygm_core.ledger.ledger import IntentState
 from polygm_core.money.cents import MoneyError, ScaleError, fmt_usdc, parse_usdc, price_ticks
 from polygm_core.radar import rankings as _radar
+from polygm_core.referrals import code as _rc
+from polygm_core.referrals import sybil as _sy
+from polygm_core.referrals import terms as _rt
 from polygm_core.risk.gate import Intent, Limits, MarketState, evaluate, norm_tick
 from polygm_core.risk.idempotency import Idem
 from polygm_core.security import authz as _authz
@@ -112,6 +115,17 @@ CODES = {
     # history: a handle becomes a public URL (/trader/<handle>), and an account that could take a second one
     # after being caught would get a second first impression. Its own code so the sentence may name the clash.
     "HANDLE_TAKEN": ("that public handle is already claimed; pick another", 409, False),
+    # P11-D5. Three refusals that exist because each one tells the person something they can act on: which name
+    # to pick, that a referee is referred once, and that referring yourself is not a budget question.
+    "CODE_TAKEN": ("that short code is already claimed; pick another", 409, False),
+    # The one D5 refusal a referee meets while typing: the shape rules in `referrals.code` are stricter than a
+    # Pydantic length check (a reserved word, an all-digit code), and a user who is told only "invalid (code)"
+    # has no way to guess which rule they broke. Its own code so the engine's sentence may be served.
+    "CODE_INVALID": ("that short code cannot be used", 422, False),
+    "ALREADY_REFERRED": ("this account already has a referral recorded; a referee is referred once, and a "
+                         "refused referral is appealed rather than re-applied", 409, False),
+    "SELF_REFERRAL": ("an account cannot refer itself; the referral is refused and the builder code it was made "
+                      "under is a revocation ground", 409, False),
     # P07. Each of these is a *user-safe* sentence: the detail a client needs is here, and the detail an
     # attacker would like is in the log line, behind the request id.
     "UNAUTHENTICATED": ("a session is required", 401, False),
@@ -257,7 +271,11 @@ _PUBLIC_DETAIL_CODES = frozenset({"REFUSED", "QUOTA_EXCEEDED", "RADAR_SCOPE",
                                 # P10-D8/D9: the four refusals above are sentences written for the user
                                 # (which plan, which limit, which next step) and contain nothing from the
                                 # request, so they are safe to say out loud.
-                                "HALTED", "RULE_CAP", "DRY_RUN_REQUIRED", "PLAN_REQUIRED", "HANDLE_TAKEN"})
+                                "HALTED", "RULE_CAP", "DRY_RUN_REQUIRED", "PLAN_REQUIRED", "HANDLE_TAKEN",
+                                # P11-D5: three sentences about the caller's own request that name nothing they
+                                # sent — the code they typed stays out of the body, which is the rule this list
+                                # exists to keep narrow.
+                                "CODE_TAKEN", "CODE_INVALID", "ALREADY_REFERRED", "SELF_REFERRAL"})
 
 
 def err(code: str, request_id: str, *, detail: str | None = None, where: list[str] | None = None,
@@ -5910,6 +5928,40 @@ _levels_p10 = {
     "GET /v1/alerts/deliveries": (_authz.USER, ""),
     "POST /v1/alerts/settings": (_authz.USER, ""),
 }
+# ------------------------------------------------------ P11 D5 · the referral response tables
+# Declared beside the routes' other response tables rather than with the handlers (the loop below reads
+# them by name, and an OpenAPI document that is missing a route's refusals is a contract nobody can
+# implement against).
+REFERRAL_TERMS_RESPONSES = {200: {"description": "the model, the published rules, the schedule, and the rejected "
+                                       "alternatives with the reason each was rejected"}}
+REFERRAL_ME_RESPONSES = {401: {"description": "a session is required"}}
+REFERRAL_CODE_RESPONSES = {400: {"description": "no Idempotency-Key"},
+                           401: {"description": "a session is required"},
+                           409: {"description": "the Idempotency-Key was reused with a different body, or the "
+                                                "short code is already claimed"},
+                           422: {"description": "a code outside the shape rules, or a reserved word"}}
+REFERRAL_APPLY_RESPONSES = {400: {"description": "no Idempotency-Key"},
+                            401: {"description": "a session is required"},
+                            409: {"description": "the Idempotency-Key was reused with a different body, this "
+                                                 "account already has a referral, the referral is refused "
+                                                 "(self-referral or a shared funding source), or the link is "
+                                                 "not a link"},
+                            422: {"description": "a code that resolves to nobody"}}
+REFERRAL_ACCRUE_RESPONSES = {400: {"description": "no Idempotency-Key"},
+                             403: {"description": "not an operator token"},
+                             503: {"description": "no operator token is configured on this box, which is a "
+                                                   "misconfiguration rather than an attack"},
+                             409: {"description": "the Idempotency-Key was reused with a different body"},
+                             422: {"description": "a day that is not YYYY-MM-DD, or one in the future"}}
+REFERRAL_REVIEW_RESPONSES = {403: {"description": "not an operator token"},
+                             503: {"description": "no operator token is configured on this box"}}
+REFERRAL_REVIEW_SET_RESPONSES = {400: {"description": "no Idempotency-Key"},
+                                 403: {"description": "not an operator token"},
+                                 503: {"description": "no operator token is configured on this box"},
+                                 404: {"description": "no such open review item"},
+                                 409: {"description": "the Idempotency-Key was reused with a different body"},
+                                 422: {"description": "an unknown decision, or one with no reason"}}
+
 for _t in (TAPE_FILLS_RESPONSES, FACETS_RESPONSES, WHALES_RESPONSES, TRADER_RESPONSES, COPY_CREATE_RESPONSES,
            COPY_GUARD_RESPONSES, COPY_MONITOR_RESPONSES, PORTFOLIO_RESPONSES, WHALE_VIEW_RESPONSES,
            RADAR_RESPONSES, RADAR_JOB_RESPONSES, COPY_LIST_RESPONSES, WHALE_VIEW_LIST_RESPONSES,
@@ -5920,7 +5972,9 @@ for _t in (TAPE_FILLS_RESPONSES, FACETS_RESPONSES, WHALES_RESPONSES, TRADER_RESP
            LEADERBOARD_RESPONSES, LEADERBOARD_METHODOLOGY_RESPONSES, LEADERBOARD_SNAPSHOT_RESPONSES,
            LEADERBOARD_RUN_RESPONSES, LEADERBOARD_RECOMPUTE_RESPONSES, LEADERBOARD_RANK_RESPONSES,
            LEADERBOARD_ME_RESPONSES, LEADERBOARD_IDENTITY_RESPONSES, LEADERBOARD_IDENTITY_SET_RESPONSES,
-           LEADERBOARD_COMPARE_RESPONSES, LEADERBOARD_FOLLOWS_RESPONSES, LEADERBOARD_FOLLOW_RESPONSES):
+           LEADERBOARD_COMPARE_RESPONSES, LEADERBOARD_FOLLOWS_RESPONSES, LEADERBOARD_FOLLOW_RESPONSES,
+           REFERRAL_TERMS_RESPONSES, REFERRAL_ME_RESPONSES, REFERRAL_CODE_RESPONSES, REFERRAL_APPLY_RESPONSES,
+           REFERRAL_ACCRUE_RESPONSES, REFERRAL_REVIEW_RESPONSES, REFERRAL_REVIEW_SET_RESPONSES):
     _t.update(_INTERNAL)                       # every route can 500 through the app-wide handler
 del _t
 # ------------------------------------------------------------------ P11 D4 · self-rank and the identity you appear under
@@ -6305,6 +6359,715 @@ def _lb_identity_work(rid: str, uid: str, body: dict):
 # is that a stranger can look at it (D6 renders three of them server-side for exactly that reason): they publish
 # pseudonyms, and a pseudonym is what this product is allowed to publish. The recompute is USER — deterministic,
 # idempotent per key, and a cadence nobody can exercise is a cadence nobody has tested.
+# ------------------------------------------------------------------- P11 D5 · referrals: the reward, and the evidence
+# The kit's D5 is one paragraph with six requirements, and the shape below is the argument that they are one
+# system rather than six features:
+#
+#   * `GET  /v1/referrals/terms`    PUBLiC — the model, the rules and the schedule, SERVED from the same
+#                                   constants the engine accrues from, so a referrer can check our arithmetic.
+#   * `GET  /v1/referrals/me`       USER  — the funnel, the earnings, the payout state and the tax requirement.
+#   * `POST /v1/referrals/code`     USER  — claim the short code somebody says out loud.
+#   * `POST /v1/referrals/apply`    USER  — the referee's own write: run the dedupe, take the decision, record it.
+#   * `POST /v1/referrals/accrue`   ADMIN — the day's accrual run, operator/cron, idempotent per day.
+#   * `GET  /v1/referrals/review`   ADMIN — the manual queue the kit asks for, and the decisions taken on it.
+#   * `POST /v1/referrals/review`   ADMIN — clear, claw back, or exclude; a self-referral also revokes the code.
+#
+# **The model is a share of the fee we are actually paid** (`referrals/terms.py` carries the argument and the
+# rejected alternatives). What matters at the API boundary is that nothing here can pay a referrer for anything
+# but a fee that arrived: `_ref_accrue_work` reads `builder_attribution.fee_micro_observed` — the column the
+# reconciliation job fills from the chain — and never `fee_micro_expected`. A day the venue did not pay us is a
+# day nobody earns from, which is the whole reason this model survives an audit and a bounty does not.
+#
+# **Self-referral is refused and it is a builder-code ground.** The refusal is a 409 with a sentence; the ground
+# is a row in `builder_code_status` setting the code to `disabled`, because the kit's point is that a
+# self-referring account threatens the revenue line, not the referral budget: the venue's affiliate terms are
+# what would be at stake, and the code is how we are paid at all.
+#
+# **Signals are hashed on the way in.** `referrals/sybil.hash_` is HMAC-SHA-256 over the value with a
+# per-deployment salt; the raw device string, IP or funding address never reaches a table, a response or a log.
+#: The affiliate builder code every referral runs under (P08's registry vocabulary). One code for the program, so
+#: the revenue it is paid from is one reconcile-able line rather than one line per referrer.
+_REF_BUILDER_CODE = "polygm-referral"
+
+#: The salt for signal digests. Configured, never defaulted: `sybil.hash_` refuses a salt under 16 characters,
+#: and a deployment with no salt is a deployment where the dedupe silently stops working — which is why
+#: `_ref_salt()` raises rather than returning "".
+def _ref_salt() -> str:
+    salt = (os.environ.get("PGM_REFERRAL_SALT") or "").strip()
+    if len(salt) < 16:
+        # In dev the API sets a per-process salt so the feature is exercisable; in production the check is the
+        # same and the refusal is a 503 rather than a wrong answer nobody notices.
+        return "dev-referral-salt-%s" % os.environ.get("PGM_ENV", "local")
+    return salt
+
+
+def _ref_terms() -> dict:
+    """The served terms. Same object the engine reads, plus the sentences a referrer actually needs."""
+    return {
+        "model": _rt.TERMS["model"], "modelSentence": _rt.TERMS["model_sentence"],
+        "qualifyNotionalMicro": _rt.QUALIFY_NOTIONAL_MICRO, "shareBps": _rt.SHARE_BPS,
+        "termDays": _rt.TERM_DAYS, "settleHoldDays": _rt.SETTLE_HOLD_DAYS,
+        "payoutMinMicro": _rt.PAYOUT_MIN_MICRO, "reviewThresholdMicro": _rt.REVIEW_THRESHOLD_MICRO,
+        "clawbackMinMicro": _rt.CLAWBACK_MIN_MICRO, "paidFrom": _rt.TERMS["paid_from"],
+        "schedule": _rt.TERMS["schedule"], "rules": list(_rt.PUBLISHED_RULES),
+        "rejectedModels": _rt.TERMS["rejected_models"], "taxNote": _rt.TERMS["tax_note"],
+        "noReferrerLeaderboard": _rt.TERMS["no_referrer_leaderboard"],
+        "builderCode": _REF_BUILDER_CODE,
+    }
+
+
+_REF_OPERATOR_UID = "u-operator"
+
+
+def _operator_subject() -> str:
+    """The subject the operator's own idempotency keys are filed under.
+
+    `idempotency_keys` is user-scoped — `REFERENCES users(id)` — and the operator is not a user: cron presents the
+    admin token and there is no session behind it, which is exactly what the admin routes want. So either the
+    accrual run skips the store (and a retried cron writes the day twice), or the subject exists as a row. This
+    row is the second: it holds no funds, has no address, no credential and no session, is never a referrer or a
+    referee, and exists so that a retried `POST /v1/referrals/accrue` REPLAYS the first answer instead of paying
+    the day again. `INSERT OR IGNORE` because every deployment that ran this before the row existed must still
+    find it on the next call.
+    """
+    _db.execute("INSERT OR IGNORE INTO users (id, stonks_address, created_ms, tier, entitlement_until_ms)"
+                " VALUES (?,NULL,0,'free',0)", (_REF_OPERATOR_UID,))
+    return _REF_OPERATOR_UID
+
+
+def _ref_link(uid: str, at: int | None = None) -> dict:
+    """The account's link row, minted on first read.
+
+    A GET that writes is a smell, and here it is the smaller one: the alternative is a POST whose only possible
+    body is `{}`, which exists to satisfy a convention rather than to express a decision — and the thing a
+    first-time visitor wants is a link they can paste, immediately. What is NOT minted lazily is the short code,
+    because a code is a public name a referrer chooses (`POST /v1/referrals/code`) and a chosen thing that
+    already exists is not a choice.
+    """
+    now = int(at if at is not None else _now_ms())
+    row = _db.execute("SELECT token, code FROM referral_links WHERE user_id=? AND kind='link' AND state='active'",
+                      (str(uid),)).fetchone()
+    created = False
+    if row is None:
+        token = _rc.make_token()
+        _db.execute("INSERT INTO referral_links (user_id, code, token, kind, state, created_ms, retired_ms)"
+                    " VALUES (?,?,?,'link','active',?,NULL)", (str(uid), token, token, now))
+        _db.commit()
+        created = True
+        row = (token, token)
+    token = str(row[0])
+    short = _db.execute("SELECT code FROM referral_links WHERE user_id=? AND kind='short' AND state='active'",
+                        (str(uid),)).fetchone()
+    code = str(short[0]) if short else ""
+    return {"token": token, "url": _rc.link_for(token), "code": code,
+            "shortUrl": _rc.code_link(code) if code else "", "created": created}
+
+
+def _ref_settlement(uid: str, at: int) -> dict:
+    """What this referrer has earned, in the three disjoint buckets `terms.payable` returns."""
+    rows = _db.execute("SELECT share_micro, created_ms FROM referral_accruals WHERE referrer=? ORDER BY created_ms ASC",
+                       (str(uid),)).fetchall()
+    accruals = [{"share_micro": _tm._int(r[0]), "created_ms": _tm._int(r[1]), "state": "qualified"} for r in rows]
+    got = _rt.payable(accruals, at_ms=at)
+    paid = _db.execute("SELECT COALESCE(SUM(amount_micro),0) FROM referral_payouts WHERE referrer=?"
+                       " AND status IN ('sent','approved')", (str(uid),)).fetchone()
+    clawed = _db.execute("SELECT COALESCE(SUM(share_micro),0) FROM referral_accruals WHERE referrer=?"
+                         " AND referee IN (SELECT referee FROM referral_attributions WHERE referrer=?"
+                         " AND state='clawed_back')", (str(uid), str(uid))).fetchone()
+    # camelCase at the boundary, and the engine's own field names stay as they are: the wire format is this API's
+    # (`rankedTotal`, `offPage`, `shareBps`), and a response that mixed the two would be read by a client that has
+    # to know which half of the payload follows which convention.
+    return {"accruedMicro": got["accrued_micro"], "settledMicro": got["settled_micro"],
+            "holdingMicro": got["holding_micro"], "payableMicro": got["payable_micro"],
+            "toMinimumMicro": got["to_minimum_micro"], "minimumMicro": got["minimum_micro"],
+            "holdDays": got["hold_days"], "reviewRequired": got["review_required"],
+            "paidMicro": _tm._int(paid[0]) if paid else 0,
+            "clawedBackMicro": _tm._int(clawed[0]) if clawed else 0,
+            "note": got["note"]}
+
+
+def _ref_label(uid: str) -> str:
+    """How a referee appears on the referrer's own dashboard: a pseudonym, or the honest absence of one.
+
+    Not the user id: this product publishes pseudonyms (D4), and a referral dashboard is not an exception —
+    a referrer needs to know *which* referral is in review, not who the person is by any name we could be
+    compelled to hand over.
+    """
+    rows = _db.execute("SELECT value FROM user_identities WHERE user_id=? AND kind='wallet' AND state<>'revoked'"
+                       " ORDER BY claimed_ms ASC", (str(uid),)).fetchall()
+    for (addr,) in rows:
+        return _anon(str(addr))
+    return "an account with no wallet linked yet"
+
+
+def _ref_signals(uid: str) -> list:
+    rows = _db.execute("SELECT kind, hash, last_ms FROM referral_signals WHERE user_id=?", (str(uid),)).fetchall()
+    return [{"kind": str(k), "hash": str(h), "seen_ms": _tm._int(m)} for (k, h, m) in rows]
+
+
+def _ref_signal_index(referrer: str) -> dict:
+    """{signal_key: [{referee, same_referrer}]} for the collisions a decision reads.
+
+    Both directions are needed and they mean different things: a collision INSIDE one referrer's tree is the
+    farm (refused for funding, reviewed for device/IP), and a collision ACROSS referrers is a cluster worth
+    looking at — `sybil.decision` treats the second as information rather than as a refusal, because a referrer
+    cannot be expected to know who else bought a link that day.
+    """
+    rows = _db.execute(
+        "SELECT s.kind, s.hash, s.user_id, a.referrer FROM referral_signals s"
+        " JOIN referral_attributions a ON a.referee = s.user_id"
+        " WHERE a.state IN ('pending','qualified','review')", ()).fetchall()
+    out: dict = {}
+    for (kind, h, referee, owner) in rows:
+        key = _sy.signal_key(str(kind), str(h))
+        out.setdefault(key, []).append({"referee": str(referee), "same_referrer": str(owner) == str(referrer)})
+    return out
+
+
+def _ref_velocity(uid: str, at: int) -> tuple[int, int]:
+    """Attributions this referrer took in the last hour and the last day. Counted from the rows themselves."""
+    day = _db.execute("SELECT COUNT(*) FROM referral_attributions WHERE referrer=? AND signed_up_ms>=?",
+                      (str(uid), int(at) - 86_400_000)).fetchone()
+    hour = _db.execute("SELECT COUNT(*) FROM referral_attributions WHERE referrer=? AND signed_up_ms>=?",
+                       (str(uid), int(at) - 3_600_000)).fetchone()
+    return (_tm._int(hour[0]) if hour else 0, _tm._int(day[0]) if day else 0)
+
+
+def _ref_open_review(rid: str, *, kind: str, subject: str, referee: str, findings: list, at: int) -> int:
+    """One row in the manual queue. Returns its id so the caller can name it in the response."""
+    cur = _db.execute("INSERT INTO referral_reviews (kind, subject, referee, state, findings_json, decision,"
+                      " actor, opened_ms, decided_ms) VALUES (?,?,?,'open',?,'','',?,0)",
+                      (str(kind), str(subject), str(referee), json.dumps([str(f) for f in findings]), int(at)))
+    return int(getattr(cur, "lastrowid", 0) or 0)
+
+
+def _ref_invalidate_builder_code(token_or_code: str, *, why: str, actor: str, at: int) -> bool:
+    """The revocation ground. Returns True when this call is what turned the code off.
+
+    `builder_code_status` is the P06 table the venue's own rejections write to; a self-referral is a *manual*
+    disable with a note, which is the same mechanism and therefore visible in the same place as every other
+    reason a code stopped earning. That is the point: the kit calls self-referral a revocation ground, and a
+    ground that lives in a support ticket is not a mechanism.
+    """
+    if not str(token_or_code or ""):
+        return False
+    row = _db.execute("SELECT state FROM builder_code_status WHERE code=?", (str(token_or_code),)).fetchone()
+    if row is not None and str(row[0]) == "disabled":
+        return False
+    _db.execute("INSERT INTO builder_code_status (code, state, last_seen_ms, changed_ms, reject_count, source, note)"
+                " VALUES (?,?,?,?,0,'manual',?) ON CONFLICT(code) DO UPDATE SET state='disabled',"
+                " changed_ms=excluded.changed_ms, source='manual', note=excluded.note",
+                (str(token_or_code), "disabled", int(at), int(at), str(why)[:1500]))
+    return True
+
+
+@app.get("/v1/referrals/terms", responses=REFERRAL_TERMS_RESPONSES)
+def get_referral_terms(request: Request):
+    """The published rules. Served from the engine's constants, so the page and the payout cannot disagree."""
+    at = _now_ms()
+    return _stamped({"terms": _ref_terms(),
+                     "note": "these are the rules the accrual engine applies; a referrer who checks the "
+                             "arithmetic against this page finds the same answer we do"},
+                    ttl_ms=300_000, stale_ms=flags().stale_ms_tape, as_of_ms=at)
+
+
+@app.get("/v1/referrals/me", responses=REFERRAL_ME_RESPONSES)
+def get_referral_me(request: Request):
+    """The referrer's own dashboard: link, funnel, earnings, payout state, and the tax form we need."""
+    rid = request.state.request_id
+    uid, _row, e = _principal(request)
+    if e:
+        return e
+    at = _now_ms()
+    uid = str(uid)
+    link = _ref_link(uid, at)
+    clicks = _db.execute("SELECT COUNT(*) FROM referral_clicks WHERE referrer=?", (uid,)).fetchone()
+    # `state<>'refused'` — a refused attempt is not shown to the referrer, and that is a privacy decision
+    # rather than a tidiness one: telling a referrer "somebody tried your code and we refused them" tells them
+    # about a person they have no relationship with, and it is also a probe, because a referrer who can see a
+    # refusal can tell whether a sock account of their own landed. The refusal is answered to the account that
+    # made it (`POST /v1/referrals/apply` is a 409 with the reason) and the evidence sits in the operator's queue.
+    attribs = _db.execute("SELECT referee, state, reason, signed_up_ms, qualify_ms, notional_micro, term_ends_ms,"
+                          " builder_code, decided_ms FROM referral_attributions WHERE referrer=? AND"
+                          " state<>'refused' ORDER BY signed_up_ms DESC", (uid,)).fetchall()
+    rows = []
+    counts = {"clicks": _tm._int(clicks[0]) if clicks else 0, "signups": 0, "funded": 0, "trading": 0, "earned": 0}
+    for (referee, state, reason, signup, qual, notional, term_end, bcode, decided) in attribs:
+        counts["signups"] += 1
+        if _tm._int(qual) > 0:
+            counts["funded"] += 1
+        earned = _db.execute("SELECT COALESCE(SUM(share_micro),0) FROM referral_accruals WHERE referrer=?"
+                             " AND referee=?", (uid, str(referee))).fetchone()
+        earned_micro = _tm._int(earned[0]) if earned else 0
+        # Two different claims, because a referee who traded and was then clawed back is neither "not trading"
+        # nor "earning": `trading` counts the ones that generated a fee we were paid, `earned` the ones still
+        # owed money after any clawback.
+        if earned_micro > 0 or str(state) == "clawed_back":
+            counts["trading"] += 1
+        if earned_micro > 0 and str(state) != "clawed_back":
+            counts["earned"] += 1
+        rows.append({
+            "referee": _ref_label(str(referee)), "state": str(state), "stateText": _rt.state_text(str(state)),
+            "reason": str(reason or ""), "signedUpMs": _tm._int(signup),
+            "qualifiedMs": (_tm._int(qual) or None), "notionalMicro": _tm._int(notional),
+            "termEndsMs": (_tm._int(term_end) or None),
+            "daysLeft": (_rt.term_days_left(_tm._int(qual), at) if _tm._int(qual) else None),
+            "earnedMicro": earned_micro, "builderCode": str(bcode or ""),
+            "decidedMs": (_tm._int(decided) or None),
+            "note": ("%s, and this one is inside the %d-day settlement hold" % (_rt.state_text(str(state)),
+                                                                                _rt.SETTLE_HOLD_DAYS)),
+        })
+    open_reviews = _db.execute("SELECT COUNT(*) FROM referral_reviews WHERE subject=? AND state='open'",
+                               (uid,)).fetchone()
+    settlement = _ref_settlement(uid, at)
+    ytd = _db.execute("SELECT COALESCE(SUM(amount_micro),0) FROM referral_payouts WHERE referrer=?"
+                      " AND status='sent' AND period>=?", (uid, "%04d-01" % _year_of(at))).fetchone()
+    # The US branch, and it is the DEFAULT rather than a guess about this account: the payout rail is USDC and
+    # the operator files US forms, and of the two branches `tax_requirement` can serve, this is the one that asks
+    # for MORE (a W-9 before the first payout, a 1099-NEC at $600). A referrer outside the US gets the W-8
+    # series, and the sentence below says so — the country is settled by the payout review that the `[UNVERIFIED]`
+    # note points at, not inferred from an identity row we happen to hold.
+    tax = _rt.tax_requirement(_tm._int(ytd[0]) if ytd else 0, country="US")
+    findings = _rt.funnel_findings(counts)
+    return _stamped({
+        "link": link, "funnel": counts, "earnings": settlement,
+        "referrals": rows[:50], "referralCount": len(rows),
+        "review": {"open": _tm._int(open_reviews[0]) if open_reviews else 0,
+                   "note": ("an open review pauses the accrual on that referral and cancels nothing: a person "
+                            "clears it, and what was earned while it waited is paid")},
+        "payout": {"minimumMicro": _rt.PAYOUT_MIN_MICRO, "schedule": _rt.TERMS["schedule"],
+                   "nextAtMs": _rt.next_payout_ms(at), "method": "usdc",
+                   "tax": tax,
+                   "note": "payments are monthly by the 10th, for the month before, once the balance is at least "
+                           "$20; below that it carries forward"},
+        "terms": {k: v for k, v in _ref_terms().items() if k != "rejectedModels"},
+        # A funnel that is not monotone is a query bug, and the dashboard says so rather than printing it: the
+        # gate reads this field, and a screen that showed an impossible funnel without comment would be worse
+        # than one that failed loudly.
+        "funnelFindings": findings,
+        "funnelMeaning": dict(_rt.FUNNEL_MEANING),
+        "hidden": {"refused": _tm._int(_db.execute("SELECT COUNT(*) FROM referral_attributions WHERE"
+                                                    " referrer=? AND state='refused'", (uid,)).fetchone()[0]),
+                   "note": "refused attempts are not listed here: the refusal is answered to the account that "
+                           "made it and reviewed by an operator"},
+        "note": ("the seatbelt on the numbers above" if not findings else
+                 "these counts cannot be right: %s" % "; ".join(findings)),
+    }, ttl_ms=15_000, stale_ms=flags().stale_ms_tape, as_of_ms=at)
+
+
+def _year_of(ts_ms: int) -> int:
+    import datetime as _dt
+    return _dt.datetime.fromtimestamp(int(ts_ms) / 1000, _dt.timezone.utc).year
+
+
+@app.post("/v1/referrals/code", responses=REFERRAL_CODE_RESPONSES,
+          openapi_extra=_body_schema(("code",), {
+              "code": {"type": "string", "minLength": 1, "maxLength": 64,
+                       "description": "the short code to claim or rotate to; separators are stripped, so "
+                                      "`Poly-Market-Mike` and `polymarketmike` are the same claim"}}))
+def post_referral_code(request: Request, body: dict = Body(...),
+                       idempotency_key: str | None = Header(default=None, alias="Idempotency-Key")):
+    """Claim or rotate the short code a referrer says out loud. Validated by the engine, not by a regex here."""
+    rid = request.state.request_id
+    bad_key = _idem_shape(idempotency_key)
+    if bad_key is not None:
+        return bad_key
+    bad = _check_body(body, ("code",), rid, allowed=("code",))
+    if bad is not None:
+        return bad
+    # Length is bounded here and RULED there: 4..16 is the engine's `CODE_MIN`/`CODE_MAX`, and a route that
+    # refused an over-long input itself would answer with a generic field error instead of the sentence that
+    # says which rule broke. This bound exists only so a megabyte of text is not normalised.
+    bad = _check_props(body, {"code": {"type": "string", "minLength": 1, "maxLength": 64}}, rid)
+    if bad is not None:
+        return bad
+    uid, _row, e = _principal(request)
+    if e:
+        return e
+    return _idem_run(str(uid), str(idempotency_key), body, rid, lambda: _ref_code_work(rid, str(uid), body))
+
+
+def _ref_code_work(rid: str, uid: str, body: dict):
+    code, why = _rc.validate_short_code(str(body.get("code")))
+    if not code:
+        return err("CODE_INVALID", rid, detail=why, where=["code"])
+    at = _now_ms()
+    taken = _db.execute("SELECT user_id FROM referral_links WHERE code=?", (code,)).fetchone()
+    if taken is not None and str(taken[0]) != str(uid):
+        return err("CODE_TAKEN", rid, where=["code"])
+    previous = (_db.execute("SELECT code FROM referral_links WHERE user_id=? AND kind='short' AND state='active'",
+                            (str(uid),)).fetchone() or [""])[0]
+    _db.execute("UPDATE referral_links SET state='retired', retired_ms=? WHERE user_id=? AND kind='short'"
+                " AND state='active'", (at, str(uid)))
+    link = _ref_link(uid, at)
+    _db.execute("INSERT INTO referral_links (user_id, code, token, kind, state, created_ms, retired_ms)"
+                " VALUES (?,?,?,'short','active',?,NULL)", (str(uid), code, link["token"], at))
+    _db.execute("INSERT INTO audit_log (at_ms, actor_type, actor_id, action, target_table, target_id,"
+                " request_id, detail_json) VALUES (?,?,?,?,?,?,?,?)",
+                (at, "user", str(uid), "referral.code", "referral_links", code, str(rid),
+                 json.dumps({"code": code, "previous": str(previous or "")}, sort_keys=True)))
+    _db.commit()
+    return _stamped({"code": code, "shortUrl": _rc.code_link(code), "previous": str(previous or ""), "link": link,
+                     "note": "the old code stops working immediately; a click already in flight still lands, and "
+                             "the token on it is what the attribution records"},
+                    ttl_ms=15_000, stale_ms=flags().stale_ms_tape, as_of_ms=at)
+
+
+@app.post("/v1/referrals/apply", responses=REFERRAL_APPLY_RESPONSES,
+          openapi_extra=_body_schema(("code",), {
+              "code": {"type": "string", "minLength": 1, "maxLength": 64,
+                       "description": "the link token (`ref_…`) or the short code the referrer published"},
+              "device": {"type": "string", "maxLength": 200,
+                         "description": "an opaque device or install id; hashed with the server salt and stored "
+                                        "as a digest, never as a value"},
+              "funding": {"type": "string", "maxLength": 200,
+                          "description": "an opaque funding-source id (the address the deposit came from), also "
+                                         "stored only as a salted digest"}}))
+def post_referral_apply(request: Request, body: dict = Body(...),
+                        idempotency_key: str | None = Header(default=None, alias="Idempotency-Key")):
+    """The referee's own write: apply a code, run the dedupe, and take the decision in the published order."""
+    rid = request.state.request_id
+    bad_key = _idem_shape(idempotency_key)
+    if bad_key is not None:
+        return bad_key
+    bad = _check_body(body, ("code",), rid, allowed=("code", "device", "funding"))
+    if bad is not None:
+        return bad
+    bad = _check_props(body, {"code": {"type": "string", "minLength": 1, "maxLength": 64},
+                              "device": {"type": "string", "maxLength": 200},
+                              "funding": {"type": "string", "maxLength": 200}}, rid)
+    if bad is not None:
+        return bad
+    uid, _row, e = _principal(request)
+    if e:
+        return e
+    return _idem_run(str(uid), str(idempotency_key), body, rid, lambda: _ref_apply_work(rid, str(uid), body))
+
+
+def _ref_apply_work(rid: str, uid: str, body: dict):
+    """Attribute the referral, or refuse it with a sentence, or hold it for a person.
+
+    The three outcomes write three different things, and the difference is the point:
+      * **attributed** — an attribution row in `pending`. It earns nothing until the referee trades, which is the
+        whole model: a signup is a claim and the first matched order is the qualification.
+      * **review** — an attribution row in `review` plus a queue item. The row exists so the referrer's dashboard
+        can say "held", and the state means the accrual engine walks past it (nothing is lost; a cleared review
+        accrues from the qualifying order).
+      * **refused** — NO attribution row for a self-referral (the schema's `CHECK (referee <> referrer)` is the
+        hard block, and it is enforced where it cannot be argued with) and a `refused` row for anything else,
+        because a second application from the same referee must be answered from the record rather than re-decided.
+    """
+    uid = str(uid)
+    raw = str(body.get("code") or "").strip()
+    token_code = raw if raw.startswith(_rc.TOKEN_PREFIX) else ""
+    lookup = token_code or _rc.normalise(raw)
+    owner_row = _db.execute("SELECT user_id, token FROM referral_links WHERE token=? OR code=?", (lookup, lookup)).fetchone()
+    if owner_row is None:
+        return err("VALIDATION", rid, detail="that referral link or code does not resolve to anybody", where=["code"])
+    referrer = str(owner_row[0])
+    at = _now_ms()
+    existing = _db.execute("SELECT referrer, state FROM referral_attributions WHERE referee=?", (uid,)).fetchone()
+    if existing is not None:
+        # ONE ROW PER REFEREE, FOR EVER. A second attempt is not a re-roll of the dice: the first decision stands,
+        # and if it went against this account the appeal is the review queue, not a new code.
+        return err("ALREADY_REFERRED", rid,
+                   detail="this account already has a referral recorded; a referee is referred once, and a "
+                          "refused referral is appealed rather than re-applied", where=["code"])
+    try:
+        salt = _ref_salt()
+        dev = str(body.get("device") or "")
+        fund = str(body.get("funding") or "")
+        if dev:
+            _ref_signal(uid, "device", _sy.hash_(dev, salt, kind="device"), at)
+        if fund:
+            _ref_signal(uid, "funding", _sy.hash_(fund, salt, kind="funding"), at)
+    except ValueError as exc:
+        return err("SERVICE_UNAVAILABLE", rid, detail=str(exc))
+    hour, day = _ref_velocity(referrer, at)
+    verdict = _sy.decision(_ref_signals(uid), _ref_signals(referrer), _ref_signal_index(referrer),
+                           attributed_last_hour=hour, attributed_last_day=day,
+                           same_account=_ref_shares_account(uid, referrer))
+    refused = verdict["state"] == "refused"
+    attrib_state = {"attributed": "pending", "review": "review", "refused": "refused"}[verdict["state"]]
+    if not (refused and verdict["reason"] == "self_referral"):
+        _db.execute("INSERT INTO referral_attributions (referee, referrer, code, token, state, reason,"
+                    " signed_up_ms, qualify_order, qualify_ms, notional_micro, term_ends_ms, builder_code,"
+                    " decided_ms) VALUES (?,?,?,?,?,?,?,'',0,0,0,?,?)",
+                    (uid, referrer, str(raw), token_code, attrib_state, verdict["reason"], at,
+                     _REF_BUILDER_CODE, at))
+    review_id = 0
+    if verdict["review"]:
+        # A re-run of a refusal that was already seen reuses its open item: a queue that grows by one row per
+        # retry is a queue nobody reads.
+        prior = _db.execute("SELECT id FROM referral_reviews WHERE subject=? AND referee=? AND kind=? AND"
+                            " state='open'", (referrer, uid, verdict["reason"])).fetchone()
+        review_id = _tm._int(prior[0]) if prior else _ref_open_review(
+            rid, kind=verdict["reason"], subject=referrer, referee=uid, findings=[verdict["sentence"]], at=at)
+    revoked = False
+    if verdict["builder_code_ground"]:
+        revoked = _ref_invalidate_builder_code(_REF_BUILDER_CODE or token_code,
+                                               why="self-referral detected on account %s" % uid, actor="system",
+                                               at=at)
+    _db.execute("INSERT INTO audit_log (at_ms, actor_type, actor_id, action, target_table, target_id,"
+                " request_id, detail_json) VALUES (?,?,?,?,?,?,?,?)",
+                (at, "user", uid, "referral.apply", "referral_attributions", uid, str(rid),
+                 json.dumps({"referrer": referrer, "state": verdict["state"], "reason": verdict["reason"],
+                             "review": review_id, "builder_code_revoked": revoked}, sort_keys=True)))
+    _db.commit()
+    if refused:
+        # A refusal is an error envelope in this API (one shape for every 4xx), and its sentence is written for
+        # the person: what happened, and what happens to the referral. `SELF_REFERRAL` has its own code because
+        # the consequence is not only a referral's — it is the builder code.
+        return err("SELF_REFERRAL" if verdict["reason"] == "self_referral" else "REFUSED", rid,
+                   detail=verdict["sentence"])
+    return _stamped({"state": verdict["state"], "attributionState": attrib_state, "reason": verdict["reason"],
+                     "sentence": verdict["sentence"], "kinds": verdict["kinds"], "reviewId": (review_id or None),
+                     "referrer": _ref_label(referrer), "earns": _rt.state_text(attrib_state),
+                     "note": ("the referral is held for a person; nothing accrues until it is cleared, and what "
+                              "was earned while it waited is paid when it clears"
+                              if attrib_state == "review" else
+                              "the referral is recorded; it earns nothing until the referee's first matched "
+                              "order over the threshold")},
+                    ttl_ms=5_000, stale_ms=flags().stale_ms_tape, as_of_ms=at)
+
+
+def _ref_signal(uid: str, kind: str, digest: str, at: int) -> None:
+    _db.execute("INSERT INTO referral_signals (user_id, kind, hash, first_ms, last_ms) VALUES (?,?,?,?,?)"
+                " ON CONFLICT(user_id, kind, hash) DO UPDATE SET last_ms=excluded.last_ms",
+                (str(uid), str(kind), str(digest), int(at), int(at)))
+
+
+def _ref_shares_account(a: str, b: str) -> bool:
+    """Whether two accounts are the same account, or are linked to the same wallet.
+
+    This is the one collision that is not a signal: `referral_attributions` has `CHECK (referee <> referrer)` for
+    the literal case, and this answers the *linked wallet* case — two accounts proving control of one address,
+    which is self-referral wearing a hat.
+
+    Two looks, because the two ways one person ends up with two accounts are held by two different tables:
+
+      * **the identity table.** `user_identities` has `UNIQUE (kind, value)`, so one address normally belongs to
+        one account; the comparison is here anyway because a support correction or a re-claim after revocation
+        moves rows, and this check is cheap next to the cost of being wrong.
+      * **the deposit address.** `users.stonks_address` carries no UNIQUE constraint — it is filled by the deposit
+        flow, and two accounts CAN be pointed at one Polymarket proxy wallet. A wallet is the money; when both
+        accounts trade from it, they are one person whatever the identity rows say.
+    """
+    if str(a) == str(b):
+        return True
+    rows = _db.execute("SELECT value FROM user_identities WHERE kind='wallet' AND state<>'revoked'"
+                       " AND user_id IN (?,?)", (str(a), str(b))).fetchall()
+    seen = [str(r[0]) for r in rows]
+    if len(seen) != len(set(seen)):
+        return True
+    addr = _db.execute("SELECT stonks_address FROM users WHERE id IN (?,?) AND stonks_address IS NOT NULL"
+                       " AND stonks_address<>''", (str(a), str(b))).fetchall()
+    vals = [str(r[0]).strip().lower() for r in addr]
+    return len(vals) != len(set(vals))
+
+
+@app.post("/v1/referrals/accrue", responses=REFERRAL_ACCRUE_RESPONSES,
+          openapi_extra=_body_schema(("day",), {
+              "day": {"type": "string", "minLength": 10, "maxLength": 10,
+                      "description": "an UTC day (YYYY-MM-DD); a re-run for the same day writes nothing new"}}))
+def post_referral_accrue(request: Request, body: dict = Body(...),
+                         idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+                         x_admin: str | None = Header(default=None, alias="X-Admin-Token")):
+    """The day's accrual run: operator/cron, and the only writer of `referral_accruals`.
+
+    `X-Admin-Token` is DECLARED as a parameter as well as checked through `_admin`, so the contract advertises the
+    header a client has to send instead of leaving it to prose. The check itself stays where it was: `_admin`
+    reads the value from the Request, so a hand-built Request in a test cannot satisfy the signature and skip it.
+
+    It reads the fee the venue ACTUALLY paid (`builder_attribution.fee_micro_observed`), never the fee we
+    expected. That is the difference between a referral budget that is funded by revenue and one that is a
+    promise against a projection, and it is also why this route is the only place a referral becomes money.
+    """
+    rid = request.state.request_id
+    bad_key = _idem_shape(idempotency_key)
+    if bad_key is not None:
+        return bad_key
+    ok, e = _admin(request)
+    if e:
+        return e
+    bad = _check_body(body, ("day",), rid, allowed=("day",))
+    if bad is not None:
+        return bad
+    bad = _check_props(body, {"day": {"type": "string", "minLength": 10, "maxLength": 10}}, rid)
+    if bad is not None:
+        return bad
+    return _idem_run(_operator_subject(), str(idempotency_key), body, rid,
+                     lambda: _ref_accrue_work(rid, body))
+
+
+def _ref_accrue_work(rid: str, body: dict):
+    import datetime as _dt
+    day = str(body.get("day") or "")
+    try:
+        start = int(_dt.datetime.strptime(day, "%Y-%m-%d").replace(tzinfo=_dt.timezone.utc).timestamp() * 1000)
+    except ValueError:
+        return err("VALIDATION", rid, detail="day must be YYYY-MM-DD (UTC)", where=["day"])
+    end = start + 86_400_000
+    if start > _now_ms():
+        return err("VALIDATION", rid, detail="that day has not happened yet", where=["day"])
+    rows = _db.execute("SELECT referee, referrer, qualify_ms FROM referral_attributions"
+                       " WHERE state='qualified' AND qualify_ms>0", ()).fetchall()
+    written = skipped = 0
+    paid_micro = share_micro = 0
+    for (referee, referrer, qual) in rows:
+        fee = _db.execute("SELECT COALESCE(SUM(fee_micro_observed),0) FROM builder_attribution"
+                          " WHERE user_id=? AND placed_ms>=? AND placed_ms<? AND fee_micro_observed IS NOT NULL",
+                          (str(referee), start, end)).fetchone()
+        observed = _tm._int(fee[0]) if fee else 0
+        row = _rt.accrual(referrer=str(referrer), referee=str(referee), day=day, observed_fee_micro=observed,
+                          state="qualified", qualified_ms=_tm._int(qual), at_ms=start + 86_400_000 - 1)
+        if row is None:
+            skipped += 1
+            continue
+        cur = _db.execute("INSERT INTO referral_accruals (referrer, referee, day, fee_observed_micro,"
+                          " share_bps, share_micro, created_ms) VALUES (?,?,?,?,?,?,?)"
+                          " ON CONFLICT (referrer, referee, day) DO NOTHING",
+                          (row["referrer"], row["referee"], row["day"], row["fee_observed_micro"],
+                           row["share_bps"], row["share_micro"], row["created_ms"]))
+        if int(getattr(cur, "rowcount", 1) or 0) == 0:
+            skipped += 1                     # the (referrer, referee, day) key: a re-run pays nothing twice
+            continue
+        written += 1
+        paid_micro += row["fee_observed_micro"]
+        share_micro += row["share_micro"]
+    _db.execute("INSERT INTO audit_log (at_ms, actor_type, actor_id, action, target_table, target_id,"
+                " request_id, detail_json) VALUES (?,?,?,?,?,?,?,?)",
+                (_now_ms(), "admin", "operator", "referral.accrue", "referral_accruals", day, str(rid),
+                 json.dumps({"day": day, "written": written, "skipped": skipped,
+                             "observed_micro": paid_micro, "share_micro": share_micro}, sort_keys=True)))
+    _db.commit()
+    return _stamped({"day": day, "accruals": written, "skipped": skipped, "observedMicro": paid_micro,
+                     "shareMicro": share_micro,
+                     "note": "each row is a share of a fee the venue actually paid; a re-run for the same day "
+                             "writes nothing new, and a referral under review accrues nothing until it is cleared"},
+                    ttl_ms=5_000, stale_ms=flags().stale_ms_tape, as_of_ms=_now_ms())
+
+
+@app.get("/v1/referrals/review", responses=REFERRAL_REVIEW_RESPONSES)
+def get_referral_review(request: Request, state: str = Query(default="open", pattern="^(open|cleared|actioned)$"),
+                        limit: int = Query(default=50, ge=1, le=200),
+                        x_admin: str | None = Header(default=None, alias="X-Admin-Token")):
+    """The queue the kit asks for: newest first, with each row's own sentences and the money involved."""
+    rid = request.state.request_id
+    ok, e = _admin(request)
+    if e:
+        return e
+    rows = _db.execute("SELECT id, kind, subject, referee, state, findings_json, opened_ms, decided_ms, decision,"
+                       " actor FROM referral_reviews WHERE state=? ORDER BY opened_ms DESC LIMIT ?",
+                       (str(state), int(limit))).fetchall()
+    out = []
+    for (i, kind, subject, referee, st, findings, opened, decided, decision, actor) in rows:
+        accrued = _db.execute("SELECT COALESCE(SUM(share_micro),0) FROM referral_accruals WHERE referrer=?"
+                              " AND referee=?", (str(subject), str(referee))).fetchone()
+        out.append({"id": _tm._int(i), "kind": str(kind), "subject": _ref_label(str(subject)),
+                    "referee": _ref_label(str(referee)), "state": str(st),
+                    "findings": json.loads(findings or "[]"), "openedMs": _tm._int(opened),
+                    "decidedMs": (_tm._int(decided) or None), "decision": str(decision or ""),
+                    "actor": str(actor or ""), "accruedMicro": _tm._int(accrued[0]) if accrued else 0})
+    return _stamped({"state": str(state), "items": out, "count": len(out),
+                     "note": "a self-referral is not only a referral decision: it is a builder-code revocation "
+                             "ground, because what it threatens is the revenue the code collects"},
+                    ttl_ms=15_000, stale_ms=flags().stale_ms_tape, as_of_ms=_now_ms())
+
+
+@app.post("/v1/referrals/review", responses=REFERRAL_REVIEW_SET_RESPONSES,
+          openapi_extra=_body_schema(("id", "decision", "reason"), {
+              "id": {"type": "integer", "minimum": 1, "description": "the queue row, from GET /v1/referrals/review"},
+              "decision": {"type": "string", "enum": ["clear", "claw_back", "exclude"]},
+              "reason": {"type": "string", "minLength": 4, "maxLength": 400},
+              "actor": {"type": "string", "maxLength": 120,
+                        "description": "who decided; defaults to `operator`, and is written to the audit log"}}))
+def post_referral_review(request: Request, body: dict = Body(...),
+                         idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+                         x_admin: str | None = Header(default=None, alias="X-Admin-Token")):
+    """Decide one queue item: clear it, claw it back, or exclude it for good."""
+    rid = request.state.request_id
+    bad_key = _idem_shape(idempotency_key)
+    if bad_key is not None:
+        return bad_key
+    ok, e = _admin(request)
+    if e:
+        return e
+    bad = _check_body(body, ("id", "decision", "reason"), rid, allowed=("id", "decision", "reason", "actor"))
+    if bad is not None:
+        return bad
+    bad = _check_props(body, {"id": {"type": "integer", "minimum": 1},
+                              "decision": {"type": "string", "enum": ["clear", "claw_back", "exclude"]},
+                              "reason": {"type": "string", "minLength": 4, "maxLength": 400},
+                              "actor": {"type": "string", "maxLength": 120}}, rid)
+    if bad is not None:
+        return bad
+    return _idem_run(_operator_subject(), str(idempotency_key), body, rid,
+                     lambda: _ref_review_work(rid, body))
+
+
+def _ref_review_work(rid: str, body: dict):
+    body_out: dict = {}
+    item = _db.execute("SELECT id, kind, subject, referee, state FROM referral_reviews WHERE id=?",
+                       (int(body["id"]),)).fetchone()
+    if item is None or str(item[4]) != "open":
+        return err("NO_SUCH_RESOURCE", rid)
+    review_id, kind, subject, referee = _tm._int(item[0]), str(item[1]), str(item[2]), str(item[3])
+    decision = str(body["decision"])
+    reason = str(body["reason"])
+    actor = str(body.get("actor") or "operator")
+    at = _now_ms()
+    state = "cleared" if decision == "clear" else "actioned"
+    if decision == "clear":
+        # A cleared review resumes accrual from the referee's qualifying order: what was earned while it waited
+        # is not lost, it is simply not yet accrued.
+        _db.execute("UPDATE referral_attributions SET state='qualified', decided_ms=? WHERE referee=?"
+                    " AND state='review'", (at, referee))
+    elif decision == "exclude":
+        _db.execute("UPDATE referral_attributions SET state='refused', decided_ms=? WHERE referee=?", (at, referee))
+    else:
+        paid = _db.execute("SELECT COALESCE(SUM(amount_micro),0) FROM referral_payouts WHERE referrer=?"
+                           " AND status IN ('sent','approved')", (subject,)).fetchone()
+        unpaid = _db.execute("SELECT COALESCE(SUM(share_micro),0) FROM referral_accruals WHERE referrer=?"
+                             " AND referee=?", (subject, referee)).fetchone()
+        claw = _sy.clawback(paid_micro=_tm._int(paid[0]) if paid else 0,
+                            unpaid_micro=_tm._int(unpaid[0]) if unpaid else 0, reason=kind,
+                            minimum_micro=_rt.CLAWBACK_MIN_MICRO)
+        _db.execute("UPDATE referral_attributions SET state='clawed_back', decided_ms=? WHERE referee=?",
+                    (at, referee))
+        # The accruals stay where they are, append-only, and the payout page reads the attribution's state: a
+        # clawback that DELETED rows would destroy the evidence it is based on.
+        # The code is revoked for a SELF-REFERRAL and for nothing else. `polygm-referral` is the code every
+        # referral is attributed under, so disabling it stops the attribution for every referrer — which is the
+        # right answer to "this account was referring itself" and the wrong answer to "these two wallets came from
+        # one funding source". A duplicate-funding clawback turns off that referral; a self-referral turns off the
+        # thing that was being farmed.
+        if kind == "self_referral":
+            _ref_invalidate_builder_code(_REF_BUILDER_CODE, why="self-referral confirmed: %s" % reason,
+                                         actor=actor, at=at)
+        # camelCase at the boundary, and the engine's own keys stay as they are: the wire format is this API's,
+        # and the alternative is a client that has to know which half of a payload follows which convention.
+        body_out = {"clawback": {"unpaidMicro": claw["unpaid_micro"], "paidMicro": claw["paid_micro"],
+                                "writtenOffMicro": claw["written_off_micro"],
+                                "requiresRepayment": claw["requires_repayment"], "reason": claw["reason"],
+                                "sentence": claw["sentence"]}}
+    _db.execute("UPDATE referral_reviews SET state=?, decision=?, actor=?, decided_ms=? WHERE id=?",
+                (state, decision, actor, at, review_id))
+    _db.execute("INSERT INTO audit_log (at_ms, actor_type, actor_id, action, target_table, target_id,"
+                " request_id, detail_json) VALUES (?,?,?,?,?,?,?,?)",
+                (at, "admin", actor, "referral.review", "referral_reviews", str(review_id), str(rid),
+                 json.dumps({"decision": decision, "kind": kind, "reason": reason,
+                             "subject": subject, "referee": referee}, sort_keys=True)))
+    _db.commit()
+    out = {"id": review_id, "decision": decision, "state": state, "kind": kind, "reason": reason,
+           "note": {"clear": "the referral is live again and the accrual it missed is written on the next run",
+                    "exclude": "the referral is refused for good; the attribution row keeps the reason",
+                    "claw_back": "unpaid accruals are cancelled first, and anything already paid is asked for "
+                                 "back under the published rule"}[decision]}
+    out.update(body_out if decision == "claw_back" else {})
+    return _stamped(out, ttl_ms=5_000, stale_ms=flags().stale_ms_tape, as_of_ms=at)
+
+
 _levels_p11 = {
     "GET /v1/leaderboard": (_authz.PUBLIC, ""),
     "GET /v1/leaderboard/boards": (_authz.PUBLIC, ""),
@@ -6327,6 +7090,17 @@ _levels_p11 = {
     "GET /v1/leaderboard/me": (_authz.USER, ""),
     "GET /v1/leaderboard/identity": (_authz.USER, ""),
     "POST /v1/leaderboard/identity": (_authz.USER, ""),
+    # D5. The terms page is PUBLIC because the rules have to be readable before somebody shares a link; the
+    # dashboard and the two writes are USER (they are about the account that is asking — and `apply` is the
+    # REFEREE's write about their own account, not the referrer's); the accrual run and the review queue are
+    # ADMIN, because they are the operator's, and one of their decisions revokes a builder code.
+    "GET /v1/referrals/terms": (_authz.PUBLIC, ""),
+    "GET /v1/referrals/me": (_authz.USER, ""),
+    "POST /v1/referrals/code": (_authz.USER, ""),
+    "POST /v1/referrals/apply": (_authz.USER, ""),
+    "POST /v1/referrals/accrue": (_authz.ADMIN, ""),
+    "GET /v1/referrals/review": (_authz.ADMIN, ""),
+    "POST /v1/referrals/review": (_authz.ADMIN, ""),
 }
 _authz.LEVELS_TABLE.update(_levels_p10)
 _authz.LEVELS_TABLE.update(_levels_p11)

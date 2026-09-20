@@ -14,7 +14,6 @@
     "flag_audit",
     "alert_fires",
     "kill_switch_state",
-    "referral_events",
     "wallet_events",
     "order_lifecycle",
     "reconcile_actions",
@@ -26,7 +25,8 @@
     "copy_dry_runs",
     "trader_metric_snapshots",
     "wallet_pseudonyms",
-    "leaderboard_exclusions"
+    "leaderboard_exclusions",
+    "referral_accruals"
   ],
   "tables": [
     "address_allowlist",
@@ -101,8 +101,13 @@
     "reconcile_actions",
     "reconcile_cursors",
     "reconcile_open",
-    "referral_events",
-    "referrals",
+    "referral_accruals",
+    "referral_attributions",
+    "referral_clicks",
+    "referral_links",
+    "referral_payouts",
+    "referral_reviews",
+    "referral_signals",
     "refresh_secrets",
     "revoke_jobs",
     "risk_blocklists",
@@ -292,6 +297,12 @@
     },
     "0015_leaderboard_identity.sql": {
       "dropped": [],
+      "check_clauses_reordered": []
+    },
+    "0016_referrals.sql": {
+      "dropped": [
+        "PG-only statement: CREATE TRIGGER append_only_referral_accruals"
+      ],
       "check_clauses_reordered": []
     }
   }

@@ -1227,3 +1227,124 @@ body {
     display: none;                 /* below the breakpoint the panels are tabs, so there is nothing to drag */
   }
 }
+
+/*
+ * The referral dashboard (P11 D5).
+ *
+ * The layout carries one decision, the same one D4's strip carried: the funnel is a TABLE, not five bars. Five
+ * bars drawn as one pipeline is a picture of a funnel that is not one — clicks are a leading count that no later
+ * step is bounded by — so the money chain and the leading count are separated in the markup and here only by
+ * weight. The money buckets get their own row of tiles because a referrer reads them as a balance, and the two a
+ * screen would rather hide (paid, clawed back) are the same weight as the rest.
+ */
+.pgm-referrals {
+  display: grid;
+  gap: var(--pgm-space-1);
+  min-width: 0;
+}
+
+.pgm-referrals__head {
+  display: flex;
+  gap: var(--pgm-space-1);
+  align-items: baseline;
+  flex-wrap: wrap;
+}
+
+.pgm-referrals__head p,
+.pgm-referrals__hidden,
+.pgm-referrals__findings,
+.pgm-referrals__rejected,
+.pgm-referrals__rules,
+.pgm-referrals__link {
+  color: var(--pgm-text-muted);
+  font-size: var(--pgm-font-compact);
+}
+
+.pgm-referrals__findings {
+  color: var(--pgm-alert-watch);
+}
+
+.pgm-referrals__review,
+.pgm-referrals__notice {
+  color: var(--pgm-alert-watch);
+}
+
+.pgm-referrals__funnel,
+.pgm-referrals__rows {
+  border-collapse: collapse;
+  width: 100%;
+}
+
+.pgm-referrals__funnel caption {
+  color: var(--pgm-text-muted);
+  font-size: var(--pgm-font-compact);
+  text-align: left;
+}
+
+.pgm-referrals__funnel th,
+.pgm-referrals__funnel td,
+.pgm-referrals__rows th,
+.pgm-referrals__rows td {
+  text-align: left;
+  padding: var(--pgm-space-off-1) var(--pgm-space-1) var(--pgm-space-off-1) 0;
+  border-bottom: var(--pgm-border-w-hair) solid var(--pgm-border-default);
+}
+
+.pgm-referrals__funnel td {
+  font-family: var(--pgm-font-dense);
+}
+
+/* The leading count sits apart from the chain: a different weight, and no border under it, so the four money
+   steps read as one run of rows and this one reads as a footnote to them. */
+.pgm-referrals__funnel tr[data-leading="true"] th,
+.pgm-referrals__funnel tr[data-leading="true"] td {
+  color: var(--pgm-text-muted);
+  font-style: italic;
+}
+
+.pgm-referrals__money,
+.pgm-referrals__payout {
+  display: flex;
+  gap: var(--pgm-space-1);
+  flex-wrap: wrap;
+}
+
+.pgm-referrals__money > div,
+.pgm-referrals__payout > div {
+  display: grid;
+  gap: var(--pgm-space-off-1);
+  background: var(--pgm-bg-inset);
+  border: var(--pgm-border-w-hair) solid var(--pgm-border-default);
+  border-radius: var(--pgm-radius-sm);
+  padding: var(--pgm-space-1);
+  min-width: var(--pgm-space-10);
+}
+
+.pgm-referrals__money dt,
+.pgm-referrals__payout dt {
+  color: var(--pgm-text-muted);
+  font-size: var(--pgm-font-compact);
+}
+
+.pgm-referrals__money dd,
+.pgm-referrals__payout dd {
+  margin: 0;
+  font-family: var(--pgm-font-dense);
+}
+
+.pgm-referrals__link {
+  overflow-wrap: anywhere;
+  font-family: var(--pgm-font-dense);
+}
+
+.pgm-referrals label {
+  display: grid;
+  gap: var(--pgm-space-off-1);
+  font-size: var(--pgm-font-compact);
+  max-width: var(--pgm-space-10);
+}
+
+.pgm-referrals__rows tr[data-state="clawed_back"] th,
+.pgm-referrals__rows tr[data-state="refused"] th {
+  color: var(--pgm-alert-watch);
+}

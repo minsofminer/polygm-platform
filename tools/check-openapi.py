@@ -115,6 +115,16 @@ TABLE_FOR_PATH = {
     "/v1/copy/sources": "COPY_SOURCES_RESPONSES",
     "/v1/me/portfolio": "PORTFOLIO_RESPONSES",
     "/v1/whale-views": "WHALE_VIEW_RESPONSES",
+    # P11 D5. Seven operations, five tables: `/review` serves the queue and the decision, and the two have
+    # different status sets (only the write takes an Idempotency-Key and only the write can 404 an item), so
+    # both rows are verb-keyed.
+    "/v1/referrals/terms": "REFERRAL_TERMS_RESPONSES",
+    "/v1/referrals/me": "REFERRAL_ME_RESPONSES",
+    "/v1/referrals/code": "REFERRAL_CODE_RESPONSES",
+    "/v1/referrals/apply": "REFERRAL_APPLY_RESPONSES",
+    "/v1/referrals/accrue": "REFERRAL_ACCRUE_RESPONSES",
+    ("GET", "/v1/referrals/review"): "REFERRAL_REVIEW_RESPONSES",
+    ("POST", "/v1/referrals/review"): "REFERRAL_REVIEW_SET_RESPONSES",
     # A path with a read and a write has TWO tables, and they differ by exactly the rows that describe the
     # difference: only the write takes an Idempotency-Key, so only the write answers its 400. Keyed by
     # (verb, path) and looked up before the bare path, because a single name per path would force one of the

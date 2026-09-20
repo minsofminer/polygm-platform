@@ -154,6 +154,53 @@ class Probe:
         except ValueError:
             return r.status_code, {}
 
+    def as_user(self, uid: str, url: str, **params) -> tuple[int, dict]:
+        """A read as SOMEBODY ELSE. A referral check needs more than one account, and the two sides must not be
+        the same session: the whole point of the pair is that one account referred another."""
+        r = self.client().get(url, params=params, headers={"X-User-Id": str(uid)})
+        try:
+            return r.status_code, r.json()
+        except ValueError:
+            return r.status_code, {}
+
+    def post_as(self, uid: str, url: str, body: dict, *, key: str = "", headers: dict | None = None):
+        n = getattr(self, "_post_n", 0) + 1
+        self._post_n = n
+        hdrs = {"X-User-Id": str(uid),
+                "Idempotency-Key": key or "g11-%s-%04d" % (url.strip("/").replace("/", "-"), n)}
+        hdrs.update(headers or {})
+        r = self.client().post(url, json=body, headers=hdrs)
+        try:
+            return r.status_code, r.json()
+        except ValueError:
+            return r.status_code, {}
+
+    def admin(self) -> str:
+        """Set an operator token that clears `authz.check_service_token`'s 32-character floor and return it."""
+        token = "p11-gate-" + "0" * 40
+        os.environ["PGM_ADMIN_TOKEN"] = token
+        return token
+
+    def account(self, uid: str) -> str:
+        """A fresh account with no wallet, so nothing it does can perturb the boards."""
+        self.exec("INSERT OR IGNORE INTO users (id, created_ms, tier) VALUES (?,?, 'free')", (str(uid), 1))
+        return str(uid)
+
+    def attr_row(self, referee: str, order: str, *, observed: int | None, expected: int | None = None,
+                 at: int | None = None) -> None:
+        """One attributable order, as the ingest would have written it: the venue's OWN fee number, or NULL when
+        the fee has not been paid yet — which is the state the accrual run must walk past."""
+        self.exec("INSERT INTO builder_attribution (order_id, intent_id, user_id, builder_code, fee_bps_expected,"
+                  " fee_micro_expected, fee_micro_observed, market_id, token_id, placed_ms)"
+                  " VALUES (?,?,?,?,?,?,?,?,?,?)",
+                  (str(order), "0xintent-%s" % order, str(referee), "polygm-referral", 25,
+                   int(expected if expected is not None else (observed or 0)), observed, "0xgate-m", "0xgate-t",
+                   int(at if at is not None else self.app()._now_ms() - 60_000)))
+
+    def today(self) -> str:
+        import datetime as _dt
+        return _dt.datetime.fromtimestamp(self.app()._now_ms() / 1000, _dt.timezone.utc).strftime("%Y-%m-%d")
+
     def rows(self, sql: str, args: tuple = ()) -> list:
         return self.app()._db.execute(sql, args).fetchall()
 
@@ -1155,10 +1202,392 @@ def c18_identity_never_leaks(p: Probe) -> tuple[str, bool, str]:
             % (len(rows), len(findings), "; " + "; ".join(findings[:3]) if findings else ""))
 
 
+
+# ------------------------------------------------------------------------------------- D5 · the referral rules
+def referral_model_findings(accruals: list[dict], bps: int, qualifies: dict) -> list[str]:
+    """The reward, re-derived from the rows: a share of a fee we were PAID, on a referee who actually traded.
+
+    Four plantings this catches, and each one is a real way a referral programme pays for nothing: a share computed
+    off the EXPECTED fee (money we have not been paid), a row with no observed fee at all (a signup or a deposit
+    earning), an accrual for a referee with no qualifying order, and a share that is not `bps` of the fee — which
+    is the difference between the published rate and the rate somebody typed.
+    """
+    f = []
+    for row in accruals:
+        referee = str(row.get("referee") or "")
+        fee = row.get("feeObservedMicro")
+        share = row.get("shareMicro")
+        if not isinstance(fee, int) or fee <= 0:
+            f.append("an accrual with fee %r: nothing was paid to us on it" % (fee,))
+            continue
+        want = fee * bps // 10_000
+        if share != want:
+            f.append("share %r is not %d bps of the observed fee %d (want %d)" % (share, bps, fee, want))
+        if share is not None and fee is not None and share > fee:
+            f.append("the share exceeds the fee: %r > %r" % (share, fee))
+        if not qualifies.get(referee):
+            f.append("an accrual for %s, who never placed a qualifying order" % referee)
+    return f
+
+
+def referral_collision_findings(attributions: list[dict], queue: list[dict], signals: dict) -> list[str]:
+    """The three collisions, re-derived from the record: dedupe by signal, a queue item for every hold, no row for
+    a self-referral.
+
+    `signals` maps a referee to the set of digests we stored for them. A referee who shares a DIGEST with their own
+    referrer is a self-referral wearing a hat; a second referee sharing one with an already-attributed referee of
+    the same referrer is the kit's acceptance pair. Either one may exist only in `review`/`refused`, and each needs
+    the queue item that tells a person to look at it — otherwise the money stops with nobody to ask.
+    """
+    f = []
+    held = {str(q.get("referee")) for q in queue if str(q.get("state")) == "open"}
+    by_referrer: dict[str, list[str]] = {}
+    held_states: dict[str, str] = {}
+    for a in attributions:
+        by_referrer.setdefault(str(a.get("referrer")), []).append(str(a.get("referee")))
+        held_states[str(a.get("referee"))] = str(a.get("state"))
+    for a in attributions:
+        referee, referrer, state = str(a.get("referee")), str(a.get("referrer")), str(a.get("state"))
+        if referee == referrer:
+            f.append("an attribution row points %s at themselves" % referee)
+        shared = signals.get(referee, set()) & signals.get(referrer, set())
+        if shared and state not in ("review", "refused"):
+            f.append("%s shares a signal with the referrer and is %r, not held" % (referee, state))
+        for other in by_referrer.get(referrer, []):
+            if other == referee:
+                continue
+            if not (signals.get(referee, set()) & signals.get(other, set())):
+                continue
+            # BOTH halves of the pair have to be un-held before this is a hole: the first referee to arrive on a
+            # shared device was clean when they arrived, and it is the second one the dedupe holds. A rule that
+            # flagged the first as well would be a scanner demanding that the API retroactively punish the
+            # account it already trusted.
+            other_state = held_states.get(other, "pending")
+            if state not in ("review", "refused") and other_state not in ("review", "refused"):
+                f.append("%s and %s share a signal and neither is held" % (referee, other))
+        if state in ("review", "refused") and referee not in held:
+            f.append("a %s referral (%s) is not on the review queue" % (state, referee))
+    return f
+
+
+def referral_dashboard_findings(me: dict) -> list[str]:
+    """The dashboard's arithmetic, re-derived: a monotone money chain, buckets that add up, no invented number.
+
+    The kit asks for clicks -> signups -> funded -> trading -> earned -> pending -> paid, and the trap is the first
+    step: clicks are a LEADING count and no later step is bounded by them (a code read aloud produces signups with
+    no clicks), so the scanner checks the four money steps for monotonicity and checks clicks only for a floor of
+    zero. Everything else is an identity that must hold against the rows below it.
+    """
+    f = []
+    funnel = me.get("funnel") or {}
+    counts = [int(funnel.get(k) or 0) for k in ("signups", "funded", "trading", "earned")]
+    for i in range(1, len(counts)):
+        if counts[i] > counts[i - 1]:
+            f.append("the funnel is not monotone: %s" % counts)
+            break
+    if int(funnel.get("clicks") or 0) < 0:
+        f.append("a negative click count")
+    if me.get("funnelFindings"):
+        f.append("the dashboard reported its own funnel as impossible: %s" % me["funnelFindings"][:1])
+    earned = int((me.get("earnings") or {}).get("accruedMicro") or 0)
+    rows = me.get("referrals") or []
+    if sum(int(r.get("earnedMicro") or 0) for r in rows) > earned and not (me.get("hidden") or {}).get("refused"):
+        f.append("the referees' rows exceed the earnings and nothing is hidden")
+    buckets = me.get("earnings") or {}
+    if int(buckets.get("settledMicro") or 0) + int(buckets.get("holdingMicro") or 0) != int(buckets.get("accruedMicro") or 0):
+        f.append("settled + holding does not equal accrued: %s" % buckets)
+    if int(buckets.get("paidMicro") or 0) > int(buckets.get("accruedMicro") or 0) + int(buckets.get("clawedBackMicro") or 0):
+        f.append("paid exceeds everything ever accrued")
+    if int(funnel.get("earned") or 0) != len([r for r in rows if int(r.get("earnedMicro") or 0) > 0]):
+        f.append("the `earned` step is not the number of referees still owed money")
+    return f
+
+
+def referral_terms_findings(terms: dict, payout: dict) -> list[str]:
+    """The payout reality and the published rules: the kit's "state it or you have hidden it".
+
+    A referral programme is a money promise, so the parts a referrer must be able to check BEFORE they post a link
+    are the ones this scanner refuses to let go missing: what earns (and what was rejected), when it is paid, how
+    little is too little, what happens on a clawback, which tax form is required, and the position on ranking
+    referrers — served rather than left to be asked.
+    """
+    f = []
+    rules = " ".join(terms.get("rules") or []).lower()
+    for needle in ("claw", "no second level", "funded from the same source", "revoking the builder code"):
+        if needle not in rules:
+            f.append("the published rules do not mention %r" % needle)
+    if not str(terms.get("noReferrerLeaderboard") or "").strip():
+        f.append("the position on a referrer leaderboard is not served")
+    if not (terms.get("rejectedModels") or []):
+        f.append("the rejected reward models are not published with their reasons")
+    for key in ("schedule", "modelSentence", "paidFrom"):
+        if not str(terms.get(key) or "").strip():
+            f.append("the terms do not state %s" % key)
+    if int(terms.get("payoutMinMicro") or 0) <= 0:
+        f.append("the payout minimum is not stated")
+    tax = payout.get("tax") or {}
+    if not tax.get("form") or not tax.get("reportForm"):
+        f.append("the payout page does not name the tax form it needs and files")
+    if "UNVERIFIED" not in str(terms.get("taxNote") or ""):
+        f.append("the tax note does not carry its own uncertainty marker")
+    if int(payout.get("minimumMicro") or 0) != int(terms.get("payoutMinMicro") or 0):
+        f.append("the payout page's minimum is not the engine's")
+    return f
+
+
+def c19_reward_needs_a_trade(p: Probe) -> tuple[str, bool, str]:
+    """D5: the reward is a share of a fee we were PAID, on a referee who actually traded.
+
+    The kit's rule is one sentence — never signup or deposit size — and this walks it end to end: a clean referral
+    starts `pending` with zero earnings, an observed fee on a referee who has not qualified accrues NOTHING, the
+    qualifying order unlocks a share of the fee the venue actually paid (not the fee we expected), and the accrual
+    the run writes is re-derived from the row.
+    """
+    ref, sub = "u-ref-c19", "u-sub-c19"
+    p.account(ref)
+    p.account(sub)
+    findings: list[str] = []
+    code, me = p.as_user(ref, "/v1/referrals/me")
+    if code != 200:
+        return ("a referral earns a share of the fee we were paid, and nothing for a signup", False,
+                "/v1/referrals/me answered %d" % code)
+    token = (me.get("link") or {}).get("token") or ""
+    code, applied = p.post_as(sub, "/v1/referrals/apply", {"code": token, "device": "c19-device",
+                                                           "funding": "c19-funding"})
+    if code != 200 or applied.get("attributionState") != "pending":
+        return ("a referral earns a share of the fee we were paid, and nothing for a signup", False,
+                "a clean apply answered %d / %s" % (code, applied.get("attributionState")))
+    if (p.as_user(ref, "/v1/referrals/me")[1].get("funnel") or {}).get("funded"):
+        findings.append("a pending referral is counted as funded")
+    # An order whose fee we have not been paid yet, on a referee who has not qualified: nothing accrues.
+    p.attr_row(sub, "0xc19-unpaid", observed=None, expected=9_000_000)
+    p.attr_row(sub, "0xc19-paid", observed=8_000_000, expected=40_000_000)
+    p.admin()
+    code, ran = p.post_as(ref, "/v1/referrals/accrue", {"day": p.today()},
+                          headers={"X-Admin-Token": os.environ["PGM_ADMIN_TOKEN"]})
+    if code != 200:
+        findings.append("the accrual run answered %d" % code)
+    elif ran.get("accruals"):
+        findings.append("an unqualified referee accrued %s rows" % ran.get("accruals"))
+    # The qualifying order: the DB carries the state the ingest would have written.
+    # The qualifying order lands AFTER the signup — 0016 CHECKs `qualify_ms >= signed_up_ms`, and an order that
+    # predates the account that placed it is a fixture bug rather than a scenario (the probe reads `_now_ms()`
+    # a millisecond later than the apply, so the order is stamped a second AHEAD of the signup).
+    p.exec("UPDATE referral_attributions SET state='qualified', qualify_order=?, qualify_ms=?, notional_micro=?,"
+           " term_ends_ms=? WHERE referee=?",
+           ("0xc19-qualify", p.app()._now_ms() + 1_000, 40_000_000,
+            p.app()._now_ms() + 364 * 86_400_000, sub))
+    # A SECOND run for the same day, after the qualifying order landed — the day's first run was before it, and a
+    # later run must still pay it: the (referrer, referee, day) key is what stops a re-run paying twice, not the
+    # calendar.
+    code, ran = p.post_as(ref, "/v1/referrals/accrue", {"day": p.today()},
+                          headers={"X-Admin-Token": os.environ["PGM_ADMIN_TOKEN"]})
+    rows = [{"referee": r[0], "feeObservedMicro": int(r[1]), "shareMicro": int(r[2])}
+            for r in p.rows("SELECT referee, fee_observed_micro, share_micro FROM referral_accruals WHERE referrer=?",
+                            (ref,))]
+    qualifies = {sub: True}
+    findings += referral_model_findings(rows, 2500, qualifies)
+    if not rows:
+        findings.append("the qualifying order accrued nothing")
+    elif rows[0]["feeObservedMicro"] != 8_000_000:
+        # The expected fee was 40 on that order. Reading it would pay out against a projection, which is the one
+        # failure mode that turns a funded programme into an unfunded promise.
+        findings.append("the accrual used the expected fee, not the observed one: %s" % rows[0])
+    dash = p.as_user(ref, "/v1/referrals/me")[1]
+    if int((dash.get("earnings") or {}).get("accruedMicro") or 0) <= 0:
+        findings.append("the dashboard shows nothing accrued after a paid order")
+    ok = not findings
+    return ("a referral earns a share of the fee we were paid, and nothing for a signup", ok,
+            "%d accrual row(s), %.2f of fee observed; %d findings%s"
+            % (len(rows), (rows[0]["feeObservedMicro"] / 1e6) if rows else 0.0, len(findings),
+               ("; " + "; ".join(findings[:3])) if findings else ""))
+
+
+def c20_second_wallet_is_caught(p: Probe) -> tuple[str, bool, str]:
+    """D5: the phase's acceptance sentence — a referral from a second wallet funded by the first, caught.
+
+    Two of the three collisions here are the kit's own examples (one funding source, a shared device) and the third
+    is the one that costs us the revenue line: an account applying its own code. That one must ALSO leave the
+    revocation ground in `builder_code_status`, because "protected the revenue line" is not a sentence in a doc.
+    """
+    ref, sub, sub2, sub3 = "u-ref-c20", "u-sub-c20", "u-sub2-c20", "u-sub3-c20"
+    for uid in (ref, sub, sub2, sub3):
+        p.account(uid)
+    findings: list[str] = []
+    token = (p.as_user(ref, "/v1/referrals/me")[1].get("link") or {}).get("token") or ""
+    p.post_as(sub, "/v1/referrals/apply", {"code": token, "funding": "c20-shared-funding"})
+    code, second = p.post_as(sub2, "/v1/referrals/apply", {"code": token, "funding": "c20-shared-funding"})
+    if code != 409 or (second.get("error") or {}).get("code") != "REFUSED":
+        findings.append("the second wallet from one funding source answered %d/%s"
+                        % (code, (second.get("error") or {}).get("code")))
+    code, held = p.post_as(sub3, "/v1/referrals/apply", {"code": token, "device": "c20-device"})
+    p.post_as(sub, "/v1/referrals/apply", {"code": token, "device": "c20-device"})
+    dash = p.as_user(ref, "/v1/referrals/me")[1]
+    if (dash.get("hidden") or {}).get("refused", 0) < 1:
+        findings.append("the refusal is not counted on the dashboard")
+    # Self-referral: refused, no row, and the builder code the referral was made under goes down.
+    p.admin()
+    code, self_ref = p.post_as(ref, "/v1/referrals/apply", {"code": p.as_user(ref, "/v1/referrals/me")[1]
+                                                            .get("link", {}).get("token", "")})
+    if code != 409 or (self_ref.get("error") or {}).get("code") != "SELF_REFERRAL":
+        findings.append("a self-referral answered %d/%s" % (code, (self_ref.get("error") or {}).get("code")))
+    p.exec("UPDATE builder_code_status SET state='active', source='api', note='' WHERE code='polygm-referral'")
+    p.post_as(ref, "/v1/referrals/apply", {"code": p.as_user(ref, "/v1/referrals/me")[1].get("link", {})
+                                          .get("token", "")})
+    status = p.rows("SELECT state, note FROM builder_code_status WHERE code='polygm-referral'")
+    if not status or str(status[0][0]) != "disabled":
+        findings.append("the self-referral left the builder code %r" % (status[0][0] if status else None))
+    elif "self-referral" not in str(status[0][1]).lower():
+        findings.append("the revocation does not name its ground: %s" % status[0][1])
+    queue = [{"referee": r[0], "state": r[1], "kind": r[2]}
+             for r in p.rows("SELECT referee, state, kind FROM referral_reviews WHERE state='open'")]
+    attributions = [{"referee": r[0], "referrer": r[1], "state": r[2]}
+                    for r in p.rows("SELECT referee, referrer, state FROM referral_attributions")]
+    signals: dict[str, set] = {}
+    for uid, digest in p.rows("SELECT user_id, hash FROM referral_signals"):
+        signals.setdefault(str(uid), set()).add(str(digest))
+    findings += referral_collision_findings(attributions, queue, signals)
+    if any(a["referee"] == ref for a in attributions):
+        findings.append("the self-referral wrote an attribution row")
+    ok = not findings
+    return ("a second wallet funded by the first is refused, a shared device is held, and a self-referral is a "
+            "revocation ground", ok,
+            "%d attribution(s), %d open review item(s); %d findings%s"
+            % (len(attributions), len(queue), len(findings), ("; " + "; ".join(findings[:3])) if findings else ""))
+
+def c21_dashboard_arithmetic(p: Probe) -> tuple[str, bool, str]:
+    """D5: the dashboard's own numbers, re-derived from its own rows.
+
+    The kit's dashboard is clicks -> signups -> funded -> trading -> earned -> pending -> paid, and the two ways it
+    can lie are a chain that is not monotone and a total that is not the sum of its parts. This walks a referrer
+    with two live referees and one clawback candidate and checks every identity on the payload, including the one
+    that is easy to get wrong: `clicks` is not a ceiling on signups.
+    """
+    ref, sub, sub2 = "u-ref-c21", "u-sub-c21", "u-sub2-c21"
+    for uid in (ref, sub, sub2):
+        p.account(uid)
+    findings: list[str] = []
+    token = (p.as_user(ref, "/v1/referrals/me")[1].get("link") or {}).get("token") or ""
+    for uid, dev in ((sub, "c21-a"), (sub2, "c21-b")):
+        code, got = p.post_as(uid, "/v1/referrals/apply", {"code": token, "device": dev, "funding": "fund-%s" % dev})
+        if code != 200:
+            findings.append("a clean apply answered %d" % code)
+    for uid in (sub, sub2):
+        p.exec("UPDATE referral_attributions SET state='qualified', qualify_order=?, qualify_ms=?, notional_micro=?,"
+               " term_ends_ms=? WHERE referee=?", ("0xq-%s" % uid, p.app()._now_ms() + 1_000, 60_000_000,
+                                                   p.app()._now_ms() + 364 * 86_400_000, uid))
+        p.attr_row(uid, "0xc21-%s" % uid, observed=4_000_000, at=p.app()._now_ms() - 60_000)
+    p.admin()
+    code, ran = p.post_as(ref, "/v1/referrals/accrue", {"day": p.today()},
+                          headers={"X-Admin-Token": os.environ["PGM_ADMIN_TOKEN"]})
+    me = p.as_user(ref, "/v1/referrals/me")[1]
+    findings += referral_dashboard_findings(me)
+    funnel = me.get("funnel") or {}
+    if funnel.get("signups") != 2:
+        findings.append("signups is %s for two attributions" % funnel.get("signups"))
+    if int(funnel.get("earned") or 0) != 2:
+        findings.append("earned is %s for two referees with accruals" % funnel.get("earned"))
+    if len(me.get("referrals") or []) != 2:
+        findings.append("%d referral rows for two referees" % len(me.get("referrals") or []))
+    open_items = p.rows("SELECT COUNT(*) FROM referral_reviews WHERE subject=? AND state='open'", (ref,))[0][0]
+    if int((me.get("review") or {}).get("open") or 0) != int(open_items):
+        findings.append("the review count is not the queue: %s vs %s" % (me.get("review") or {}).get("open"),
+                        open_items)
+    # The leading count is not a ceiling: a code read out loud produces signups with no clicks at all, so the
+    # scanner must not demand clicks >= signups — it demands the four money steps monotone and clicks non-negative.
+    paid_csv = (me.get("earnings") or {})
+    if int(paid_csv.get("accruedMicro") or 0) != sum(int(r.get("earnedMicro") or 0)
+                                                     for r in me.get("referrals") or []):
+        findings.append("accrued is not the sum of the referees' rows")
+    ok = not findings
+    return ("the dashboard's funnel is monotone, its totals are its rows, and its review count is the queue", ok,
+            "signups %s, funded %s, trading %s, earned %s, accrued %s micro; %d findings%s"
+            % (funnel.get("signups"), funnel.get("funded"), funnel.get("trading"), funnel.get("earned"),
+               (me.get("earnings") or {}).get("accruedMicro"), len(findings),
+               ("; " + "; ".join(findings[:3])) if findings else ""))
+
+
+def c22_payout_reality_and_clawback(p: Probe) -> tuple[str, bool, str]:
+    """D5: what a referrer can check before they post a link, and what a clawback actually does.
+
+    Four things are asserted rather than described: the terms page carries the model, the rejected alternatives,
+    the payout schedule, the minimum, the tax form and the position on referrer leaderboards; money inside the
+    settlement hold is not payable; a future day is refused by the accrual run; and a clawback cancels the UNPAID
+    accruals first while leaving the rows where they are — the table is append-only, so the evidence of what was
+    paid and what was taken back has to survive the decision that took it.
+    """
+    ref, sub = "u-ref-c22", "u-sub-c22"
+    for uid in (ref, sub):
+        p.account(uid)
+    findings: list[str] = []
+    code, payload = p.get("/v1/referrals/terms")
+    if code != 200:
+        return ("the payout reality is published, and a clawback cancels what was never paid", False,
+                "/v1/referrals/terms answered %d" % code)
+    terms = payload.get("terms") or {}
+    token = (p.as_user(ref, "/v1/referrals/me")[1].get("link") or {}).get("token") or ""
+    p.post_as(sub, "/v1/referrals/apply", {"code": token, "device": "c22-device", "funding": "c22-funding"})
+    p.exec("UPDATE referral_attributions SET state='qualified', qualify_order=?, qualify_ms=?, notional_micro=?,"
+           " term_ends_ms=? WHERE referee=?", ("0xc22", p.app()._now_ms() + 1_000, 40_000_000,
+                                               p.app()._now_ms() + 364 * 86_400_000, sub))
+    p.attr_row(sub, "0xc22-order", observed=40_000_000, at=p.app()._now_ms() - 60_000)
+    p.admin()
+    admin = {"X-Admin-Token": os.environ["PGM_ADMIN_TOKEN"]}
+    p.post_as(ref, "/v1/referrals/accrue", {"day": p.today()}, headers=admin)
+    me = p.as_user(ref, "/v1/referrals/me")[1]
+    findings += referral_terms_findings(terms, me.get("payout") or {})
+    earnings = me.get("earnings") or {}
+    if int(earnings.get("holdingMicro") or 0) <= 0:
+        findings.append("a fresh accrual is not inside the settlement hold: %s" % earnings)
+    if int(earnings.get("payableMicro") or 0) != 0:
+        findings.append("money inside the hold is payable: %s" % earnings.get("payableMicro"))
+    if int(earnings.get("toMinimumMicro") or 0) != int(terms.get("payoutMinMicro") or 0):
+        findings.append("the gap to the minimum ignores the hold")
+    code, future = p.post_as(ref, "/v1/referrals/accrue", {"day": "2099-01-01"}, headers=admin)
+    if code != 422:
+        findings.append("a future day answered %d" % code)
+    # A clawback: unpaid accruals first, nothing asked back when nothing was paid, and the rows survive.
+    p.exec("INSERT INTO referral_reviews (kind, subject, referee, state, findings_json, decision, actor, opened_ms,"
+           " decided_ms) VALUES ('duplicate_funding',?,?,'open','[]','','',?,0)", (ref, sub, p.app()._now_ms()))
+    item = p.rows("SELECT id FROM referral_reviews WHERE subject=? AND state='open' ORDER BY id DESC LIMIT 1", (ref,))
+    before = p.rows("SELECT COUNT(*), COALESCE(SUM(share_micro),0) FROM referral_accruals WHERE referrer=?", (ref,))
+    code, decided = p.post_as(ref, "/v1/referrals/review",
+                              {"id": int(item[0][0]), "decision": "claw_back", "reason": "gate: one funding source"},
+                              headers=admin)
+    if code != 200:
+        findings.append("the clawback answered %d" % code)
+    else:
+        claw = decided.get("clawback") or {}
+        if int(claw.get("unpaidMicro") or 0) != int(before[0][1]):
+            findings.append("the clawback took %s of %s unpaid" % (claw.get("unpaidMicro"), before[0][1]))
+        if claw.get("requiresRepayment"):
+            findings.append("it asked for money back when nothing had been paid")
+    after = p.rows("SELECT COUNT(*), COALESCE(SUM(share_micro),0) FROM referral_accruals WHERE referrer=?", (ref,))
+    if after != before:
+        findings.append("the clawback DELETED accrual rows: %s -> %s" % (before, after))
+    dash = p.as_user(ref, "/v1/referrals/me")[1]
+    if int((dash.get("earnings") or {}).get("clawedBackMicro") or 0) != int(before[0][1]):
+        findings.append("the dashboard does not show what was clawed back")
+    if int((dash.get("funnel") or {}).get("earned") or 0) != 0:
+        findings.append("a clawed-back referee still counts as earning")
+    # The position on a referrer leaderboard is served, and there is no such board to read.
+    src = read(ROOT / "services" / "api" / "app.py") or ""
+    if "/v1/referrals/leaderboard" in src:
+        findings.append("a public referrer leaderboard exists")
+    ok = not findings
+    return ("the payout reality is published, and a clawback cancels what was never paid", ok,
+            "minimum %s micro, hold %s days, %d rule(s); %d findings%s"
+            % (terms.get("payoutMinMicro"), terms.get("settleHoldDays"), len(terms.get("rules") or []),
+               len(findings), ("; " + "; ".join(findings[:3])) if findings else ""))
+
 CHECKS = (c1_contract, c2_no_addresses, c3_gate_pair, c4_win_rate_gate, c5_refusals, c6_no_hidden_losses,
           c7_integers_only, c8_freshness, c9_read_plans, c10_history, c11_exclusions, c12_population,
           c13_published, c14_board_orders, c15_wallet_standing, c16_comparison_and_follows,
-          c17_self_rank_every_board, c18_identity_never_leaks)
+          c17_self_rank_every_board, c18_identity_never_leaks,
+          # D5. The two halves of the kit's second acceptance sentence, then the two rules that decide whether the
+          # programme is solvent and survivable.
+          c19_reward_needs_a_trade, c20_second_wallet_is_caught, c21_dashboard_arithmetic,
+          c22_payout_reality_and_clawback)
 
 
 # --------------------------------------------------------------------------------------------------- self-test
@@ -1339,6 +1768,86 @@ def self_test() -> int:
                 and len(privacy_findings(payloads, "gate_handle", listed=False)) == 1
                 and not privacy_findings(payloads, "gate_handle", listed=True)
                 and len(privacy_findings(quiet, "gate_handle", listed=True)) == 1), "both directions"
+
+    @canary
+    def referral_model():
+        """A share off the EXPECTED fee, a share that is not the published rate, an accrual for a referee who never
+        traded, and an accrual with no fee behind it: the four ways a referral programme pays for nothing."""
+        rows = [{"referee": "u_a", "feeObservedMicro": 8_000_000, "shareMicro": 2_000_000}]
+        expected_not_observed = [{"referee": "u_a", "feeObservedMicro": 40_000_000, "shareMicro": 2_000_000}]
+        wrong_rate = [{"referee": "u_a", "feeObservedMicro": 8_000_000, "shareMicro": 4_000_000}]
+        unqualified = [{"referee": "u_b", "feeObservedMicro": 8_000_000, "shareMicro": 2_000_000}]
+        no_fee = [{"referee": "u_a", "feeObservedMicro": 0, "shareMicro": 0}]
+        qualifies = {"u_a": True}
+        assert not referral_model_findings(rows, 2500, qualifies), "the good row was flagged"
+        got = [len(referral_model_findings(x, 2500, qualifies))
+               for x in (expected_not_observed, wrong_rate, unqualified, no_fee)]
+        return all(n >= 1 for n in got), got
+
+    @canary
+    def referral_collisions():
+        """A shared funding digest that was NOT held, a self-referral with a row, and a refusal with no queue
+        item: each one is a hole in the same wall."""
+        attributions = [{"referee": "u_a", "referrer": "u_ref", "state": "pending"},
+                        {"referee": "u_b", "referrer": "u_ref", "state": "review"}]
+        # The FIRST referee on a shared device was clean when they arrived; the SECOND is the one held. The
+        # referrer's own digest is a third value, so nothing here is a self-referral wearing a hat.
+        signals = {"u_ref": {"d_referrer"}, "u_a": {"d_1"}, "u_b": {"d_1"}}
+        queue = [{"referee": "u_b", "state": "open", "kind": "duplicate_funding"}]
+        assert not referral_collision_findings(attributions, queue, signals), "the held pair was flagged"
+        silent = [dict(attributions[0], state="pending"), dict(attributions[1], state="pending")]
+        self_row = [{"referee": "u_ref", "referrer": "u_ref", "state": "pending"}]
+        orphans = [dict(attributions[0]), dict(attributions[1])]
+        unreported = [dict(attributions[0]), dict(attributions[1], state="pending")]
+        got = [len(referral_collision_findings(silent, queue, signals)),
+               len(referral_collision_findings(self_row, queue, signals)),
+               len(referral_collision_findings(orphans, queue, {"u_ref": {"d_1"}, "u_a": {"d_1"}})),
+               len(referral_collision_findings(unreported, [], signals))]
+        return all(n >= 1 for n in got), got
+
+    @canary
+    def referral_dashboard():
+        """A funnel that goes up, a bucket sum that does not add up, a paid figure above everything ever accrued,
+        and an `earned` step that is not the number of referees still owed money."""
+        good = {"funnel": {"clicks": 0, "signups": 2, "funded": 2, "trading": 2, "earned": 2},
+                "earnings": {"accruedMicro": 4_000_000, "settledMicro": 0, "holdingMicro": 4_000_000,
+                             "payableMicro": 0, "paidMicro": 0, "clawedBackMicro": 0},
+                "referrals": [{"referee": "u_a", "earnedMicro": 2_000_000}, {"referee": "u_b", "earnedMicro": 2_000_000}],
+                "hidden": {"refused": 0}, "funnelFindings": []}
+        rising = json.loads(json.dumps(good))
+        rising["funnel"]["funded"] = 3
+        leaking = json.loads(json.dumps(good))
+        leaking["earnings"]["accruedMicro"] = 5_000_000
+        overpaid = json.loads(json.dumps(good))
+        overpaid["earnings"]["paidMicro"] = 9_000_000
+        miscounted = json.loads(json.dumps(good))
+        miscounted["funnel"]["earned"] = 1
+        assert not referral_dashboard_findings(good), referral_dashboard_findings(good)
+        got = [len(referral_dashboard_findings(x)) for x in (rising, leaking, overpaid, miscounted)]
+        return all(n >= 1 for n in got), got
+
+    @canary
+    def referral_terms():
+        """A rules list with the clawback missing, a tax form that is not named, an uncertainty marker that was
+        dropped, and a payout minimum that disagrees with the engine's."""
+        good = {"rules": ["a clawback cancels unpaid accruals first", "there is no second level",
+                          "a referral funded from the same source is refused",
+                          "revoking the builder code is the ground for a self-referral"],
+                "noReferrerLeaderboard": "no public referrer leaderboard: it would be a spam contest",
+                "rejectedModels": ["flat bounty on a first funded trade: it pays for a signup"],
+                "schedule": "monthly, by the 10th", "modelSentence": "a share of the builder fee we are paid",
+                "paidFrom": "the fee the venue actually paid us", "payoutMinMicro": 20_000_000,
+                "taxNote": "[UNVERIFIED] the forms are a jurisdiction review"}
+        payout = {"minimumMicro": 20_000_000,
+                  "tax": {"form": "W-9", "reportForm": "1099-NEC", "note": "before the first payout"}}
+        no_claw = dict(good, rules=[r for r in good["rules"] if "claw" not in r])
+        no_form = {"minimumMicro": 20_000_000, "tax": {"form": "", "reportForm": ""}}
+        no_marker = dict(good, taxNote="the forms are a jurisdiction review")
+        wrong_min = {"minimumMicro": 5_000_000, "tax": payout["tax"]}
+        assert not referral_terms_findings(good, payout), referral_terms_findings(good, payout)
+        got = [len(referral_terms_findings(no_claw, payout)), len(referral_terms_findings(good, no_form)),
+               len(referral_terms_findings(no_marker, payout)), len(referral_terms_findings(good, wrong_min))]
+        return all(n >= 1 for n in got), got
 
     @canary
     def p10_scanners_still_work():

@@ -156,6 +156,38 @@ export const ROUTES = {
     whileMissing: "refuses",
     owner: "P11",
   },
+  // P11 D5: the referral programme. Five rows, and the split is the model's: the terms are PUBLIC (a programme
+  // whose terms are discovered after the money moves is a complaint), the link and the funnel are USER-scoped,
+  // and the two operator routes are not in this ledger at all — a screen must never be able to reach the accrual
+  // run or the review queue, so they are not declared here for a component to call.
+  referralsTerms: {
+    method: "GET",
+    path: "/v1/referrals/terms",
+    built: true,
+    whileMissing: "refuses",
+    owner: "P11",
+  },
+  referralsMe: {
+    method: "GET",
+    path: "/v1/referrals/me",
+    built: true,
+    whileMissing: "refuses",
+    owner: "P11",
+  },
+  referralCode: {
+    method: "POST",
+    path: "/v1/referrals/code",
+    built: true,
+    whileMissing: "refuses",
+    owner: "P11",
+  },
+  referralApply: {
+    method: "POST",
+    path: "/v1/referrals/apply",
+    built: true,
+    whileMissing: "refuses",
+    owner: "P11",
+  },
   copySources: {
     method: "GET",
     path: "/v1/copy/sources",

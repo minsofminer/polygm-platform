@@ -1392,6 +1392,179 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/referrals/terms": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The reward model, the rules, the schedule, and the alternatives we rejected
+         * @description Served from the engine's own constants (`polygm_core.referrals.terms`), so this page and the payout
+         *     arithmetic cannot disagree: the share, the qualifying notional, the term, the settlement hold, the payout
+         *     minimum and the tax form are read out of the same module the accrual run reads. `rejectedModels` carries
+         *     the alternatives with the reason each was rejected, because "why not a flat bounty" is the first question
+         *     a referrer asks and the answer is the argument the whole model rests on. `noReferrerLeaderboard` states
+         *     the position on ranking referrers, in the same place a referrer would look for one.
+         */
+        get: operations["getReferralTerms"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/referrals/me": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Your link, your funnel, your earnings and the payout state
+         * @description The whole dashboard in one read: the link (minted on first read) and the short code if one is claimed,
+         *     the funnel through to `earned`, the per-referee rows with their state, the earnings split into accrued /
+         *     settled / holding / payable with the gap to the payout minimum, the payout schedule, and the tax form a
+         *     first payout needs.
+         *
+         *     Two properties are part of the contract rather than the screen. `funnelFindings` is empty on a consistent
+         *     funnel and names the impossibility otherwise — a monotonicity check the gate reads. `hidden.refused`
+         *     counts the attempts that were refused and says why they are not listed: a refused attempt is answered to
+         *     the account that made it and reviewed by an operator, because showing it to a referrer would tell them
+         *     about a person they have no relationship with.
+         */
+        get: operations["getReferralMe"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/referrals/code": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Claim or rotate the short code you say out loud (idempotent per key)
+         * @description The short code is CHOSEN, never issued, because a name that already exists is not a choice. Separators are
+         *     stripped before the rules run, so `Poly-Market-Mike` and `polymarketmike` are one claim rather than two,
+         *     and a reserved word, an all-digit code or a length outside 4-16 is refused with the rule that was broken
+         *     (`CODE_INVALID`, whose sentence never repeats what was typed). Rotating retires the previous code in the
+         *     same transaction: exactly one active short code per account. A code another account holds is a 409.
+         */
+        post: operations["postReferralCode"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/referrals/apply": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Apply a referral code — the dedupe runs, and the decision is recorded (idempotent per key)
+         * @description The three outcomes are three different writes, and the response says which one happened:
+         *
+         *       * **attributed** — a `pending` attribution. It earns nothing until the referee places their first
+         *         matched order over the qualifying notional: a signup is a claim, a trade is the qualification, and no
+         *         reward is ever paid for signing up or for the size of a deposit.
+         *       * **review** — a shared device, a shared IP or referral velocity holds the referral for a person. The
+         *         referral is not cancelled: it accrues nothing until an operator clears it, and what was earned while
+         *         it waited is paid.
+         *       * **refused** — self-referral (409 `SELF_REFERRAL`) and a funding source already used by another
+         *         referee (409 `REFUSED`). A refusal is recorded, so a second attempt is answered from the record
+         *         (`ALREADY_REFERRED`) rather than re-decided, and a writer is never told which signal matched.
+         *
+         *     Device and funding identifiers are hashed with the server salt before they are stored; the request is the
+         *     only place the value exists.
+         */
+        post: operations["postReferralApply"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/referrals/accrue": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * The day's accrual run — operator or cron (idempotent per key, and per day)
+         * @description The only writer of `referral_accruals`, and it reads the fee the venue ACTUALLY paid
+         *     (`builder_attribution.fee_micro_observed`) rather than the fee we expected. That is the difference between
+         *     a referral budget funded by revenue and a promise against a projection, and it is why the arithmetic
+         *     property holds: paying $25 to a referrer requires about $100 of real fee collected.
+         *
+         *     Idempotent twice over: the key replays the first answer, and the table's `(referrer, referee, day)` key
+         *     means a re-run for the same day writes nothing new (`skipped` counts those). A referral under review
+         *     accrues nothing until a person clears it; a clawback leaves the accrual rows where they are, because the
+         *     table is append-only and the attribution's state is what the payout page reads.
+         */
+        post: operations["postReferralAccrue"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/referrals/review": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The manual review queue
+         * @description Newest first, each row with its own sentences and the money involved. A self-referral is in here as well
+         *     as in the refusal it produced, because a self-referral is not only a referral decision: it is a
+         *     builder-code revocation ground, and what it threatens is the revenue the code collects. Rows are labelled
+         *     by pseudonym — the operator sees what to decide, not who to blame.
+         */
+        get: operations["getReferralReview"];
+        put?: never;
+        /**
+         * Clear, claw back or exclude one queue item (idempotent per key)
+         * @description `clear` returns the referral to `qualified` and the next accrual run writes the day it missed — nothing
+         *     earned while it waited is lost. `exclude` refuses it for good and the attribution keeps the reason.
+         *     `claw_back` cancels unpaid accruals first and only then asks for what was paid, quantised by the published
+         *     floor: below it the referral is closed and the amount is reported as written off, so it lands in the
+         *     numbers rather than in nobody's memory. The builder code is revoked for a SELF-REFERRAL and for nothing
+         *     else — it is the code every referrer is attributed under, so switching it off is the right answer to
+         *     farming and the wrong answer to a duplicate funding source. Every decision is an audit row naming the
+         *     actor.
+         */
+        post: operations["postReferralReview"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -2034,7 +2207,7 @@ export interface components {
             /** @description no `detail` field, ever: that is where a Python message would leak. Logs carry the code and the request id instead. */
             error: {
                 /** @enum {string} */
-                code: "RISK_HALT" | "MARKET_NOT_ACCEPTING" | "NO_ORDER_BOOK" | "STALE_QUOTE" | "BAD_SIDE" | "UNKNOWN_TICK" | "OFF_TICK" | "BAD_MARKET_META" | "BELOW_MIN_SIZE" | "ZERO_SIZE" | "BAD_AMOUNT" | "OVER_ORDER_CAP" | "PRICE_FAR_FROM_MID" | "TOO_MANY_OPEN" | "DAILY_CAP" | "IDEM_CONFLICT" | "IDEM_IN_PROGRESS" | "IDEM_KEY_REQUIRED" | "RISK_UNAVAILABLE" | "SIGNER_UNAVAILABLE" | "BAD_REASON" | "NOT_FOUND" | "REFUSED" | "HALTED" | "RULE_CAP" | "DRY_RUN_REQUIRED" | "PLAN_REQUIRED" | "VALIDATION" | "INTERNAL" | "UNAUTHENTICATED" | "SESSION_STALE" | "SESSION_REVOKED" | "SESSION_MISMATCH" | "ADMIN_REQUIRED" | "LOGIN_FAILED" | "ACCOUNT_LOCKED" | "TOTP_REQUIRED" | "TOTP_INVALID" | "TOTP_LOCKED" | "ADDRESS_COOLDOWN" | "ADDRESS_LIMIT" | "REMOVE_DURING_COOLDOWN" | "NO_SUCH_RESOURCE" | "REFRESH_UNKNOWN" | "REFRESH_REUSED" | "REFRESH_EXPIRED" | "TELEGRAM_REPLAY" | "TELEGRAM_INVALID" | "SECURITY_ENV_MISSING" | "KEYSTORE_TAMPER" | "BREAK_GLASS_DENIED" | "AUTHZ_UNDECLARED" | "BAD_FIELD" | "QUOTA_EXCEEDED" | "RADAR_SCOPE" | "HANDLE_TAKEN";
+                code: "RISK_HALT" | "MARKET_NOT_ACCEPTING" | "NO_ORDER_BOOK" | "STALE_QUOTE" | "BAD_SIDE" | "UNKNOWN_TICK" | "OFF_TICK" | "BAD_MARKET_META" | "BELOW_MIN_SIZE" | "ZERO_SIZE" | "BAD_AMOUNT" | "OVER_ORDER_CAP" | "PRICE_FAR_FROM_MID" | "TOO_MANY_OPEN" | "DAILY_CAP" | "IDEM_CONFLICT" | "IDEM_IN_PROGRESS" | "IDEM_KEY_REQUIRED" | "RISK_UNAVAILABLE" | "SIGNER_UNAVAILABLE" | "BAD_REASON" | "NOT_FOUND" | "REFUSED" | "HALTED" | "RULE_CAP" | "DRY_RUN_REQUIRED" | "PLAN_REQUIRED" | "VALIDATION" | "INTERNAL" | "UNAUTHENTICATED" | "SESSION_STALE" | "SESSION_REVOKED" | "SESSION_MISMATCH" | "ADMIN_REQUIRED" | "LOGIN_FAILED" | "ACCOUNT_LOCKED" | "TOTP_REQUIRED" | "TOTP_INVALID" | "TOTP_LOCKED" | "ADDRESS_COOLDOWN" | "ADDRESS_LIMIT" | "REMOVE_DURING_COOLDOWN" | "NO_SUCH_RESOURCE" | "REFRESH_UNKNOWN" | "REFRESH_REUSED" | "REFRESH_EXPIRED" | "TELEGRAM_REPLAY" | "TELEGRAM_INVALID" | "SECURITY_ENV_MISSING" | "KEYSTORE_TAMPER" | "BREAK_GLASS_DENIED" | "AUTHZ_UNDECLARED" | "BAD_FIELD" | "QUOTA_EXCEEDED" | "RADAR_SCOPE" | "HANDLE_TAKEN" | "CODE_TAKEN" | "CODE_INVALID" | "ALREADY_REFERRED" | "SELF_REFERRAL";
                 /** @description user-safe by construction */
                 message: string;
                 retryable: boolean;
@@ -2946,6 +3119,199 @@ export interface components {
             changes: string[];
             doesNotChange: string[];
             note: string;
+        };
+        ReferralTerms: {
+            terms: components["schemas"]["ReferralTermSheet"];
+        };
+        ReferralTermSheet: {
+            /** @enum {string} */
+            model: "builder-fee share";
+            modelSentence?: string;
+            /** @description of the fee the venue actually paid us, not of the notional */
+            shareBps: number;
+            /** @description micro-USDC: millionths of a dollar */
+            qualifyNotionalMicro: number;
+            termDays: number;
+            /** @description a paid chargeback can still be reversed inside this window */
+            settleHoldDays: number;
+            payoutMinMicro: number;
+            /** @description a referrer-month above this is reviewed before it is paid */
+            reviewThresholdMicro?: number;
+            /** @description below this a clawback is written off and closed */
+            clawbackMinMicro?: number;
+            paidFrom?: string;
+            schedule?: string;
+            rules: string[];
+            /** @description the alternatives, each with the reason it was rejected */
+            rejectedModels: string[];
+            /** @description the position on ranking referrers, served rather than implied */
+            noReferrerLeaderboard: string;
+            /** @description carries [UNVERIFIED] until the jurisdiction review lands */
+            taxNote: string;
+        };
+        ReferralLink: {
+            token: string;
+            url: string;
+            /** @description empty until a short code is claimed; a code is chosen, never issued */
+            code: string;
+            shortUrl: string;
+            /** @description true when THIS read minted the link */
+            created: boolean;
+        };
+        ReferralMe: {
+            link: components["schemas"]["ReferralLink"];
+            /**
+             * @description clicks -> signups -> funded -> trading -> earned. `clicks` is a LEADING count and no ceiling on the
+             *     rest (a shouted code produces signups with no clicks); the four money steps are monotone and checked.
+             */
+            funnel: {
+                clicks?: number;
+                signups?: number;
+                /** @description placed the first matched order over the qualifying notional */
+                funded?: number;
+                /** @description generated a fee we were paid, clawbacks included */
+                trading?: number;
+                /** @description still owed money after any clawback */
+                earned?: number;
+            };
+            earnings: {
+                accruedMicro: number;
+                /** @description out of the settlement hold */
+                settledMicro: number;
+                holdingMicro: number;
+                payableMicro: number;
+                /** @description the gap from the PAYABLE balance to the payout minimum */
+                toMinimumMicro: number;
+                minimumMicro: number;
+                holdDays: number;
+                reviewRequired: boolean;
+                paidMicro: number;
+                clawedBackMicro: number;
+                note: string;
+            };
+            /** @description one row per referee, newest first, labelled by pseudonym; refused attempts are not listed */
+            referrals: {
+                referee: string;
+                /** @enum {string} */
+                state: "pending" | "review" | "qualified" | "clawed_back";
+                stateText: string;
+                reason: string;
+                signedUpMs: number;
+                qualifiedMs?: number | null;
+                notionalMicro?: number;
+                termEndsMs?: number | null;
+                daysLeft?: number | null;
+                earnedMicro: number;
+                builderCode?: string;
+                decidedMs?: number | null;
+                note: string;
+            }[];
+            referralCount?: number;
+            review?: {
+                open?: number;
+                note?: string;
+            };
+            payout: {
+                minimumMicro: number;
+                schedule: string;
+                nextAtMs: number;
+                /** @enum {string} */
+                method: "usdc";
+                tax: {
+                    required: boolean;
+                    form: string;
+                    reportForm?: string;
+                    reportThresholdMicro?: number;
+                    reportable?: boolean;
+                    withholding?: string;
+                    note: string;
+                };
+                note: string;
+            };
+            terms: components["schemas"]["ReferralTermSheet"];
+            hidden: {
+                refused: number;
+                note: string;
+            };
+            /** @description empty on a consistent funnel; a sentence naming the impossibility otherwise */
+            funnelFindings: string[];
+            /** @description {step: what the step means}, served so the screen cannot invent it */
+            funnelMeaning: Record<string, never>;
+            note: string;
+        };
+        ReferralCode: {
+            code: string;
+            /** @description the code this rotation retired; empty when there was none */
+            previous: string;
+            shortUrl: string;
+            link: components["schemas"]["ReferralLink"];
+            rules: Record<string, never>;
+            note: string;
+        };
+        ReferralApply: {
+            /** @description a pseudonym: this API never serves an account id or an address */
+            referee: string;
+            referrer: string;
+            /** @enum {string} */
+            state: "pending" | "review";
+            reason: string;
+            sentence: string;
+            /** @description the open queue item this write opened or reused; 0 when there is none */
+            review: number;
+            builderCode: string;
+            note: string;
+        };
+        ReferralAccrue: {
+            day: string;
+            /** @description rows this run wrote */
+            accruals: number;
+            /** @description referees with nothing to accrue or a row already written */
+            skipped: number;
+            /** @description the fee the venue actually paid on the qualifying orders */
+            observedMicro: number;
+            shareMicro: number;
+            note: string;
+        };
+        ReferralReviewList: {
+            /** @enum {string} */
+            state: "open" | "cleared" | "actioned";
+            items: {
+                id: number;
+                kind: string;
+                /** @description the referrer, by pseudonym */
+                subject: string;
+                /** @description the referee, by pseudonym */
+                referee: string;
+                /** @enum {string} */
+                state: "open" | "cleared" | "actioned";
+                findings: string[];
+                openedMs: number;
+                decidedMs?: number | null;
+                decision?: string;
+                actor?: string;
+                accruedMicro: number;
+            }[];
+            count: number;
+            note: string;
+        };
+        ReferralReviewSet: {
+            id: number;
+            /** @enum {string} */
+            decision: "clear" | "claw_back" | "exclude";
+            /** @enum {string} */
+            state: "cleared" | "actioned";
+            kind: string;
+            reason: string;
+            note: string;
+            clawback?: {
+                unpaidMicro: number;
+                paidMicro: number;
+                /** @description below the published floor the referral is closed and the amount is reported */
+                writtenOffMicro: number;
+                requiresRepayment: boolean;
+                reason?: string;
+                sentence: string;
+            };
         };
         LeaderboardFollow: {
             anon: string;
@@ -5853,6 +6219,239 @@ export interface operations {
             409: components["responses"]["Conflict"];
             422: components["responses"]["Denied"];
             500: components["responses"]["Internal"];
+        };
+    };
+    getReferralTerms: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description the model, the published rules, the schedule, and the rejected alternatives */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Stamped"] & components["schemas"]["ReferralTerms"];
+                };
+            };
+            500: components["responses"]["Internal"];
+        };
+    };
+    getReferralMe: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description the funnel, the referrals, the earnings buckets, the payout state and the tax requirement */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Stamped"] & components["schemas"]["ReferralMe"];
+                };
+            };
+            401: components["responses"]["Denied"];
+            500: components["responses"]["Internal"];
+        };
+    };
+    postReferralCode: {
+        parameters: {
+            query?: never;
+            header?: {
+                /**
+                 * @description 8-128 chars of [A-Za-z0-9_-]. Required on every mutating endpoint; the 400 for its absence is part
+                 *     of the contract so a client cannot "just try without it" once and conclude it is optional.
+                 */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    code: string;
+                };
+            };
+        };
+        responses: {
+            /** @description the code that is now active, and the one it replaced */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReferralCode"];
+                };
+            };
+            400: components["responses"]["Validation"];
+            401: components["responses"]["Denied"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Denied"];
+            500: components["responses"]["Internal"];
+        };
+    };
+    postReferralApply: {
+        parameters: {
+            query?: never;
+            header?: {
+                /**
+                 * @description 8-128 chars of [A-Za-z0-9_-]. Required on every mutating endpoint; the 400 for its absence is part
+                 *     of the contract so a client cannot "just try without it" once and conclude it is optional.
+                 */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    code: string;
+                    device?: string;
+                    funding?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description the attribution that was written, with its state and the sentence that explains it */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReferralApply"];
+                };
+            };
+            400: components["responses"]["Validation"];
+            401: components["responses"]["Denied"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Denied"];
+            500: components["responses"]["Internal"];
+        };
+    };
+    postReferralAccrue: {
+        parameters: {
+            query?: never;
+            header?: {
+                /**
+                 * @description 8-128 chars of [A-Za-z0-9_-]. Required on every mutating endpoint; the 400 for its absence is part
+                 *     of the contract so a client cannot "just try without it" once and conclude it is optional.
+                 */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                /** @description absent or empty means 503 SIGNER_UNAVAILABLE rather than a 401, so a misconfigured box cannot look like an attack */
+                "X-Admin-Token"?: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    day: string;
+                };
+            };
+        };
+        responses: {
+            /** @description what this run wrote, what it skipped, and the fee it was paid against */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReferralAccrue"];
+                };
+            };
+            400: components["responses"]["Validation"];
+            403: components["responses"]["Denied"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Denied"];
+            500: components["responses"]["Internal"];
+            503: components["responses"]["Denied"];
+        };
+    };
+    getReferralReview: {
+        parameters: {
+            query?: {
+                state?: "open" | "cleared" | "actioned";
+                limit?: number;
+            };
+            header?: {
+                /** @description absent or empty means 503 SIGNER_UNAVAILABLE rather than a 401 */
+                "X-Admin-Token"?: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description the queue, with each item's findings and the money already accrued on it */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Stamped"] & components["schemas"]["ReferralReviewList"];
+                };
+            };
+            403: components["responses"]["Denied"];
+            500: components["responses"]["Internal"];
+            503: components["responses"]["Denied"];
+        };
+    };
+    postReferralReview: {
+        parameters: {
+            query?: never;
+            header?: {
+                /**
+                 * @description 8-128 chars of [A-Za-z0-9_-]. Required on every mutating endpoint; the 400 for its absence is part
+                 *     of the contract so a client cannot "just try without it" once and conclude it is optional.
+                 */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                /** @description absent or empty means 503 SIGNER_UNAVAILABLE rather than a 401 */
+                "X-Admin-Token"?: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    id: number;
+                    /** @enum {string} */
+                    decision: "clear" | "claw_back" | "exclude";
+                    reason: string;
+                    actor?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description the decision as stored, with the clawback arithmetic when there was one */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReferralReviewSet"];
+                };
+            };
+            400: components["responses"]["Validation"];
+            403: components["responses"]["Denied"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Denied"];
+            500: components["responses"]["Internal"];
+            503: components["responses"]["Denied"];
         };
     };
 }

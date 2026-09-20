@@ -57,10 +57,6 @@ CREATE TRIGGER append_only_kill_switch_state_update BEFORE UPDATE ON kill_switch
 
 CREATE TRIGGER append_only_kill_switch_state_delete BEFORE DELETE ON kill_switch_state BEGIN SELECT RAISE(ABORT,'append-only table: kill_switch_state is not deletable'); END;
 
-CREATE TRIGGER append_only_referral_events_update BEFORE UPDATE ON referral_events BEGIN SELECT RAISE(ABORT,'append-only table: referral_events is not updatable'); END;
-
-CREATE TRIGGER append_only_referral_events_delete BEFORE DELETE ON referral_events BEGIN SELECT RAISE(ABORT,'append-only table: referral_events is not deletable'); END;
-
 CREATE TRIGGER append_only_wallet_events_update BEFORE UPDATE ON wallet_events BEGIN SELECT RAISE(ABORT,'append-only table: wallet_events is not updatable'); END;
 
 CREATE TRIGGER append_only_wallet_events_delete BEFORE DELETE ON wallet_events BEGIN SELECT RAISE(ABORT,'append-only table: wallet_events is not deletable'); END;
@@ -108,3 +104,7 @@ CREATE TRIGGER append_only_wallet_pseudonyms_delete BEFORE DELETE ON wallet_pseu
 CREATE TRIGGER append_only_leaderboard_exclusions_update BEFORE UPDATE ON leaderboard_exclusions BEGIN SELECT RAISE(ABORT,'append-only table: leaderboard_exclusions is not updatable'); END;
 
 CREATE TRIGGER append_only_leaderboard_exclusions_delete BEFORE DELETE ON leaderboard_exclusions BEGIN SELECT RAISE(ABORT,'append-only table: leaderboard_exclusions is not deletable'); END;
+
+CREATE TRIGGER append_only_referral_accruals_update BEFORE UPDATE ON referral_accruals BEGIN SELECT RAISE(ABORT,'append-only table: referral_accruals is not updatable'); END;
+
+CREATE TRIGGER append_only_referral_accruals_delete BEFORE DELETE ON referral_accruals BEGIN SELECT RAISE(ABORT,'append-only table: referral_accruals is not deletable'); END;

@@ -1,13 +1,15 @@
 # P11 — Leaderboard, Rankings & Referrals
 
-Status: **D1, D2, D3 and D4 built**, verified by `tools/p11-gate-check.py` at **18/18** (12 scanners
-canaried, `docs/verification/P11-gate.txt`) with the whole backend suite at **927 tests OK**, the web suite at
-**384 tests in 42 files OK** and `check-openapi` at 450/0. D1 is the specification, the integrity rules and the
+Status: **D1, D2, D3, D4 and D5 built**, verified by `tools/p11-gate-check.py` at **22/22** (16 scanners
+canaried, `docs/verification/P11-gate.txt`) with the whole backend suite at **990 tests OK**, the web suite at
+**397 tests in 44 files OK** and `check-openapi` at 498/0. D1 is the specification, the integrity rules and the
 ranking engine; D2 is the rankings API, the population the boards are demonstrated on, and the read path they are
 ranked from; D3 is the standing a wallet can see — its rank, its gap to the place above, its sparkline and the
 board it can put two other wallets beside; D4 is the reader's own row on all nine boards, pinned when it is off
-the page, with the listing control that decides whether that row is tied to an account. D5–D7 are next:
-referrals, the public SSR pages, and the anti-gaming dashboard. This file is written as the phase is built.
+the page, with the listing control that decides whether that row is tied to an account; D5 is referrals — the
+reward model and its argument, the Sybil rules in their order of precedence, the clawback, the builder-code
+revocation ground, the funnel a referrer reads, and the payout and tax terms that go with being paid. D6–D7 are
+next: the public SSR pages and the anti-gaming dashboard. This file is written as the phase is built.
 
 The phase's acceptance sentence, from the kit, is the thing everything below is arranged around:
 
@@ -28,7 +30,7 @@ better rank — is the one a user reports as a bug.
 | D2 | the rankings API: boards, rows with components, unranked-with-reasons, methodology, snapshots, the worker's recompute | **built** — `GET /v1/leaderboard{,/boards,/methodology,/why,/snapshots,/runs}` + `POST /v1/leaderboard/recompute`; `leaderboard/source.py`; `services/api/seed_leaderboard.py`; 20 + 28 tests |
 | D3 | profile integration: rank badge, 30-day rank sparkline, "why this rank", follow/copy from the row, compare up to 3 | **built** — `GET /v1/leaderboard/{rank,compare,follows}` + `POST /v1/leaderboard/follows`; `0014_follows.sql` + its SQLite twin; `web/src/terminal/{board.ts,BoardPanel.tsx}` on `/leaderboard`; 49 API tests + 18 + 7 + 2 web tests |
 | D4 | self-rank: your own position on every board, pinned when off-page, the unranked state, private-by-default with an opt-in | **built** — `GET /v1/leaderboard/me` + `GET|POST /v1/leaderboard/identity`; `0015_leaderboard_identity.sql` + its SQLite twin; `web/src/terminal/{selfRank.ts,SelfRank.tsx}` mounted in `BoardPanel` and rendered on `/leaderboard`; 16 API tests + 10 + 6 + 1 web tests |
-| D5 | referrals: link + short code, the reward model and its argument, Sybil defence (first matched order over a notional threshold, device/IP/funding dedupe, velocity limits, review queue, clawback, hard self-referral block), the referrer dashboard, payout terms | not started |
+| D5 | referrals: link + short code, the reward model and its argument, Sybil defence (first matched order over a notional threshold, device/IP/funding dedupe, velocity limits, review queue, clawback, hard self-referral block), the referrer dashboard, payout terms | **built** — `packages/polygm_core/referrals/{terms,sybil,code}.py`, 37 unit tests; `0016_referrals.sql` + its SQLite twin; `GET /v1/referrals/terms`, `GET /me`, `POST /code`, `POST /apply`, `POST /accrue`, `GET\|POST /review`; `web/src/terminal/{referrals.ts,ReferralsView.tsx}` on `/referrals`; 26 API tests + 9 + 4 web tests |
 | D6 | public SSR pages: `/trader/<handle>`, `/market/<slug>`, `/leaderboard/<board>` with OG images, structured data, rate limiting | not started |
 | D7 | anti-gaming dashboard: fast climbers, correlated clusters, synthetic referral chains, unusual builder-code attribution; exclude and flag in one click | not started |
 
@@ -361,6 +363,203 @@ row is off the page" means pinned *while the reader scrolls*, not merely present
 `z-index` uses the design system's existing sticky rung rather than a literal, which is what P08's c5 exists to
 prevent.
 
+### 2.24 The reward is a share of a fee we were actually paid
+
+The kit asks for one of three models, chosen and justified. D5 chooses **a share of the builder fee we are
+actually paid** — `SHARE_BPS` (25%) of the fee `revenue/attribution.py` *observed* on the referee's own
+attributable fills, for `TERM_DAYS` (365) from the referee's qualifying order. Three properties decided it, and
+each one deletes a class of abuse instead of detecting it later:
+
+* **There is no Sybil equilibrium, because the reward has no fixed cost.** A flat bounty on a first funded trade
+  pays the moment a stranger crosses a threshold, and the cost of manufacturing a stranger — one small matched
+  order — can be less than the bounty. A share of an observed fee pays only where the venue collected fees, so
+  earning $X requires causing about `10_000 / SHARE_BPS` × X of real builder fees ($4 per $1 at 25%) to be paid to
+  us, out of the attacker's own money. **The attacker is the customer.** The threshold below is still there (an
+  unmatchable dust order must not open a twelve-month revenue claim), but it is a rate limit on claims, not the
+  thing standing between us and a farm.
+* **Deposits are invisible to it**, which is the kit's own trap: a deposit-and-withdraw account earns a referrer
+  exactly zero until it trades. The dashboard's numbers are about trading, not about money moved in.
+* **Nothing is ever paid for recruiting.** No second level, no recruitment bonus, so "recruit recruiters" has no
+  payout behind it and cannot be dressed up as one.
+
+The honest costs, because a document that lists only upsides is a brochure: the liability has a **tail** (a year
+of accrual on a whale's volume, hence the settle hold, the payout minimum and the $2,000 review threshold below),
+and it **pays slowly at the bottom** (one small trader earns cents in month one — which is the point, and the
+dashboard names the amount still to go rather than hiding it behind a "pending" that never clears).
+
+The two rejected models are answered in the artefact rather than in this document: `terms.rejected_models` is part
+of `GET /v1/referrals/terms`, so the flat bounty ("a fixed payment for crossing a threshold, where the cost of
+manufacturing the crossing can be less than the payment") and Pro credit ("costs margin rather than cash, but it
+pays referrers in a currency they may not want and turns the program into an upsell funnel") are answered in the
+same response the client renders. An argument that only lives in a phase document stops being made the moment
+someone changes the code.
+
+### 2.25 No trade, no referral: the qualifying event is a matched order, not a signup
+
+`terms.qualifies()` is the only door into the program, and it takes the order's facts — matched, notional,
+whether an upstream rule already excluded the market, whether the order crossed itself:
+
+* **An unfilled order pays no fee**, so it cannot qualify a referral or feed one. This is not a policy choice; it
+  is the model. A share of zero is zero.
+* **Self-crossing is refused structurally, not by threshold.** An order whose maker and taker are the same wallet
+  is a round trip, and `revenue.attribution` already refuses to write an attribution row for it. A rule like
+  "ignore round trips under $1" is a rate card for wash trading, and the eligibility floor (20 settled markets,
+  $500 verified turnover, §2.2) is inherited unchanged: a referral cannot launder a wallet past the integrity
+  rules, because the markets the referral's fees come from are the same markets the wash filter already looked at.
+* **The term runs from the qualifying order, not from signup.** Signup is free and unbounded; an account created
+  today and funded in a year would otherwise carry a fresh twelve-month claim from a date it never traded on. The
+  schema enforces the ordering (`CHECK (qualify_ms = 0 OR qualify_ms >= signed_up_ms)`), which is what caught the
+  gate's own fixture stamping the qualifying order a millisecond *before* the signup it was meant to follow.
+
+### 2.26 "Earned" is what the venue paid us, never what we expected
+
+`_ref_accrue_work` accrues on `fee_micro_observed` — the fee the venue actually settled — and cannot see the
+expected fee at all. That distinction is the whole difference between a dashboard and a liability: an accrual on
+expected fees would be a number in the referrer's favour that the ledger does not agree with, and the first month
+the venue charged less than our estimate it would be our money going out the door. The gate's c19 asserts it
+directly: with the fee expected at $40 and observed at $8, the accrual is 25% of **8**, and the check prints
+"1 accrual row(s), 8.00 of fee observed".
+
+Two structural guards sit under it, and both are asserted rather than assumed:
+
+* `referral_accruals` is **append-only** (trigger + the `polygm_app` grant block, §2.28) with `UNIQUE (referrer,
+  referee, day)`, so a re-run of the accrual job for a day cannot pay twice, and the sum of the table *is* what a
+  referrer was owed.
+* A row is written only for a referral that is `qualified`. c19 walks the negative: an unqualified referee on
+  whose orders no fee was paid produces **zero** rows, and the response says why.
+
+### 2.27 The Sybil rules are an order, not a bag of filters
+
+`sybil.PRECEDENCE = ("self_referral", "duplicate_funding", "shared_device_or_ip", "velocity")`, and the order is
+the design rather than an implementation detail: the first rule that fires decides, so a self-referral is never
+quietly downgraded to a device collision, and a second wallet on one funding source is refused rather than
+reviewed. The two outcomes are deliberately different things:
+
+| Rule | Outcome | What it means to the referrer |
+|------|---------|-------------------------------|
+| `self_referral` (identity rows or a shared `stonks_address`) | **refused**, and no attribution row is written | the hard block: nothing accrued, nothing to claw back |
+| `duplicate_funding` | **refused** (`409 REFUSED`) | multiple wallets funded from one source are one person |
+| `shared_device_or_ip` | **review** | held for a person; nothing accrues until it clears, nothing is lost |
+| `velocity` (5/hour, 25/day per referrer) | **review** | the limits are set so that sharing a link in public is not a violation of them |
+
+Refusal and review are not severity levels of the same thing: a refusal says *no fee will ever accrue from this*,
+and a review says *not yet, and nothing is forfeited while we look*. Collapsing them would either refuse honest
+referees who share a laptop or let a farm keep accruing during the weeks a queue takes to drain. The identity
+check is the same rule D4 already had (`self_referral` reads `user_identities` and the wallet address), which is
+why a second wallet on a shared funding source, a shared device and a shared address are three findings from one
+arbitration rather than three subsystems.
+
+### 2.28 Signals are salted digests, and the salt is the thing that must exist
+
+`referral_signals` and `referral_clicks` hold `d_…`/`i_…`/`f_…` digests and nothing else — no IP, no user agent,
+no funding address. `sybil.hash_` refuses a salt shorter than 16 characters, and the API refuses to run the
+referral plane without `PGM_REFERRAL_SALT`. A salt that is absent or weak is the failure to prevent: unsalted
+digests of IPs are enumerable by anyone who knows the space, and two deployments sharing a salt are one dataset
+wearing two names.
+
+A click row is by definition from somebody who does not have an account yet, so it stores no user — the row that
+ties a click to a person is the attribution, and that is the only place the link is made. What this does **not**
+do: it does not stop an attacker who manufactures distinct devices, distinct funding sources and real fees. There
+is nothing to detect in that — they are a customer §2.24 was built for.
+
+### 2.29 A self-referral is a revenue-integrity matter, and the builder code is the ground
+
+The kit asks that a self-referral be a ground for **revoking the builder code it was made under**, on the argument
+that the builder-fee share is a revenue line and an account paying itself is taking it. D5 does exactly that and
+nothing broader: `POST /v1/referrals/apply` refuses the attribution *and* writes `builder_code_status` to
+`disabled` with "self-referral" in the note. c20 walks it end to end — 409 `SELF_REFERRAL`, no attribution row, the
+code disabled, two open review items, zero findings.
+
+The scoping is deliberate and was forced by a real bug in the first implementation: the app revoked the code for
+*any* refusal, but one builder code is shared by all of a referrer's referrals, so a blanket revocation on a
+duplicate-funding clawback would have killed attribution for every legitimate referee that referrer ever brought.
+The rule is now `kind == "self_referral"` and nothing else. A duplicate-funding finding costs the referrer the
+accruals; it does not cost them the code.
+
+The revocation is recorded, not silent: the code's status carries its `source` and a note, and a self-referral is
+the one case where the note is the sentence a user can read ("a self-referral is a ground for revoking the builder
+code it was made under").
+
+### 2.30 A clawback reverses money and keeps the history
+
+`sybil.clawback` cancels **unpaid accruals first**, then reports what was already paid with
+`requiresRepayment` when the paid side is non-zero, and writes off anything under `CLAWBACK_MIN_MICRO` ($5) —
+which is a published rule, so a clawback is never a surprise. The accrual rows are not deleted: they are
+append-only, the reversal is a state (`clawed_back`) plus a clawback record, and the dashboard zeroes the earned
+cell for a clawed-back referee rather than showing money that has been reversed. c22 asserts the arithmetic from
+both ends: the cancelled unpaid `share_micro` sum, the paid column, and the fact that after a clawback the
+referrer's `earned` is 0 while the rows it was computed from are still there.
+
+This is the same rule the rest of the platform runs on — nothing hides a loss, including a loss the referrer
+caused — applied to a number that is somebody's expected income, which is exactly when a system is tempted to
+soften the message. The row's state text is served with the money ("reversed under the published clawback rule,
+with the reason on the row"), so the screen has the sentence and not just a figure that changed.
+
+### 2.31 The funnel is the money chain, and clicks are not a ceiling on it
+
+The kit's dashboard is clicks → signups → funded → trading → earned → pending → paid. D5 splits it rather than
+drawing it as one line, because the first term is not part of the same claim:
+
+* `FUNNEL = ("signups", "funded", "trading", "earned")` is asserted **monotone** by `funnel_findings`, and the
+  reason to assert it is that each number comes from a different table — a join that counts a row twice, or a
+  filter applied to one step and not the next, shows up as an impossible funnel rather than as a plausible figure
+  nobody re-derives. `trading` means the referee has accruals or is `clawed_back` (they traded, and the referral
+  was reversed); `earned` excludes `clawed_back`.
+* `LEADING = ("clicks",)` is checked only for what a counter can be wrong about on its own: it cannot be
+  negative. "Clicks ≥ signups" is a requirement with a wrong answer — a click is a person without an account, one
+  person can click five times, and a landing token can be forwarded — so the web panel renders the leading row
+  **apart** from the chain, labelled as the leading indicator it is, instead of quietly making the honest
+  non-monotonicity look like a bug or hiding the row.
+
+c21 re-derives the whole thing over two referees: signups/funded/trading/earned = 2, accrued 2,000,000 micro,
+totals equal to the row sums, and the review count equal to the queue length. Pending and paid come from
+`referral_payouts` — the only two terms in that list that are not derived from accruals.
+
+### 2.32 The payout terms are the product's, not the finance team's
+
+Payout is monthly by the 10th for the month before, `PAYOUT_MIN_MICRO` ($20) minimum with the balance **carried
+forward, never forfeited**, `SETTLE_HOLD_DAYS` (30) between the day an accrual is earned and the day it can be
+paid, and a referrer-month above `REVIEW_THRESHOLD_MICRO` ($2,000) reviewed by a person *before* it is paid rather
+than after. Tax is stated as what we do rather than as advice: at $600 in a calendar year we file for a US
+referrer on a W-9 and report 1099-NEC; a non-US referrer is asked for a W-8BEN and reported on 1042-S — served
+as `reportForm` and `reportThresholdMicro` so the screen cannot print a form the API does not know, and
+`[UNVERIFIED]` in this document because the forms and thresholds are a jurisdiction review that belongs with
+counsel before launch.
+
+One arithmetic detail is worth recording because the first test got it wrong and the engine was right:
+`toMinimumMicro` is the gap from the **payable** balance to $20 — $10 of accrued fees still inside the 30-day hold
+means $20 to go, not $10, because money that cannot be paid this cycle does not count toward a payout minimum. The
+dashboard says which side of the hold each figure is on, and the panel's `minimumMicro`/`holdDays` come from the
+API rather than from a client-side reading of the published rules.
+
+### 2.33 There is no referrer leaderboard, and the reason is served rather than argued
+
+The kit asks for the position to be argued. The position is **no public referrer leaderboard**, and it is served
+in `GET /v1/referrals/terms` (public, no session): *"a public contest over recruitment is a spam contest with a
+scoreboard, and the ranking it would print is a ranking of recruiting, not of trading."* c22 asserts the negative
+directly — `/v1/referrals/leaderboard` does not exist — because the way this argument loses is not somebody
+disagreeing with it, it is somebody adding the route in a later phase and leaving the sentence behind.
+
+It is also the same claim the rest of P11 makes about ranking: every board in this phase ranks **trading** — the
+trades a wallet made, with its sample size, its drawdown and its share of one lucky win — and the one ranking D5
+could add is a ranking of recruiting, which is a different product with a different incentive written on it.
+
+### 2.34 The screen reads the rules; it does not carry a copy of them
+
+`ReferralsView` renders `terms.rules` (seven sentences), the per-state sentences and the funnel from the API. The
+panel's only local strings are its labels, and they are literal `t()` calls in a `Record<EarningsKey, string>`
+and a `Record<PayoutKey, string>` over unions declared in the pure module, because `scripts/i18n-check.mjs`
+**refuses interpolated keys by design**: `t(\`terminal.referrals.money.${key}\`)` is a hard failure, and the fix is
+not to silence the checker but to make a new bucket without a label a compile error instead of a raw key on
+screen.
+
+The rest of the screen follows the same rule as the API's own responses: a refused short code renders the
+**engine's** sentence (including a self-referral's builder-code sentence), the claim re-reads `/me` rather than
+trusting the POST's echo, and exactly one POST carries one well-formed idempotency key — asserted, because "the
+retry button sends the same request twice" is the failure that turns a claim into a duplicate. A signed-out
+visitor gets the public terms and the rules, not a login wall: the terms are the thing somebody shares a link to
+read.
+
 ## 3. Where the numbers come from
 
 * `tests/test_leaderboard_rank.py` — **20 tests, OK** (`python3 -m unittest discover -s tests -p "test_leaderboard_rank.py"`).
@@ -373,38 +572,65 @@ prevent.
   reasons (9 settled markets; 21 markets of forty cents). Measured on that population: **64 ranked**, 7 unranked,
   **5 blown up**, 1 provisional, 1 disputed result withheld, and the gate pair at ranks 12/47 has **48 versus 26
   settled markets** — the smaller sample ranked *below*, and the sentence explaining it is served by `/why`.
-* `tools/check-openapi.py` — **450 passed, 0 failed** (the contract gained the seven leaderboard paths and 22
-  components in D2, D3's four routes, and D4's `me`/`identity` pair with six components and the `HANDLE_TAKEN`
-  code; `npm run gen:api` regenerates `web/src/api/schema.gen.ts` — 5858 lines — and `npm run check:api` fails if
-  it drifts).
-* `tools/p11-gate-check.py` — **18/18 checks, 12/12 scanners canaried**, recorded in `docs/verification/P11-gate.txt`, 16.2 s. c17 walks the self-rank (`/me` = nine board answers, the pin's board and rank agreeing with the board's own row, `private` for a fresh account, the unranked wallet's steps naming a number, 401 without a session); c18 walks the identity (no handle in any public payload before opt-in, the handle on exactly that wallet's row after it, a second account claiming it refused with 409 `HANDLE_TAKEN`, opt-out removing the link but keeping the row and the rank, the owner's own payloads still carrying it, and at least two `leaderboard.identity` audit rows).
+* `tools/check-openapi.py` — **498 passed, 0 failed** (the contract gained the seven leaderboard paths and 22
+  components in D2, D3's four routes, D4's `me`/`identity` pair with six components and the `HANDLE_TAKEN` code,
+  and D5's seven referral operations with nine schemas — `ReferralTerms`, `ReferralTermSheet`, `ReferralLink`,
+  `ReferralMe`, `ReferralCode`, `ReferralApply`, `ReferralAccrue`, `ReferralReviewList`, `ReferralReviewSet` —
+  plus the `CODE_TAKEN`, `CODE_INVALID`, `ALREADY_REFERRED` and `SELF_REFERRAL` codes. The contract is now 64
+  paths and 97 schemas; `npm run gen:api` regenerates `web/src/api/schema.gen.ts` — 6458 lines — and
+  `npm run check:api` fails if it drifts).
+
+  One contract lesson from D5 is worth keeping: `compare_live` compares the **served** FastAPI spec too, so an
+  admin header has to be a declared `Header(...)` parameter *and* a yaml parameter, and a `$ref` into a nested
+  property path does not resolve — the sub-object needs a top-level schema (`ReferralTermSheet` exists for exactly
+  that reason). The status sets must equal the app's own response table plus `_INTERNAL`'s 500 and the implicit
+  200, which is what caught the admin routes' missing `503 SIGNER_UNAVAILABLE`.
+* `tools/p11-gate-check.py` — **22/22 checks, 16/16 scanners canaried**, recorded in `docs/verification/P11-gate.txt`, 17.3 s. D5 adds c19 `reward_needs_a_trade` (a clean apply is `pending` and §2.25's "no trade, no referral" — an unqualified referee on whose orders no fee was paid writes **zero** accrual rows — and then, once qualified, the accrual is 25% of the **observed** $8 fee, not the expected $40: "1 accrual row(s), 8.00 of fee observed; 0 findings"), c20 `second_wallet_is_caught` (a second wallet on one funding source refused 409 `REFUSED`, a shared device opened for review, a self-referral refused 409 `SELF_REFERRAL` with no attribution row written and the builder code disabled with "self-referral" in its note, two review items open), c21 `dashboard_arithmetic` (two referees: signups/funded/trading/earned = 2, accrued 2,000,000 micro, the totals equal to the row sums, the review count equal to the queue) and c22 `payout_reality_and_clawback` (the $20 minimum as the gap from the **payable** balance, the 30-day hold, seven published rules, the future-day 422, a clawback cancelling the unpaid share without deleting a row, and the absent referrer leaderboard). Four new canaries (`referral_model`, `referral_collisions`, `referral_dashboard`, `referral_terms`) plant violations in each scanner's own input and fail the run if it walks past them. c17 walks the self-rank (`/me` = nine board answers, the pin's board and rank agreeing with the board's own row, `private` for a fresh account, the unranked wallet's steps naming a number, 401 without a session); c18 walks the identity (no handle in any public payload before opt-in, the handle on exactly that wallet's row after it, a second account claiming it refused with 409 `HANDLE_TAKEN`, opt-out removing the link but keeping the row and the rank, the owner's own payloads still carrying it, and at least two `leaderboard.identity` audit rows).
   c3 is the phase's own acceptance sentence walked over the API (rank 47 with 26 settled markets above rank 12
   with 48, and `/why` saying so in one sentence), c15 is the standing a wallet can read back (the badge, the
   re-derivable gap, the empty sparkline that says "no history yet"), and c16 is the comparison that must not
   echo an address. The scanners that make it a floor rather than a screenshot are canaried: each one is handed a
   planted violation and fails the run if it walks past it.
-* The whole backend suite: **927 tests, OK** (`python3 -m unittest discover -s tests`, 39.9 s).
-* The web suite: **384 tests in 42 files, OK** (`web/node_modules/.bin/vitest run`), `tsc --noEmit` clean,
-  `i18n-check` ok (872 keys, 829 used), and `npm run build` renders 19 routes including `/leaderboard`. D4 adds
-  `selfRank.test.ts` (the rules), `SelfRank.test.tsx` (the panel: the private label, the strip when off-page and
-  its absence when on-page, the consent write with its key, the refusal, the signed-out answer) and one case in
-  `BoardPanel.test.tsx` for the strip inside the panel it belongs to.
+* `tests/test_referrals.py` — **37 tests, OK**: the qualifying order's four refusals, the term's clock, `share_of`/`accrual`/`payable`, the carry-forward arithmetic below the minimum, the funnel's monotonicity and the leading row, the tax requirement's two branches, the code shapes and their refusals, the Sybil precedence with the states it maps onto, and the clawback's unpaid/paid/written-off split. Plus `tests/test_referrals_api.py` — **26 tests, OK** on a database per test: the public terms, `/me`'s camelCase earnings and its refusal to show refused referrals, the idempotency of `apply`, `accrue`'s admin gate and its 503 without a signer, the review queue's two routes, and `PGM_REFERRAL_SALT` being required rather than optional.
+* The whole backend suite: **990 tests, OK** (`python3 -m unittest discover -s tests`, 83.0 s, no skips). The count matters here: the suite *skips* the API tests when `fastapi` is absent and still prints OK, so a green line without the "skipped" count is not evidence — see §4.
+* The web suite: **397 tests in 44 files, OK** (`web/node_modules/.bin/vitest run`), `tsc --noEmit` clean,
+  `i18n-check` ok (919 keys, 876 used, 43 unused-advisory), and `npm run build` renders 20 routes including
+  `/leaderboard` and `/referrals`. D4 adds `selfRank.test.ts` (the rules), `SelfRank.test.tsx` (the panel: the
+  private label, the strip when off-page and its absence when on-page, the consent write with its key, the
+  refusal, the signed-out answer) and one case in `BoardPanel.test.tsx` for the strip inside the panel it belongs
+  to. D5 adds `referrals.test.ts` (the pure layer: the earnings and payout key unions, the funnel's split, the
+  state text, the carry-forward arithmetic) and `ReferralsView.test.tsx` (4: a signed-out visitor gets the public
+  terms rather than a login wall, a refused short code renders the engine's sentence with exactly one POST
+  carrying one well-formed key, and the claim re-reads `/me`).
 * `npm run measure` (P08 c8) — **pass**: `/` 190.0 KB, `/markets` **199.3 KB**, `/tma` and `/profile` 191.9 KB
   against a 200 KB budget, with route-level splitting still proven; `tools/p08-gate-check.py` is **16/16**, c16
   being the new key-shape agreement of §2.22.
-* `tools/p08-gate-check.py` — **15/15**, including the c4 money-layer scan over the new screens (the percentile,
-  the best-trade share and the win rate all render through `bpsText`, never `.toFixed`).
+* `tools/p08-gate-check.py` — **16/16**, including the c4 money-layer scan over the new screens (the percentile,
+  the best-trade share and the win rate all render through `bpsText`, never `.toFixed`, and D5's referral money is
+  no exception); `tools/p09-gate-check.py` — **7/7**; `tools/p10-gate-check.py` — **15/15**. P08's c2 reads
+  `check-openapi`, c7 greps the built output, c8 reads `P08-bundle.txt` and c15 runs the web suite, so all three
+  phases' gates were re-run and re-recorded on the D5 tree rather than argued forward from D4.
 * `db/migrations/0013_leaderboard.sql` + `db/migrations-sqlite/0013_leaderboard.sql` (generated) — the portable
   subset executes: **106 tables, 54 triggers**, with `leaderboard_exclusions` append-only in both.
 * `db/migrations/0015_leaderboard_identity.sql` + its SQLite twin — **107 tables, 54 triggers**, with
   `leaderboard_identity` (one row per account: the decision, its instant, and the handle it publishes) and
   `tools/build-sqlite-migrations.py --check` clean.
+* `db/migrations/0016_referrals.sql` + its SQLite twin — **113 tables, 54 triggers, 16 files**, `--check` clean,
+  and `tests/test_migrations.py` **18 tests, OK**. It **drops** P04's never-written `referrals`/`referral_events`
+  rather than migrating them: `referrals.share_bps` was a per-code negotiated rate, which is a rate an account
+  manager can raise and the one thing the model's arithmetic (§2.24) cannot survive, and `referral_events` had no
+  referrer column, no state and no term, so "who is owed what, and is this referral still inside its year" was not
+  expressible against it. The seven tables it replaces them with are `referral_links`, `referral_clicks`,
+  `referral_signals`, `referral_attributions` (PK = the referee), `referral_accruals` (append-only), `referral_reviews`
+  and `referral_payouts` (a state machine whose CHECK refuses `approved` without a tax form). The portable-subset
+  builder recorded **48 PG-only drops**, and `DROPPED.json` is where that list is kept so a later phase can tell a
+  deliberate drop from a table somebody forgot to create.
 * Seeded tape measurement used for the gate's justification: 1,090 fills, median fill $0.02, p90 $137.50
   [measured: `db/seed.sql`].
 
 ## 4. Open, in the order it should be closed
 
-1. **D5–D7** as listed in §1.
+1. **D6–D7** as listed in §1.
 2. **The eligibility floor re-derived on production data** ($500 and its $0.02-median sensitivity are a judgement,
    §2.2), plus a real **category taxonomy**: `seed_leaderboard` invents four strings (Politics/Sports/Crypto/
    Finance) because the venue's own tags are not in our ingest yet, and the category board is only as meaningful
@@ -412,8 +638,11 @@ prevent.
 3. ~~A leaderboard seed population.~~ **Closed by D2** — `services/api/seed_leaderboard.py`, opt-in via
    `python3 services/api/seed_leaderboard.py --sqlite` so the other phases' fixtures do not grow by two thousand
    markets. It is deliberately outside `db/seed.sql`: the phases that count things (the tape's page, the whale
-   hour's 400 fills, the copy monitor's history) must not start failing for reasons unrelated to them. The one
-   adversarial case still missing is the second-wallet referral, which arrives with D5's tables.
+   hour's 400 fills, the copy monitor's history) must not start failing for reasons unrelated to them. ~~The one
+   adversarial case still missing is the second-wallet referral, which arrives with D5's tables.~~ **Closed by
+   D5**: the referral population is built inside each test and the gate rather than in the shared seed, and the
+   second wallet on one funding source is c20's first act — the referral fixture has to *fail* attribution to be
+   worth anything, which is not a thing `db/seed.sql` can contain.
 4. **The rank-history table is written by the recompute, so a fresh database has an empty sparkline** until
    somebody calls `/recompute` once. D3/D4's screens have to render that state honestly ("no history yet")
    rather than as a flat line at rank 0.
@@ -425,3 +654,17 @@ prevent.
 6. **The pinned strip is not yet measured under the P10 live-load budget** (60 fps with a live tape). The strip
    is sticky, not animated, and it renders at most one row per board; the D4 claim is that it adds no layout work
    per tick, and the frame trace that would prove it belongs with P10's harness, which exists (`npm run measure:tape`).
+   The D5 panel is not on that path at all — it renders on entry, holds no subscriptions and polls nothing — so it
+   adds no frame work to measure.
+7. **The `REVOKE`/grant block does not yet name the 0016 tables.** `0005_triggers.sql` enumerates the append-only
+   set for both the trigger list and the `polygm_app` grant block, and `referral_accruals` is append-only by
+   trigger and by `UNIQUE (referrer, referee, day)` but is not in the grant half of that list. On Postgres the
+   trigger is the guard and the grant is the belt; the belt is the thing a migration that "just needs to fix a
+   number" cannot be careful past. It is a one-line addition to two arrays in a file that is already generated
+   from, so it lands with D6's migration rather than being smuggled into D5's after its record was written.
+8. **A green test line is not evidence when the HTTP layer is missing.** `python3 -m unittest discover -s tests`
+   prints `OK` with the API tests *skipped* on a machine where `fastapi` is not installed, and this environment
+   reinstalls from `requirements.txt` per session, so the D5 sweep read a green `Ran 990 tests ... OK` that had
+   skips in it. The suite now gets read for its skip count as well as its result (`OK` with no parenthetical), and
+   the same is true of the gates: P08 c2 and c11 exist precisely because a missing dependency there produces a
+   *failure*, which is the better behaviour and the reason those checks are worth their runtime.
