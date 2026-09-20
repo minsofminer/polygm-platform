@@ -23,6 +23,9 @@ that:
 """
 from __future__ import annotations
 
+import json
+import pathlib
+
 import re
 
 from . import menu, render
@@ -123,14 +126,52 @@ def cadence_ok(history: list, *, at_ms: int, kind: str, cadence: dict | None = N
     return True, ""
 
 
+#: Where the grammar lives. Read at import so the emitter and the parser cannot disagree: the module is loaded from
+#: `contracts/startapp.json` — the same file the web app mirrors into TypeScript — and a missing or malformed contract
+#: is a hard failure at import rather than a link that lands on "that link did not look right".
+_STARTAAP_CONTRACT = json.loads(
+    (pathlib.Path(__file__).resolve().parents[3] / "contracts" / "startapp.json").read_text(encoding="utf-8"))
+
+
+def startapp_payload(kind: str, value: str) -> str:
+    """`("m", "fed-cut-sept")` → `"m-fed-cut-sept"`, in the grammar `contracts/startapp.json` defines.
+
+    The tag comes from the contract's own table rather than a local literal, and the value is filtered to the
+    contract's charset rather than trusted: a slug is already `[a-z0-9-]` by construction, but this function is the
+    last place before a link goes out, and a value that survives into a link is a value a stranger will parse.
+    """
+    tag = str(kind).strip()
+    if tag not in _STARTAAP_CONTRACT["tags"]:
+        raise ValueError("unknown startapp tag %r" % tag)
+    sep = _STARTAAP_CONTRACT["separator"]
+    allowed = set(_STARTAAP_CONTRACT["value_charset_literal"])
+    clean = "".join(ch if ch in allowed else "" for ch in str(value))[:_STARTAAP_CONTRACT["value_max_len"]]
+    if not clean:
+        raise ValueError("startapp payload has no value after sanitising %r" % value)
+    return f"{tag}{sep}{clean}"
+
+
 def mini_app_url(slug: str, *, bot_username: str, app_short_name: str = "trade") -> str:
     """The deep link a stranger can tap: it opens the Mini App on that market's card.
 
     `startapp` rather than `start`, and the payload is a *slug* — a lookup key, never a credential and never an
     account reference. A deep link is forwarded, screenshotted and quoted; it must be safe in all three.
+
+    **This function and the client's parser were minting different formats until P12.** It emitted a bare slug while
+    `web/src/telegram/startapp.ts` expected `<tag><sep><value>`, so every trade button on every channel alert was
+    rejected by the app it pointed at. The fix is not "make them match" — matching by hand is how they stopped
+    matching — it is that both sides now read `contracts/startapp.json`, and the gate compares a link this function
+    produces against the parser that will receive it.
     """
-    clean = re.sub(r"[^a-z0-9-]", "", str(slug).lower())[:56]
-    return "https://t.me/%s/%s?startapp=%s" % (bot_username.lstrip("@"), app_short_name, clean)
+    # Normalising a slug is not the same as filtering a payload. The payload function drops characters outside the
+    # contract's charset; this one *shapes* a lookup key, so runs of separator become one hyphen and the ends are
+    # trimmed — `"Fed-Cut/Sept??"` is the market `fed-cut-sept`, not `fed-cut-sept--`, and the difference is a link
+    # that opens the market versus one that opens "nothing here to trade".
+    clean = re.sub(r"[^a-z0-9]+", "-", str(slug).lower()).strip("-")[:56].strip("-")
+    if not clean:
+        raise ValueError("a deep link needs a market: %r normalises to nothing" % slug)
+    payload = startapp_payload("m", clean)
+    return "https://t.me/%s/%s?startapp=%s" % (bot_username.lstrip("@"), app_short_name, payload)
 
 
 def compose(event: dict, *, bot_username: str, price_text: str, age_text: str) -> render.Plan:

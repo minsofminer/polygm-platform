@@ -1,0 +1,21 @@
+{
+  "what": "The one grammar for `?startapp=` deep-link payloads, read by both implementations.",
+  "why": "- `startapp` is Telegram's parameter and Telegram constrains it, the parser and the emitter live in different languages (TypeScript in web/src/telegram/startapp.ts, Python in packages/polygm_core/telegrambot/channel.py), and the failure mode of a disagreement is silent: the emitter mints a link, the parser rejects it, and a channel alert's trade button lands on 'that link did not look right'. Both sides read this file in their own test suite, so a change to one that is not a change to both fails a build rather than a customer.",
+  "grammar": "<tag>-<value>",
+  "separator": "-",
+  "tags": {
+    "m": "market slug",
+    "w": "trader address",
+    "r": "referral code"
+  },
+  "value_max_len": 120,
+  "payload_max_len": 256,
+  "charset_note": "The literal character set, spelled out \u2014 NOT a regex class. The first version of this file wrote it as 'A-Za-z0-9_.-' and the TypeScript side read it as a class (correct) while the Python side read it as a list of literal characters (also, in isolation, a defensible reading) \u2014 so `fed-cut-sept` filtered down to `--` and every channel deep link would have opened an empty market. One representation, unambiguous in both languages: regex users build a class from it and escape `-`, set users build a set from it. No colon: Telegram's `startapp` value is a short URL-safe token, so anything outside this set is percent-encoded by a client at best.",
+  "examples": {
+    "market": "m-fed-cut-sept",
+    "trader": "w-0x4bbeEB066eD09B7AEd07bF39EEe0466f9EB3",
+    "referral": "r-AB12"
+  },
+  "url_shape": "https://t.me/<bot_username>/<app_short_name>?startapp=<payload>",
+  "value_charset_literal": "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.-"
+}

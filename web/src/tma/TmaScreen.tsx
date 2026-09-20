@@ -15,7 +15,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { request } from "@/api/client";
 import { silentReauth } from "@/telegram/reauth";
-import { parseStartapp } from "@/telegram/startapp";
+import { parseStartapp, startappTarget } from "@/telegram/startapp";
 import { TradeSheet, type OrderFn } from "@/tma/TradeSheet";
 import { loadMarketForSheet, type TmaGet, type TmaRead } from "@/tma/market";
 import type { MarketView } from "@/tma/trade";
@@ -33,7 +33,10 @@ export function TmaScreen() {
   // carried, and re-parsing our own route string back into a slug is how a deep link quietly stops matching.
   const payload = useMemo(() => (startapp ? parseStartapp(startapp) : null), [startapp]);
   const slug = payload?.kind === "market" ? payload.marketId : null;
-  const notice = payload?.kind === "none" ? null : payload?.kind === "rejected" ? payload.reason : null;
+  // The notice comes from the shared helper, which is the only place a refusal reason becomes a sentence: this line
+  // used to render `payload.reason` directly, so a malformed link showed the user the string "bad-characters".
+  const target = useMemo(() => (payload ? startappTarget(payload, "miniapp") : null), [payload]);
+  const notice = payload?.kind === "none" ? null : target?.notice ?? null;
   const [ready, setReady] = useState<Ready>({ state: "loading" });
   const [session, setSession] = useState<"checking" | "ok" | "no">("checking");
 

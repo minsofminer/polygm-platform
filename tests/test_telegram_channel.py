@@ -9,11 +9,13 @@ hold messages rather than lose them.
 """
 from __future__ import annotations
 
+import json
 import unittest
 from pathlib import Path
 
 from polygm_core.telegrambot import channel, ops, outbox, render
 
+ROOT = Path(__file__).resolve().parents[1]
 BOT = "polygm_bot"
 
 FILL = {"kind": "large_fill", "slug": "fed-cut-sept", "market_id": "0xcond", "question": "Will the Fed cut rates "
@@ -95,13 +97,43 @@ class TestCadenceAndComposition(unittest.TestCase):
         self.assertIn("not a forecast", text)
         urls = [b["url"] for row in plan.beats[0].keyboard["inline_keyboard"] for b in row if "url" in b]
         self.assertTrue(all(u.startswith("https://t.me/%s/" % BOT) for u in urls), urls)
-        self.assertIn("startapp=fed-cut-sept", urls[0])
+        self.assertIn("startapp=m-fed-cut-sept", urls[0])
 
     def test_the_deep_link_is_a_lookup_key_and_never_carries_an_account(self):
         url = channel.mini_app_url("Fed-Cut/Sept??", bot_username=BOT)
-        self.assertTrue(url.endswith("startapp=fed-cutsept"), url)
+        self.assertTrue(url.endswith("startapp=m-fed-cut-sept"), url)
         self.assertNotIn("@", url.split("t.me/")[1])
         self.assertLess(len(url), 120, "a deep link is forwarded and quoted; it stays short")
+
+    def test_every_link_we_mint_obeys_the_grammar_the_app_parses(self):
+        """The two sides of the deep link are written in different languages and were, until P12, in different formats.
+
+        The Python emitter produced a bare slug while the TypeScript parser expected `<tag><sep><value>`, so every
+        trade button on every channel alert opened the Mini App on nothing — and no test on either side failed,
+        because each side was self-consistent. This test is the seam: it reads the contract both sides are built from
+        and checks this side's output against it, character class and all. `tools/p12-gate-check.py` then does the
+        cross-language half by handing these links to the real parser.
+        """
+        contract = json.loads((ROOT / "contracts" / "startapp.json").read_text(encoding="utf-8"))
+        charset = set(contract["value_charset_literal"])
+        for slug in ("fed-cut-sept", "top-30d", "Fed-Cut/Sept??", "0xM1", "recount incumbent!"):
+            url = channel.mini_app_url(slug, bot_username=BOT)
+            payload = url.split("startapp=", 1)[1]
+            tag, sep, value = payload[0], payload[1], payload[2:]
+            self.assertEqual(sep, contract["separator"], url)
+            self.assertIn(tag, contract["tags"], url)
+            self.assertTrue(value, "a payload with no value is a link to nothing: %s" % url)
+            self.assertLessEqual(len(value), contract["value_max_len"], url)
+            self.assertLessEqual(len(payload), contract["payload_max_len"], url)
+            offenders = sorted(set(value) - charset)
+            self.assertEqual([], offenders, "%s carries %s" % (url, offenders))
+
+    def test_the_same_slug_always_produces_the_same_link(self):
+        """A payload is also a cache key and a lookup key on the other side: two spellings of one market would be two
+        markets, one of which has no book."""
+        once = channel.mini_app_url("Fed-Cut-Sept", bot_username=BOT)
+        twice = channel.mini_app_url("fed-cut-sept", bot_username=BOT)
+        self.assertEqual(once, twice)
 
     def test_a_message_that_promises_an_outcome_cannot_leave(self):
         plan = channel.compose(FILL, bot_username=BOT, price_text="62.0¢", age_text="2 minutes ago")

@@ -1,7 +1,7 @@
 "use client";
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { ConnectionDot } from "./ConnectionDot";
 import { CommandPalette } from "./CommandPalette";
 import { ShortcutsOverlay } from "./ShortcutsOverlay";
@@ -47,8 +47,21 @@ export function Shell({ children }: { children: React.ReactNode }) {
   // pages, not layouts, and a layout prop that is silently `undefined` is how deep links stop working with no
   // error anywhere. These routes are dynamic anyway (the auth check reads cookies), so this costs nothing.
   const params = useSearchParams();
+  const router = useRouter();
   const startapp = params?.get("startapp") ?? null;
-  const notice = startapp ? startappTarget(parseStartapp(startapp)).notice : null;
+  const target = startapp ? startappTarget(parseStartapp(startapp)) : null;
+  const notice = target?.notice ?? null;
+  const deepLink = target?.href ?? null;
+  // A deep link that resolves to a market has to *go* there. Until P12 this layout read the payload, computed the
+  // notice, and dropped the href on the floor: `?startapp=` on the main site showed a toast (or nothing) and left the
+  // user wherever they already were. `replace` rather than `push` so the back button does not bounce between the
+  // landing page and the market the link named.
+  const went = useRef(false);
+  useEffect(() => {
+    if (!deepLink || went.current) return;
+    went.current = true;
+    router.replace(deepLink);
+  }, [deepLink, router]);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {

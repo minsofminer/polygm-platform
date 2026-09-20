@@ -1,0 +1,20 @@
+# Everything the function does not need. The API imports `packages/`, `services/api/`, `db/migrations-sqlite/` and
+# `tools/` (for the migrator), and nothing else — so the web app, the docs and every local artifact stay out of the
+# upload. A deployment that ships `web/node_modules` is a deployment whose upload time is measured in minutes.
+web/
+docs/
+skills/
+deploy/
+var/
+.tmp/
+.tmp-*
+**/__pycache__/
+**/*.pyc
+*.db
+*.db-wal
+*.db-shm
+*.log
+.bak/
+backup/
+node_modules/
+.next/

@@ -23,3 +23,5 @@ web/.next/
 web/.next-build.log
 web/tsconfig.tsbuildinfo
 web/next-env.d.ts
+.vercel
+.env*

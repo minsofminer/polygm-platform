@@ -61,8 +61,10 @@ describe("theme and insets", () => {
 
 describe("a deep link is data, not a route", () => {
   it("escapes the id into the href instead of interpolating it raw", () => {
-    const payload = parseStartapp("m:1234.5:6789");
+    const payload = parseStartapp("m-fed-cut-sept");
     expect(payload.kind).toBe("market");
-    if (payload.kind === "market") expect(encodeURIComponent(payload.marketId)).toBe("1234.5%3A6789");
+    // A slug needs no escaping on the way into a path segment, and the assertion says so rather than assuming it:
+    // `encodeURIComponent` is still applied by the target helper, so this is the guarantee the URL relies on.
+    if (payload.kind === "market") expect(encodeURIComponent(payload.marketId)).toBe("fed-cut-sept");
   });
 });
