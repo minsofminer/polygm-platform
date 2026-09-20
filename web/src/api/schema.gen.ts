@@ -1290,6 +1290,110 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/telegram/order": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Place an order from the Mini App — the same path the bot's confirm tap takes
+         * @description A webview user is a user, so this route takes a *session* (the bearer `POST /v1/telegram/session` minted from
+         *     the signed `initData`) and never a `chat_id` in the body. What makes it different from the web ticket is what
+         *     it does NOT accept: no token id and no price. The client sends the market it is looking at, the side and an
+         *     amount; the server resolves the outcome token, re-reads the best ask at this instant, and calls the one order
+         *     path — validation, risk gate, idempotency store, ledger row. A client-sent price is yesterday's price, and a
+         *     client that can name the token can name the wrong one.
+         */
+        post: operations["postTelegramOrder"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/telegram/kill": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Stop the bot sending — without stopping trading
+         * @description A switch separate from P06's trading kill switch, and the separation is the design: the trading switch halts
+         *     orders and leaves the outbox alone, because a user whose order was halted still has to be told what happened
+         *     to their money; this one pauses *delivery* and leaves trading alone. Scope decides what it holds back —
+         *     `channel` stops the megaphone, `personal` stops one-to-one messages, `all` stops both — and jobs stay queued
+         *     rather than being dropped, so a paused switch loses nothing it can deliver later.
+         *
+         *     Every engagement carries a reason of at least eight characters and a name, and the rows are append-only: an
+         *     unexplained kill switch is indistinguishable from an outage, and "was that us?" is the first question in the
+         *     incident channel.
+         */
+        post: operations["postTelegramKill"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/telegram/broadcast": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Compose the channel's next messages — and, by default, send none of them
+         * @description A channel message goes to thousands of phones and cannot be edited out of them, so the default here is a dry
+         *     run: the exact bytes that would go out, with what a sender would check (length, escaping, buttons, a deep
+         *     link). A real send re-checks P07's broadcast gate per market, honours the cadence caps read from
+         *     `telegram_broadcasts`, and queues the result — the drain is still the only thing that talks to Telegram.
+         *
+         *     The stage is expressed as *kinds and categories with a limit*, not as a percentage of subscribers: "the first
+         *     ten large fills in economics" is a rollout a human can reason about before pressing send, and a random tenth
+         *     of the audience is not.
+         */
+        post: operations["postTelegramBroadcast"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/telegram/ops": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The operator's one page — switch state, queue depth, and the recovery plan
+         * @description What an on-call needs at 2am without opening three tools: whether the bot is paused and why, how deep the
+         *     outbox is, whether any update is stuck mid-handler, what the channel last said, the username decision with
+         *     its reasoning, and the three recovery plans (a restricted bot, a banned channel, an impersonation report)
+         *     with the hedge each one relies on. Served from the same package the runbook reads, so there is one answer
+         *     rather than two that drift.
+         */
+        get: operations["getTelegramOps"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/leaderboard/methodology": {
         parameters: {
             query?: never;
@@ -6685,6 +6789,191 @@ export interface operations {
             };
             403: components["responses"]["Denied"];
             422: components["responses"]["Validation"];
+            500: components["responses"]["Internal"];
+            503: components["responses"]["Denied"];
+        };
+    };
+    postTelegramOrder: {
+        parameters: {
+            query?: never;
+            header: {
+                "Idempotency-Key": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    slug: string;
+                    /** @enum {string} */
+                    side: "yes" | "no";
+                    amountUsdc: string;
+                };
+            };
+        };
+        responses: {
+            /** @description queued for the executor */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Stamped"] & {
+                        intentId: string;
+                        state: string;
+                        sharesMicro?: string;
+                        priceMicro?: string;
+                        notionalMicro?: string;
+                        note?: string;
+                    };
+                };
+            };
+            401: components["responses"]["Denied"];
+            403: components["responses"]["Denied"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Validation"];
+            500: components["responses"]["Internal"];
+            503: components["responses"]["Denied"];
+        };
+    };
+    postTelegramKill: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Admin-Token": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    engaged: boolean;
+                    /**
+                     * @default all
+                     * @enum {string}
+                     */
+                    scope?: "all" | "channel" | "personal";
+                    reason: string;
+                };
+            };
+        };
+        responses: {
+            /** @description the new state */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Stamped"] & {
+                        engaged: boolean;
+                        scope: string;
+                        reason?: string;
+                        by?: string;
+                        atMs?: number;
+                        note?: string;
+                    };
+                };
+            };
+            403: components["responses"]["Denied"];
+            422: components["responses"]["Validation"];
+            500: components["responses"]["Internal"];
+            503: components["responses"]["Denied"];
+        };
+    };
+    postTelegramBroadcast: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Admin-Token": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    /** @default true */
+                    dryRun?: boolean;
+                    stage?: {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+        responses: {
+            /** @description a preview, or what was queued and what the gates held back */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Stamped"] & {
+                        dryRun: boolean;
+                        staged?: number;
+                        held?: number;
+                        sent?: string[];
+                        skipped?: {
+                            slug?: string;
+                            why?: string;
+                        }[];
+                        preview?: {
+                            [key: string]: unknown;
+                        };
+                        note?: string;
+                    };
+                };
+            };
+            403: components["responses"]["Denied"];
+            422: components["responses"]["Validation"];
+            500: components["responses"]["Internal"];
+            503: components["responses"]["Denied"];
+        };
+    };
+    getTelegramOps: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Admin-Token": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description the operator's view */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Stamped"] & {
+                        kill: {
+                            engaged?: boolean;
+                            scope?: string;
+                            reason?: string;
+                            by?: string;
+                            atMs?: number;
+                        };
+                        queueDepth: number;
+                        stuckClaims?: number;
+                        botConfigured: boolean;
+                        lastBroadcasts?: {
+                            [key: string]: unknown;
+                        }[];
+                        username?: {
+                            [key: string]: unknown;
+                        };
+                        recovery?: {
+                            [key: string]: unknown;
+                        }[];
+                        findings?: string[];
+                    };
+                };
+            };
+            403: components["responses"]["Denied"];
             500: components["responses"]["Internal"];
             503: components["responses"]["Denied"];
         };

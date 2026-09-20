@@ -8173,6 +8173,9 @@ _levels_p12 = {
     "POST /v1/telegram/kill": (_authz.ADMIN, ""),
     "POST /v1/telegram/broadcast": (_authz.ADMIN, ""),
     "GET /v1/telegram/ops": (_authz.ADMIN, ""),
+    # The Mini App's order route is a USER route: the webview equivalent of the ticket. Its identity is the session
+    # the signed `initData` minted, never the request body — there is no chat id to forge.
+    "POST /v1/telegram/order": (_authz.USER, ""),
     # The Mini App's order route is a USER route: it is the webview equivalent of the ticket, and the identity comes
     # from the session the signed `initData` minted, never from the request body.
     "POST /v1/telegram/order": (_authz.USER, ""),
@@ -8852,6 +8855,69 @@ def telegram_session(request: Request, body: dict = Body(...)):
     SEC.auth_event(str(uid), "miniapp_session", at=_now_ms(), detail={"age_s": res.age_s})
     return _stamped({"linked": True, "accessToken": acc, "refreshToken": ref, "tokenType": "Bearer",
                      "expiresInMs": ACCESS_TTL_MS, "user": {"id": str(uid)}, "initDataAgeS": res.age_s},
+                    ttl_ms=0, stale_ms=0)
+
+
+TELEGRAM_ORDER_RESPONSES = {
+    202: {"description": "queued for the executor through the same risk gate as the web ticket"},
+    **{status: {"description": msg} for msg, status, _retry in CODES.values()},
+}
+
+
+@app.post("/v1/telegram/order", status_code=202, responses=TELEGRAM_ORDER_RESPONSES,
+           openapi_extra=_body_schema(("slug", "side", "amountUsdc"), {
+               "slug": {"type": "string", "minLength": 3, "maxLength": 128},
+               "side": {"type": "string", "enum": ["yes", "no"]},
+               "amountUsdc": {"type": "string", "pattern": "^[0-9]{1,9}(\\.[0-9]{1,2})?$"}}))
+def telegram_order(request: Request, body: dict = Body(...),
+                   idempotency_key: str | None = Header(default=None, alias="Idempotency-Key")):
+    """The Mini App's confirm button: a slug, a side, an amount — and the server does the rest.
+
+    This route exists because of what the Mini App must NOT have to know. The web ticket posts a market id, an
+    outcome token and a price; a webview opened from a deep link has none of those, and a client that can name a
+    token can name the wrong one while a client that can name a price is quoting the past. So the webview says
+    *what it is looking at* and the server resolves the rest — the same resolution the chat's confirm tap does
+    (`_tg_order_from_card`), which is the point: **one order path, one risk gate, two surfaces.** If the chat and
+    the Mini App ever disagree about what an order is, they disagree here, in one function, on the diff.
+
+    Authenticated as a session rather than as a bot: a webview user is a user. The identity is the Telegram account
+    the signed `initData` resolved to, never an id in the body — which is why there is no `chat_id` parameter to
+    forge.
+    """
+    rid = request.state.request_id
+    uid, _row, deny = _principal(request)
+    if deny is not None:
+        return deny
+    if not uid:
+        return err("UNAUTHENTICATED", rid)
+    bad = _check_body(body, ("slug", "side", "amountUsdc"), rid)
+    if bad is not None:
+        return bad
+    slug = str(body["slug"]).strip()
+    side = str(body["side"]).strip().lower()
+    if len(slug) < 3 or len(slug) > 128:
+        return err("VALIDATION", rid, where=["slug"])
+    if side not in ("yes", "no"):
+        return err("VALIDATION", rid, where=["side"])
+    bad_key = _idem_shape(idempotency_key)
+    if bad_key is not None:
+        return bad_key
+    res = _tg_order_from_card(str(uid), {"slug": slug, "side": side, "amount": str(body["amountUsdc"])},
+                              str(idempotency_key))
+    if not res.get("ok"):
+        # Straight out of CODES, exactly as `POST /v1/orders` answers: an ordinary "no such market" is a 404 with
+        # `NOT_FOUND`, a gate refusal is the gate's own code and status. The first version of this branch mapped
+        # codes to hand-chosen statuses and wrapped `err()` in a second response object, which turned that 404 into
+        # a 500 whose body was a serialised Python object — the loudest possible way to learn that a route had never
+        # been exercised.
+        code = str(res.get("code") or "INTERNAL")
+        return err(code if code in CODES else "INTERNAL", rid, detail=str(res.get("detail") or "")[:160])
+    return _stamped({"cacheKey": None, "intentId": str(res["intent_id"]), "state": "queued",
+                     "outcome": str(res.get("outcome") or side.upper()),
+                     "priceMicro": str(res["price_micro"]), "sharesMicro": str(res["shares_micro"]),
+                     "notionalMicro": str(res.get("notional_micro") or 0),
+                     "note": "queued for the executor; the fill arrives as a message in the chat and a "
+                             "notification here"},
                     ttl_ms=0, stale_ms=0)
 
 

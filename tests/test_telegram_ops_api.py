@@ -379,6 +379,89 @@ class TestKillSwitch(OpsBase):
         self.assertEqual(403, self.client.get("/v1/telegram/ops", headers={"X-Admin-Token": "wrong"}).status_code)
 
 
+class TestMiniAppOrderRoute(OpsBase):
+    """`POST /v1/telegram/order` — the webview's confirm button, on the chat's own order path.
+
+    The assertions are about the *equivalence*: the same body the chat's tap builds, the same gate, the same ledger
+    row, and the same refusal vocabulary coming back.
+    """
+    app_name = "api-tg-ops-mp-order"
+
+    def post(self, body, *, key: str | None = "tma-mp-0000000001"):
+        headers = self.auth()
+        if key is not None:
+            headers["Idempotency-Key"] = key
+        return self.client.post("/v1/telegram/order", json=body, headers=headers)
+
+    def test_without_a_session_there_is_no_order(self):
+        self.seed_market()
+        r = self.client.post("/v1/telegram/order", json={"slug": "p12-fed-cut-sept", "side": "yes",
+                                                         "amountUsdc": "25"},
+                             headers={"Idempotency-Key": "tma-mp-anon-0001"})
+        self.assertEqual(401, r.status_code, r.text)
+        self.assertEqual(0, int(self.db.execute("SELECT COUNT(*) FROM order_intents").fetchone()[0]))
+
+    def test_an_accepted_order_is_one_intent_priced_from_the_book(self):
+        mid, _cond, _tok = self.seed_market()
+        r = self.post({"slug": "p12-fed-cut-sept", "side": "yes", "amountUsdc": "50"})
+        self.assertEqual(202, r.status_code, r.text)
+        body = r.json()
+        # The seeded ask is 0.62, so 50 USDC is 80,645,161 micro-shares — the same integer the chat's confirm tap
+        # produces for the same card, because it is literally the same function.
+        self.assertEqual("80645161", body["sharesMicro"], body)
+        self.assertEqual("620000", body["priceMicro"], body)
+        self.assertEqual("QUEUED", body["state"].upper())
+        rows = self.db.execute("SELECT market_id, side FROM order_intents").fetchall()
+        self.assertEqual(1, len(rows), "one tap is one order")
+        self.assertEqual(mid, str(rows[0][0]))
+
+    def test_the_side_picks_the_outcome_token(self):
+        self.seed_market()
+        no = self.post({"slug": "p12-fed-cut-sept", "side": "no", "amountUsdc": "10"},
+                       key="tma-mp-no-00000001").json()
+        yes = self.post({"slug": "p12-fed-cut-sept", "side": "yes", "amountUsdc": "10"},
+                        key="tma-mp-yes-0000001").json()
+        self.assertEqual("No", no["outcome"])
+        self.assertEqual("Yes", yes["outcome"])
+
+    def test_a_slug_we_do_not_have_is_a_registered_404(self):
+        r = self.post({"slug": "p12-no-such-market", "side": "yes", "amountUsdc": "25"})
+        self.assertEqual(404, r.status_code, r.text)
+        self.assertEqual("NOT_FOUND", r.json()["error"]["code"])
+
+    def test_a_market_with_no_offer_is_refused_in_plain_words(self):
+        # The market exists and the book is empty: the code must be one the refusal tables explain, and the API's
+        # own status for it — this is the case that produced a 500 before the vocabulary was fixed.
+        at = self.app._now_ms()
+        self.db.execute("INSERT OR REPLACE INTO markets (id, condition_id, slug, question, minimum_tick_size,"
+                        " end_ts, accepting_orders, first_seen_ms, updated_ms, seconds_delay, minimum_order_size,"
+                        " fee_type, enable_order_book, neg_risk, outcomes_json)"
+                        " VALUES ('m-p12-empty','0xcond-p12-empty','p12-empty-book','Empty?',0.01,?,1,?,?,0,'1','',1,0,"
+                        " '[]')", (at + 86_400_000, at, at))
+        self.db.execute("INSERT OR REPLACE INTO tokens (token_id, market_id, outcome, outcome_index)"
+                        " VALUES ('tok-p12-empty-yes','m-p12-empty','Yes',0)")
+        self.db.commit()
+        r = self.post({"slug": "p12-empty-book", "side": "yes", "amountUsdc": "25"})
+        self.assertEqual(409, r.status_code, r.text)
+        self.assertEqual("NO_ORDER_BOOK", r.json()["error"]["code"])
+        self.assertIn("order book", self.app._tg_plain_refusal("NO_ORDER_BOOK"))
+
+    def test_a_missing_or_malformed_key_is_refused_before_anything_is_placed(self):
+        self.seed_market()
+        missing = self.post({"slug": "p12-fed-cut-sept", "side": "yes", "amountUsdc": "25"}, key=None)
+        self.assertEqual(400, missing.status_code, missing.text)
+        self.assertEqual("IDEM_KEY_REQUIRED", missing.json()["error"]["code"])
+        malformed = self.post({"slug": "p12-fed-cut-sept", "side": "yes", "amountUsdc": "25"}, key="short")
+        self.assertIn(malformed.status_code, (400, 422), malformed.text)
+        self.assertEqual(0, int(self.db.execute("SELECT COUNT(*) FROM order_intents").fetchone()[0]))
+
+    def test_the_side_must_be_one_the_market_has(self):
+        self.seed_market()
+        r = self.post({"slug": "p12-fed-cut-sept", "side": "maybe", "amountUsdc": "25"})
+        self.assertEqual(422, r.status_code, r.text)
+        self.assertEqual("VALIDATION", r.json()["error"]["code"])
+
+
 class TestRefusalVocabulary(OpsBase):
     """Every code the product can show a user must be a code the API can actually emit.
 

@@ -352,6 +352,10 @@ export const ROUTES = {
     owner: "P09",
   },
   createOrder: { method: "POST", path: "/v1/orders", built: true, whileMissing: "refuses", owner: "P06" },
+  // P12 · the Mini App's order route. A separate key from `createOrder` on purpose: the web ticket names a token and
+  // a price, the webview names a slug and an amount and lets the server price it. Two client shapes, one server
+  // order path — and the ledger records which client asked.
+  telegramOrder: { method: "POST", path: "/v1/telegram/order", built: true, whileMissing: "refuses", owner: "P12" },
   intent: { method: "GET", path: "/v1/orders/intents/{intent_id}", built: true, whileMissing: "refuses", owner: "P06" },
   addressList: {
     method: "GET",

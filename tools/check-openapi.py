@@ -57,6 +57,7 @@ TABLE_FOR_PATH = {
     ("POST", "/v1/telegram/drain"): "TELEGRAM_DRAIN_RESPONSES",
     ("POST", "/v1/telegram/kill"): "TELEGRAM_KILL_RESPONSES",
     ("POST", "/v1/telegram/order"): "TELEGRAM_ORDER_RESPONSES",
+    ("POST", "/v1/telegram/order"): "TELEGRAM_ORDER_RESPONSES",
     ("POST", "/v1/telegram/broadcast"): "TELEGRAM_BROADCAST_RESPONSES",
     "/v1/telegram/ops": "TELEGRAM_OPS_RESPONSES",
     "/v1/telegram/metrics": "TELEGRAM_METRICS_RESPONSES",

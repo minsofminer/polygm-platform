@@ -3022,14 +3022,16 @@ paths:
   /v1/telegram/order:
     post:
       tags: [telegram]
-      summary: Place an order from the Mini App — the same path the bot's confirm tap takes
+      summary: Place an order from the Mini App — the same path the chat's confirm tap takes
       description: |-
-        A webview user is a user, so this route takes a *session* (the bearer `POST /v1/telegram/session` minted from
-        the signed `initData`) and never a `chat_id` in the body. What makes it different from the web ticket is what
-        it does NOT accept: no token id and no price. The client sends the market it is looking at, the side and an
-        amount; the server resolves the outcome token, re-reads the best ask at this instant, and calls the one order
-        path — validation, risk gate, idempotency store, ledger row. A client-sent price is yesterday's price, and a
-        client that can name the token can name the wrong one.
+        A webview user is a user, so this route takes a session (the bearer `POST /v1/telegram/session` minted from
+        the signed `initData`) rather than a bot secret, and there is no `chat_id` in the body to forge. What the
+        caller sends is what it is looking at — a market slug, a side, an amount in USDC — and the server resolves the
+        outcome token and re-reads the best ask at this instant through `_tg_order_from_card`, which then calls the one
+        order path (`_order_core`: validation, risk gate, idempotency store, ledger row). Letting a client name a
+        token would let it name the wrong one; letting it name a price would quote the past. The chat and the Mini App
+        therefore differ in how they are authenticated and in nothing else, which is what makes the bot's confirm tap
+        and this button the same order twice.
       operationId: postTelegramOrder
       x-auth: user
       x-rate-class: order
