@@ -495,3 +495,47 @@ caller — invisible to the unit suite and found by a served response.
 **`[UNVERIFIED]`.** Provider custody pricing is carried as unverified in the doc and in
 `PROVIDERS[i].verified = False`; the geofence/age-gate sentences are counsel items; the first real-venue day is
 a P13 finding. No real funds: per `docs/AGENTS-BUILD.md`, money waits for P13 and P14.
+
+---
+
+## P12 · Telegram: the bot, the channel, and the Mini App on its own URL
+
+The phase where the product gained a second front door — a chat that can place an order, and a public channel that
+anyone can watch — and where the expensive bug was found in the seam *between* phases rather than inside one.
+
+**Shipped.** D1 (webhooks, `update_id` as the process boundary, per-chat and global rate buckets, priority so a paying
+user's fill never queues behind the channel's broadcast), D2 (the Mini App: server-side `initData` HMAC from P07, the
+trade sheet and its integer money path, its own surface and its own deployment), D3 (20 commands, every one tappable,
+with a natural-language fallback that answers with a confirmation card), D4 (the order card and the fill/refusal
+notifications, on `_order_core` — the same risk gate as the web), D5 (`channel.py` and the broadcast routes, reading
+`tape_fills`), D7 (onboarding instrumentation) and D8 (kill switch, staged broadcast, ops page). D6's Mini App screens
+are the one deferred piece: its command surface and `/verify` shipped, and the wallet screens belong with P13's custody
+work, which is also the rule that keeps real funds out until P13/P14 are green.
+
+**The bug worth the whole phase.** Every trade button on every channel alert was dead, from P08 to P12. The bot mints
+`?startapp=<payload>` in Python; the Mini App parses it in TypeScript; the two implementations used different grammars
+and each was internally consistent, so both suites stayed green. Fixed structurally: the grammar lives once in
+`contracts/startapp.json`, both sides read it, and `tools/p12-gate-check.py` mints links with the real Python function
+and runs the real TypeScript parser over them in node. Writing the contract immediately caught a second bug of the same
+family — a charset written in regex notation, read as a class by one language and as a literal list by the other, which
+turned `fed-cut-sept` into `--`.
+
+**Also fixed in passing.** `POST /v1/orders/amount` and the web ticket's 422 (the ticket had posted the wrong shape for
+four phases and had no test of its own); a route defined twice in `app.py`; the refusal vocabulary keyed on registered
+codes on both sides, with the code moved out of the user's line and into the toast.
+
+**Deployments.** `polygm-mini-app` (the trade screen, off-surface paths 404 with a sentence, Telegram-only framing, two
+noindex signals) and `polygm-api` (`api/index.py`: the repo's own migration ledger and seed into `/tmp`, then the same
+ASGI app everything else runs). The two are separate projects so the front end can be rolled back without the backend.
+Honest limit, written in the file: `/tmp` is per-instance, so fixtures are stable and records are disposable — Postgres
+stays the production path.
+
+**Verified.** `pytest` **1219 passed**; `vitest` **492 passed / 56 files**; `tsc --noEmit` clean; `next build` clean on
+both surfaces; `check-openapi` **617/0**; `tools/p12-gate-check.py` **31/0**, and **38/0** with `--live` (the deployed
+Mini App's 404s, its noindex header, the API's health, and market data over the wire). Tampered `initData` → 401,
+replayed payload → 409, duplicate `update_id` → no second execution. The Mini App → API hop is proven on the origin: a
+tampered payload returns the *API's* refusal, generated on the other side of the network.
+
+**`[UNVERIFIED]`.** `PGM_TELEGRAM_BOT_TOKEN` is deliberately unset on the API deployment, so no session can be minted
+and no real trade can be placed from the Mini App; the BotFather Mini App URL is a manual step with no API. Both are
+recorded in `docs/P12-telegram-bot.md`, not carried as a silent gap. No real funds: money still waits for P13 and P14.
