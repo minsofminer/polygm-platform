@@ -1,0 +1,44 @@
+# P12 gate — recorded by tools/p12-gate-check.py
+# command: python3 tools/p12-gate-check.py --live
+
+PASS every minted payload uses the contract's separator                    
+PASS every minted payload is inside the contract's charset                 
+PASS the app's parser is built and run against the bot's own links         
+PASS the app's parser resolves every market the bot linked                 
+PASS the parser's market id is the slug the link carried                   
+PASS a resolved market is routed to the page that exists                   
+PASS canary: an untagged or colon-shaped payload is refused by the parser  
+PASS canary: an untagged payload is refused by both sides                  
+PASS canary: the old colon grammar is refused by both sides                
+PASS CODES parsed out of the API source                                    
+PASS the Python refusal table is not empty                                 
+PASS the TypeScript refusal table was found                                
+PASS every Python refusal key is a registered code                         
+PASS every TypeScript refusal key is a registered code                     
+PASS both refusal tables have the same keys, and both were read            
+PASS a refusal the table does not know still says something true           
+PASS the fallback can carry the gate's own detail rather than swallowing it
+PASS canary: an invented RISK_* key is not in either table                 
+PASS canary: the checker rejects a table keyed on those names              
+PASS the surface is read in exactly one place                              
+PASS the surface module is server-only by name                             
+PASS the Mini App gate turns a non-miniapp deployment into a pass-through  
+PASS off-surface paths on the Mini App are a 404, not a redirect           
+PASS framing is Telegram-only and behind the surface flag                  
+PASS noindex is per-surface, never in a shared config                      
+PASS the robots meta is decided by the surface                             
+PASS the API deployment rewrites everything into its own function          
+PASS the API's Vercel entry migrates and seeds before it imports the app   
+PASS the API entry names its own persistence caveat                        
+PASS canary: the Mini App's middleware does not pass every path through    
+PASS canary: a noindex header in web/vercel.json is absent                 
+PASS live: the API answers healthz                                         
+PASS live: the Mini App root serves the trade screen                       
+PASS live: /terminal is 404 on the Mini App surface                        
+PASS live: /admin is 404 on the Mini App surface                           
+PASS live: /wallet is 404 on the Mini App surface                          
+PASS live: /markets is 404 on the Mini App surface                         
+PASS live: the Mini App sends X-Robots-Tag noindex                         
+PASS live: the API serves real market data                                 
+
+p12-gate-check: 39 passed, 0 failed

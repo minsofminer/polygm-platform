@@ -251,6 +251,20 @@ p10-selftest:             ## prove the scanners can fail, one planted violation 
 # `web-deps` is its own target because four of the 15 checks shell out to node (openapi-typescript, vitest,
 # the i18n and env guards): "run the offline subset" must not quietly mean "install 400 MB first" either, so
 # each target states which half it needs and the install happens once.
+# P12 · the Telegram surface and the Mini App. The check that matters most here is the first one, because it is the
+# one no single-side test can make: the bot mints a deep link in Python and the app parses it in TypeScript, and from
+# P08 to P12 those two implementations used different grammars while both suites stayed green. This target runs the
+# real pair against each other — python mints, node parses — and `p12-selftest` proves the check can fail by handing
+# it the exact payload shapes that were wrong before.
+p12:
+	$(PY) tools/p12-gate-check.py --record docs/verification/P12-gate.txt
+
+p12-live:                 ## also probe the two deployments over the network
+	$(PY) tools/p12-gate-check.py --live --record docs/verification/P12-gate-live.txt
+
+p12-selftest:             ## prove the P12 checks can fail, one planted breakage at a time
+	$(PY) tools/p12-gate-check.py --self-test
+
 web-deps:
 	@cd web && { [ -d node_modules ] || npm ci --no-audit --no-fund; }
 
@@ -265,7 +279,7 @@ p03:
 	$(PY) tools/p03-gate-check.py
 	$(PY) tools/p03-mutation-test.py
 
-check: test lint lint-canary openapi-selftest sql-sqlite-check gate gate-mutate p01 p02 p03 p04 p05 p06 p07 p08 p09 p10 probe-fresh
+check: test lint lint-canary openapi-selftest sql-sqlite-check gate gate-mutate p01 p02 p03 p04 p05 p06 p07 p08 p09 p10 p12 p12-selftest probe-fresh
 	@echo "ALL GREEN"
 
 # ------------------------------------------------------------------ diagnostics

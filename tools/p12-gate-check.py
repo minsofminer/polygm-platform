@@ -44,6 +44,15 @@ sys.path.insert(0, str(ROOT / "services" / "api"))
 PASS, FAIL = "PASS", "FAIL"
 results: list[tuple[str, str, str]] = []
 
+#: A table comparison is only meaningful if both sides were actually read. Two empty sets are equal, and "the checker
+#: read nothing and reported agreement" is the failure mode this repo has hit before (the i18n checker's first
+#: revision recognised one call shape and silently missed the rest).
+MIN_TABLE_KEYS = 15
+
+
+def tables_agree(py_keys: set[str], ts_keys: set[str]) -> bool:
+    return bool(py_keys) and bool(ts_keys) and len(py_keys) >= MIN_TABLE_KEYS and py_keys == ts_keys
+
 
 def check(name: str, ok: bool, why: str = "") -> bool:
     results.append((PASS if ok else FAIL, name, "" if ok else why))
@@ -140,6 +149,31 @@ def deep_link_round_trip() -> None:
 # ---------------------------------------------------------------------------------------------------------------------
 # 2 · the refusal vocabulary
 # ---------------------------------------------------------------------------------------------------------------------
+def deep_link_verdicts(payloads: dict[str, str]) -> dict[str, dict] | None:
+    """Run the app's own parser over `payloads` and return what it made of each. Shared with `--self-test`, which needs
+    the same parse of *broken* input to prove the round-trip assertions are not vacuous."""
+    bundle = ROOT / ".tmp" / "p12-self-test.mjs"
+    bundle.parent.mkdir(exist_ok=True)
+    esbuild = ROOT / "web" / "node_modules" / ".bin" / "esbuild"
+    if not esbuild.exists():
+        return None
+    if subprocess.run([str(esbuild), str(ROOT / "web" / "src" / "telegram" / "startapp.ts"), "--bundle",
+                       "--format=esm", "--platform=node", "--outfile=" + str(bundle)],
+                      capture_output=True, text=True, timeout=180).returncode != 0:
+        return None
+    script = bundle.with_name("p12-self-test.run.mjs")
+    script.write_text(
+        "import { parseStartapp, startappTarget } from %s;\n"
+        "const out = {};\n"
+        "for (const [name, p] of Object.entries(%s)) {\n"
+        "  const v = parseStartapp(p);\n"
+        "  out[name] = { kind: v.kind, marketId: v.marketId ?? null, href: startappTarget(v).href ?? null };\n"
+        "}\nconsole.log(JSON.stringify(out));\n" % (json.dumps(str(bundle)), json.dumps(payloads)),
+        encoding="utf-8")
+    run = subprocess.run(["node", str(script)], capture_output=True, text=True, timeout=120)
+    return json.loads(run.stdout.strip().splitlines()[-1]) if run.returncode == 0 else None
+
+
 def refusal_vocabulary() -> None:
     app_src = (ROOT / "services" / "api" / "app.py").read_text(encoding="utf-8")
     ts_src = (ROOT / "web" / "src" / "tma" / "trade.ts").read_text(encoding="utf-8")
@@ -158,7 +192,7 @@ def refusal_vocabulary() -> None:
     check("the TypeScript refusal table was found", len(ts_keys) > 15, "%d keys: %s" % (len(ts_keys), sorted(ts_keys)[:3]))
     check("every Python refusal key is a registered code", not (py_keys - codes), str(sorted(py_keys - codes)))
     check("every TypeScript refusal key is a registered code", not (ts_keys - codes), str(sorted(ts_keys - codes)))
-    check("both refusal tables have the same keys", py_keys == ts_keys,
+    check("both refusal tables have the same keys, and both were read", tables_agree(py_keys, ts_keys),
           "py-only %s · ts-only %s" % (sorted(py_keys - ts_keys), sorted(ts_keys - py_keys)))
     check("a refusal the table does not know still says something true",
           "The venue refused the order" in py_table and "The venue refused the order" in ts_fn,
@@ -241,7 +275,37 @@ def live_probe() -> None:
     check("live: the API serves real market data", code == 200, "%s" % code)
 
 
+def self_test() -> int:
+    """Prove the checks can fail, by handing them the exact breakages this phase produced.
+
+    A gate whose checks cannot fail is a gate that agrees with everything, and this build has already shipped one of
+    those: `_tg_broadcast_candidates` filled the quality gate's inputs with constants, so the gate examined nothing and
+    passed everything. This runs the same code paths against broken input and requires a failure from each.
+    """
+    planted: list[tuple[str, bool]] = []
+    parsed_broken = deep_link_verdicts({"fed-cut-sept": "fed-cut-sept", "old": "m:fed-cut-sept",
+                                        "evil": "m-<script>alert(1)</script>"})
+    planted.append(("a payload with no tag is not a resolved market",
+                    parsed_broken is not None and all(v.get("kind") != "market" for v in parsed_broken.values())))
+    # The table comparison must reject a table that was never read — the difference between a check and a formality.
+    planted.append(("two empty refusal tables do not count as agreement", not tables_agree(set(), set())))
+    planted.append(("a table keyed on invented codes does not agree with the real one",
+                    not tables_agree({"RISK_NOTIONAL", "RISK_TICK"}, {"RISK_NOTIONAL", "RISK_TICK"})))
+    planted.append(("the contract's charset does not admit a payload with a colon",
+                    ":" not in (ROOT / "contracts" / "startapp.json").read_text().split('"value_charset_literal"')[1][:200]
+                    .split('"')[1]))
+    width = max(len(n) for n, _ in planted)
+    for name, fired in planted:
+        print("%-4s %s" % ("PASS" if fired else "FAIL", name.ljust(width)))
+    bad = [n for n, fired in planted if not fired]
+    print("\np12-gate-check --self-test: %d planted, %d caught, %d survived" % (len(planted), len(planted) - len(bad),
+                                                                              len(bad)))
+    return 1 if bad else 0
+
+
 def main() -> int:
+    if "--self-test" in sys.argv:
+        return self_test()
     live = "--live" in sys.argv
     deep_link_round_trip()
     refusal_vocabulary()
@@ -253,8 +317,23 @@ def main() -> int:
     for status, name, why in results:
         print("%-4s %s%s" % (status, name.ljust(width), ("  — " + why) if why else ""))
     failed = [r for r in results if r[0] == FAIL]
-    print("\np12-gate-check: %d passed, %d failed%s" % (len(results) - len(failed), len(failed),
-                                                       "" if live else "  (--live skipped: no network probes)"))
+    summary = "p12-gate-check: %d passed, %d failed%s" % (len(results) - len(failed), len(failed),
+                                                          "" if live else "  (--live skipped: no network probes)")
+    print("\n" + summary)
+    if "--record" in sys.argv:
+        target = Path(sys.argv[sys.argv.index("--record") + 1])
+        target.parent.mkdir(parents=True, exist_ok=True)
+        # The recorded artifact is the evidence a reader checks without re-running anything, so it carries the date,
+        # the command, and the same lines that were printed. A gate record that omits its own command is a claim.
+        # The header follows the other phases' records (`# PXX gate — recorded by tools/pXX-gate-check.py`) rather than
+        # inventing a second format: a reader comparing two phases should not have to learn two layouts.
+        invoked = [a for a in sys.argv[1:] if not a.startswith("--record")
+                   and a != sys.argv[sys.argv.index("--record") + 1]]
+        lines = ["# P12 gate — recorded by tools/p12-gate-check.py",
+                 "# command: python3 tools/p12-gate-check.py %s" % " ".join(invoked),
+                 ""] + ["%-4s %s%s" % (st, nm.ljust(width), ("  — " + w) if w else "") for st, nm, w in results] + ["", summary]
+        target.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        print("recorded: %s" % target)
     return 1 if failed else 0
 
 
