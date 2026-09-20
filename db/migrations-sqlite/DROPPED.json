@@ -26,7 +26,8 @@
     "trader_metric_snapshots",
     "wallet_pseudonyms",
     "leaderboard_exclusions",
-    "referral_accruals"
+    "referral_accruals",
+    "telegram_broadcasts"
   ],
   "tables": [
     "address_allowlist",
@@ -122,7 +123,12 @@
     "subscriptions",
     "tape_fills",
     "tape_trades",
+    "telegram_broadcasts",
+    "telegram_commands",
     "telegram_nonces",
+    "telegram_outbox",
+    "telegram_sessions",
+    "telegram_updates",
     "tokens",
     "totp_enrollments",
     "trader_follows",
@@ -316,6 +322,15 @@
     "0018_append_only_grants.sql": {
       "dropped": [
         "PG-only statement: CREATE TRIGGER append_only_leaderboard_exclusions",
+        "PG-only statement: DO $$"
+      ],
+      "check_clauses_reordered": []
+    },
+    "0019_telegram.sql": {
+      "dropped": [
+        "partial/expression index: CREATE INDEX IF NOT EXISTS telegram_updates_state_ix ON telegram_updat",
+        "partial/expression index: CREATE INDEX IF NOT EXISTS telegram_outbox_claim_ix ON telegram_outbox",
+        "PG-only statement: CREATE TRIGGER append_only_telegram_broadcasts BEFORE UPDATE OR DELETE ON tele",
         "PG-only statement: DO $$"
       ],
       "check_clauses_reordered": []

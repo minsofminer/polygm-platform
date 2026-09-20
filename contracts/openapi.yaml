@@ -2776,6 +2776,249 @@ paths:
                   - $ref: "#/components/schemas/LeaderboardBoards"
         "500": {$ref: "#/components/responses/Internal"}
 
+  /v1/telegram/webhook:
+    post:
+      tags: [telegram]
+      summary: Telegram's only entry point — the update that must never run twice
+      description: |-
+        The bot's webhook, answered by the API process rather than by a second runtime: the money path is Python,
+        and a bot written against a TypeScript framework would either reimplement the risk gate or add a network
+        hop into our own service for every trade. Telegram retries any update it did not get a 2xx for, and the
+        update most likely to arrive twice is the tap where the user pressed Confirm, so the very first statement
+        here claims `update_id` in `telegram_updates` — a primary-key insert, not a read followed by a write,
+        because two pods can receive the same retry at the same instant. A duplicate is answered 200 with
+        `replayed: true` and executes nothing.
+
+        The request is authenticated by `X-Telegram-Bot-Api-Secret-Token` rather than by a bearer: Telegram has no
+        session, so the table lists this route as public and the handler refuses it before parsing anything.
+      operationId: postTelegramWebhook
+      x-auth: none
+      x-rate-class: ingest
+      x-cache: no-store
+      x-idempotency-exempt: >-
+        the idempotency key IS Telegram's update_id, claimed in telegram_updates before anything is parsed —
+        a header would be a second and weaker key for the same fact
+      parameters:
+        - name: X-Telegram-Bot-Api-Secret-Token
+          in: header
+          required: true
+          schema: {type: string, minLength: 8, maxLength: 256}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        "200":
+          description: handled (or already handled) — 200 even when the handler refuses something, because a
+            non-2xx makes Telegram retry, and a retried /stop is traffic this route must not manufacture
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: {type: boolean}
+                  replayed: {type: boolean}
+                  state: {type: string, enum: [claimed, done, failed]}
+                  metric: {type: string}
+                  queued: {type: integer}
+                required: [ok, replayed]
+        "400": {$ref: "#/components/responses/Validation"}
+        "403": {$ref: "#/components/responses/Denied"}
+        "503": {$ref: "#/components/responses/Denied"}
+        "500": {$ref: "#/components/responses/Internal"}
+  /v1/telegram/session:
+    post:
+      tags: [telegram]
+      summary: Mini App sign-in — initData verified against the bot token, then a session
+      description: |-
+        The Mini App's only credential is the `initData` Telegram hands the webview, and it is verified with the
+        same P07 verifier the web login uses: an HMAC over the alphabetically sorted data-check-string keyed by
+        `HMAC_SHA256("WebAppData", bot_token)`, a freshness window, and a consume-once store. A tampered payload
+        fails the signature; a captured one that is presented twice fails the replay store; an expired one fails
+        the window even though its signature is perfect.
+
+        An account that is not yet linked is answered `200` with `linked: false` rather than an error: the Mini
+        App can be opened by anyone with the link, and "you have no account here yet" is a step, not a failure.
+      operationId: postTelegramSession
+      x-auth: none
+      x-rate-class: auth
+      x-cache: no-store
+      x-idempotency-exempt: >-
+        the credential is single-use by construction (auth_hash is consumed), so a retry with the same payload
+        answers 409 TELEGRAM_REPLAY
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [initData]
+              properties:
+                initData: {type: string, minLength: 8, maxLength: 8192}
+      responses:
+        "200":
+          description: a session, or a signed statement that this Telegram account has no PolyGM account yet
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Stamped"
+                  - type: object
+                    properties:
+                      linked: {type: boolean}
+                      needsLink: {type: boolean}
+                      accessToken: {type: string}
+                      refreshToken: {type: string}
+                      tokenType: {type: string}
+                      expiresInMs: {type: integer}
+                      telegramUserId: {type: string}
+                      initDataAgeS: {type: integer}
+        "400": {$ref: "#/components/responses/Validation"}
+        "401": {$ref: "#/components/responses/Denied"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/Validation"}
+        "503": {$ref: "#/components/responses/Denied"}
+        "500": {$ref: "#/components/responses/Internal"}
+  /v1/telegram/commands:
+    get:
+      tags: [telegram]
+      summary: The command surface as data — every command, its syntax, its auth level and its buttons
+      description: |-
+        Served from the same table the router dispatches from, so the documentation cannot drift from the bot. Every
+        row carries an inline-button alternative: the command surface exists for people who type, and the buttons
+        exist because most people do not.
+      operationId: getTelegramCommands
+      x-auth: none
+      x-rate-class: public-read
+      x-cache: long
+      responses:
+        "200":
+          description: the command table
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Stamped"
+                  - type: object
+                    properties:
+                      commands:
+                        type: array
+                        items: {$ref: "#/components/schemas/TelegramCommand"}
+                      note: {type: string}
+                    required: [commands]
+        "500": {$ref: "#/components/responses/Internal"}
+  /v1/telegram/drain:
+    post:
+      tags: [telegram]
+      summary: The outbox worker — send what is queued, in priority order, inside the rate budget
+      description: |-
+        Nothing is sent straight from a webhook: a plan is enqueued, and this endpoint is the only thing that calls
+        the Bot API. That is what keeps a slow Bot API from making Telegram retry a trade, and what lets a fill
+        notification survive a restart between the fill and the message. Priority leads the send order — a user's
+        own fill goes before a public channel broadcast, and a chat on cooldown does not block the queue behind it.
+      operationId: postTelegramDrain
+      x-auth: admin
+      x-rate-class: operator
+      x-cache: no-store
+      x-idempotency-exempt: >-
+        a drain is a queue read rather than a mutation a client repeats — what it sends is decided by each outbox
+        row's state, so running it twice sends nothing twice
+      parameters:
+        - name: X-Admin-Token
+          in: header
+          required: true
+          schema: {type: string, minLength: 8, maxLength: 256}
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                limit: {type: integer, minimum: 1, maximum: 100}
+      responses:
+        "200":
+          description: what went out, what was refused and whether it will be retried
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Stamped"
+                  - type: object
+                    properties:
+                      sent: {type: array, items: {type: integer}}
+                      failed:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            id: {type: integer}
+                            status: {type: integer}
+                            retry: {type: boolean}
+                      planned: {type: integer}
+                      nextInMs: {type: integer}
+                      botConfigured: {type: boolean}
+                    required: [sent, failed, planned, botConfigured]
+        "403": {$ref: "#/components/responses/Denied"}
+        "422": {$ref: "#/components/responses/Validation"}
+        "503": {$ref: "#/components/responses/Denied"}
+        "500": {$ref: "#/components/responses/Internal"}
+  /v1/telegram/metrics:
+    get:
+      tags: [telegram]
+      summary: The funnel D7 gates paid acquisition on
+      description: |-
+        DAU, commands per user, started-versus-traded chats, and the alert→trade count — read from
+        `telegram_commands`, which records one row per handled update from the first day rather than from the first
+        bad week. A chat that trades and never returns is the next chart, not a guess.
+      operationId: getTelegramMetrics
+      x-auth: admin
+      x-rate-class: operator
+      parameters:
+        - name: X-Admin-Token
+          in: header
+          required: true
+          schema: {type: string, minLength: 8, maxLength: 256}
+        - name: days
+          in: query
+          required: false
+          schema: {type: integer, minimum: 1, maximum: 90, default: 7}
+      responses:
+        "200":
+          description: the funnel
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Stamped"
+                  - type: object
+                    properties:
+                      windowDays: {type: integer}
+                      dau: {type: integer}
+                      chats: {type: integer}
+                      commandsPerUser: {type: number}
+                      startedChats: {type: integer}
+                      tradedChats: {type: integer}
+                      startToTradePct: {type: number}
+                      alertTaps: {type: integer}
+                      daily:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            day: {type: string}
+                            chats: {type: integer}
+                      note: {type: string}
+                    required: [windowDays, dau, chats]
+        "403": {$ref: "#/components/responses/Denied"}
+        "422": {$ref: "#/components/responses/Validation"}
+        "503": {$ref: "#/components/responses/Denied"}
+        "500": {$ref: "#/components/responses/Internal"}
   /v1/leaderboard/methodology:
     get:
       tags: [leaderboard]
@@ -5489,6 +5732,22 @@ components:
         ruleCount: {type: integer}
         note: {type: string}
 
+    TelegramCommand:
+      type: object
+      description: |-
+        One row of the bot's command surface. `buttons` is not decoration — a command with no inline alternative is
+        reachable only by typing it, and `menu_findings()` fails the build for one.
+      required: [name, summary, syntax, auth, response, buttons]
+      properties:
+        name: {type: string}
+        summary: {type: string}
+        syntax: {type: string}
+        auth: {type: string, enum: [public, linked, owner, admin]}
+        response: {type: string}
+        errors: {type: array, items: {type: string}}
+        buttons: {type: array, items: {type: string}}
+        touchesMoney: {type: boolean}
+        needsConfirmation: {type: boolean}
     LeaderboardMoney:
       description: |-
         USDC as a dot-decimal string — signed where the number can be negative (realised PnL, improvement,

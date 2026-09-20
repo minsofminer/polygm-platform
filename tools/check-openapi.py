@@ -48,6 +48,14 @@ TABLE_FOR_PATH = {
     ("POST", "/v1/automations"): "AUTOMATION_CREATE_RESPONSES",
     "/v1/automations/preview": "AUTOMATION_PREVIEW_RESPONSES",
     "/v1/automations/guards": "AUTOMATION_GUARD_RESPONSES",
+    # P12. The webhook answers 403 when the secret header is wrong and 503 when no secret is configured on the
+    # pod; the Mini App session answers 401 for a tampered payload and 409 for a replayed one (the same two
+    # statuses /v1/auth/telegram uses), and a drain or a metrics read is 403 without the admin token.
+    ("POST", "/v1/telegram/webhook"): "TELEGRAM_WEBHOOK_RESPONSES",
+    ("POST", "/v1/telegram/session"): "TELEGRAM_SESSION_RESPONSES",
+    "/v1/telegram/commands": "TELEGRAM_COMMANDS_RESPONSES",
+    ("POST", "/v1/telegram/drain"): "TELEGRAM_DRAIN_RESPONSES",
+    "/v1/telegram/metrics": "TELEGRAM_METRICS_RESPONSES",
     ("GET", "/v1/alerts"): "ALERT_LIST_RESPONSES",
     # Two methods on one path: the table is keyed by (verb, path) here because the two serve
     # different status sets, and a path-only row would have held the POST to the GET's list.

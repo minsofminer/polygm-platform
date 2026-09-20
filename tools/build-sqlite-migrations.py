@@ -49,7 +49,8 @@ APPEND_ONLY = ["cash_ledger", "fills", "tape_trades", "builder_attribution", "po
                # answer to "what is owed" without anybody having to ask whether a row was edited.
                # `referral_events` (P04's sketch) is GONE as of 0016 and is deliberately absent from this list:
                # an append-only promise about a dropped table is a promise about nothing.
-               "referral_accruals"]
+               "referral_accruals",
+               "telegram_broadcasts"]
 API_TABLES = {"markets", "events", "tokens", "book_levels", "tape_trades", "users", "idempotency_keys",
               "kill_switch_state", "order_intents", "orders", "fills", "cash_ledger", "position_lots",
               "position_snapshots", "builder_attribution", "feature_flags", "flag_audit", "audit_log",

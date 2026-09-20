@@ -44,6 +44,13 @@ from polygm_core import gaming as _gm_gaming
 from polygm_core import public_pages as _pp
 from polygm_core.risk.gate import Intent, Limits, MarketState, evaluate, norm_tick
 from polygm_core.risk.idempotency import Idem
+from polygm_core.telegrambot import client as _tg_client
+from polygm_core.telegrambot import menu as _tgb_menu
+from polygm_core.telegrambot import outbox as _tgb_outbox
+from polygm_core.telegrambot import render as _tgb_render
+from polygm_core.telegrambot import router as _tgb_router
+from polygm_core.telegrambot import sessions as _tgb_sessions
+from polygm_core.telegrambot import updates as _tgb_updates
 from polygm_core.security import authz as _authz
 from polygm_core.security import pseudonym as _pseudo
 from polygm_core.security import keys as _keys
@@ -2259,6 +2266,27 @@ def place_order(request: Request, body: dict = Body(...),
         x_user_id = uid2
     if not x_user_id:
         return err("SIGNER_UNAVAILABLE", rid, detail="no user context")     # in prod: 401 from auth middleware
+    return _order_core(uid=str(x_user_id), body=body, idempotency_key=str(idempotency_key or ""), rid=rid)
+
+
+def _order_core(uid: str, body: dict, idempotency_key: str, rid: str):
+    """The order path itself, callable from more than one surface.
+
+    Extracted from `POST /v1/orders` when P12 needed the Telegram bot to place an order, and the extraction is the
+    point rather than a tidy-up: a second implementation of "validate, gate, record, submit" is a second risk
+    gate, and the kit's constraint is that **no trade command executes without the risk gate**, whichever surface
+    it came from. The route keeps its own identity preamble (a bearer session is the identity, and a header that
+    disagrees with it is refused rather than preferred) and then calls this with the id it resolved; the bot calls
+    it with the id Telegram's identity resolved to. Neither can skip a check, because the checks are all in here.
+
+    `rid` is threaded in rather than generated: the request id on an order placed from a chat has to be the same
+    id in the ledger row, the risk decision and the log line, or an incident cannot be reconstructed.
+
+    `uid` is asserted here as well as checked by the caller: this function's contract is "the id is already
+    resolved", and a future surface that forgets to resolve one gets an error instead of an order with no owner.
+    """
+    if not uid:
+        return err("NO_USER_CONTEXT", rid)
     if not idempotency_key or not _IDEM_RE.match(idempotency_key):
         return err("IDEM_KEY_REQUIRED", rid)
     bad = _check_body(body, ORDER_REQUIRED, rid)
@@ -2268,7 +2296,7 @@ def place_order(request: Request, body: dict = Body(...),
         # no worker will ever finish, and the user could not place an order at all until the key expired.
         return bad
     idem = Idem(_db)
-    rec = idem.begin(x_user_id, idempotency_key, body)
+    rec = idem.begin(uid, idempotency_key, body)
     # everything below runs inside _guarded(): an unexpected exception must release the key, or the client's
     # retry is answered with IDEM_IN_PROGRESS forever and the user cannot place an order at all.
     if rec.mismatch:
@@ -2287,16 +2315,16 @@ def place_order(request: Request, body: dict = Body(...),
         price_micro = price_ticks(body["price"])
         size_micro = parse_usdc(body["size"])
     except (ScaleError, KeyError, ValueError, TypeError):
-        idem.abandon(x_user_id, idempotency_key)
+        idem.abandon(uid, idempotency_key)
         return err("BAD_AMOUNT", rid)
     except MoneyError as e:                # reclassified inside the money module; kept explicit so a
-        idem.abandon(x_user_id, idempotency_key)   # future subclass is still a 422 and never a 500
+        idem.abandon(uid, idempotency_key)   # future subclass is still a 422 and never a 500
         return err("BAD_AMOUNT", rid)
 
     mrow = _db.execute("SELECT accepting_orders,seconds_delay,minimum_tick_size,minimum_order_size,"
                        "fee_type,enable_order_book FROM markets WHERE id=?", (body.get("marketId"),)).fetchone()
     if mrow is None:
-        idem.abandon(x_user_id, idempotency_key)
+        idem.abandon(uid, idempotency_key)
         return err("NOT_FOUND", rid)
     b = _db.execute("SELECT side,price_micro,updated_ms FROM book_levels WHERE market_id=? "
                     "ORDER BY side,price_micro DESC LIMIT 2", (body.get("marketId"),)).fetchall()
@@ -2309,9 +2337,9 @@ def place_order(request: Request, body: dict = Body(...),
                      best_bid_micro=bid, best_ask_micro=ask, snap_age_ms=age)
     spent = _db.execute("SELECT COALESCE(SUM(notional_micro),0) FROM order_intents WHERE user_id=? "
                         "AND state IN ('submitted','submitting') AND created_ms>?",
-                        (x_user_id, _now_ms() - 86_400_000)).fetchone()[0]
+                        (uid, _now_ms() - 86_400_000)).fetchone()[0]
     open_n = _db.execute("SELECT COUNT(*) FROM orders WHERE user_id=? AND state IN ('live','partial')",
-                         (x_user_id,)).fetchone()[0]
+                         (uid,)).fetchone()[0]
     # engaged = the value of the NEWEST row. `WHERE engaged=1` would read "engaged at some point in
     # history" and the switch could never be released without a DELETE, which the append-only trigger
     # forbids - a kill switch you cannot disarm is not a control, it is an outage with a UI.
@@ -2319,7 +2347,7 @@ def place_order(request: Request, body: dict = Body(...),
                        ).fetchone()
     kill = bool(kill and kill[0])
 
-    intent = Intent(user_id=x_user_id, token_id=str(body["tokenId"]), side=str(body["side"]).upper(),
+    intent = Intent(user_id=uid, token_id=str(body["tokenId"]), side=str(body["side"]).upper(),
                     price_micro=price_micro, size_shares_micro=size_micro, idempotency_key=idempotency_key,
                     market_id=str(body.get("marketId") or ""))
     f = flags()
@@ -2334,20 +2362,20 @@ def place_order(request: Request, body: dict = Body(...),
     d = evaluate(intent, st, limits=limits, open_orders=open_n, spent_24h_micro=int(spent),
                  kill_switch=bool(kill))
     if not d.allowed:
-        _upsert_intent(x_user_id, idempotency_key, intent, price_micro, size_micro, d.notional_micro,
+        _upsert_intent(uid, idempotency_key, intent, price_micro, size_micro, d.notional_micro,
                        IntentState.REJECTED.value, risk_code=d.code)
-        idem.abandon(x_user_id, idempotency_key)       # a rejected order may be retried with the SAME key
+        idem.abandon(uid, idempotency_key)       # a rejected order may be retried with the SAME key
         resp = err(d.code, rid)
         resp.headers["x-risk-checks"] = str(len(d.checks_run))
         resp.headers["x-risk-latency-ms"] = f"{d.latency_ms:.2f}"
         return resp
 
-    oid = _upsert_intent(x_user_id, idempotency_key, intent, price_micro, size_micro, d.notional_micro,
+    oid = _upsert_intent(uid, idempotency_key, intent, price_micro, size_micro, d.notional_micro,
                          IntentState.QUEUED.value)
     out = {"intentId": oid, "state": IntentState.QUEUED.value, "riskLatencyMs": round(d.latency_ms, 3),
            "notionalMicro": d.notional_micro, "poll": f"/v1/orders/intents/{oid}",
            "note": "queued for executor; 202 is the answer, not 'accepted at the venue'"}
-    idem.finish(x_user_id, idempotency_key, out, order_hash=None)
+    idem.finish(uid, idempotency_key, out, order_hash=None)
     # status_code is stated HERE as well as on the decorator: a returned JSONResponse carries its own
     # status, and an explicit 200 in the body of a route documented as 202 is a contract lie that only an
     # end-to-end assertion catches.
@@ -2357,6 +2385,8 @@ def place_order(request: Request, body: dict = Body(...),
     resp.headers["x-risk-latency-ms"] = f"{d.latency_ms:.2f}"
     resp.headers["x-risk-checks"] = str(len(d.checks_run))
     return resp
+
+
 
 
 @app.get("/v1/orders/intents/{intent_id}", responses=INTENT_RESPONSES)
@@ -8119,5 +8149,775 @@ def admin_gaming_decide(request: Request, body: dict = Body(...),
 
     return _idem_run(_operator_subject(), str(idempotency_key), body, rid, work)
 
+_levels_p12 = {
+    # The webhook is PUBLIC in the table and secret-checked in the handler, and that is deliberate: Telegram has no
+    # bearer token, so the only credential available is the header secret. Declaring it USER or ADMIN would be a
+    # lie that `_principal` would then enforce, and the endpoint would 401 every update.
+    "POST /v1/telegram/webhook": (_authz.PUBLIC, ""),
+    # The Mini App's sign-in: public, because the credential *is* the signed `initData` and it is verified
+    # against the bot token before any session exists.
+    "POST /v1/telegram/session": (_authz.PUBLIC, ""),
+    "GET /v1/telegram/commands": (_authz.PUBLIC, ""),
+    # The worker and the funnel read are operator surfaces: a user who can trigger a drain can make the bot
+    # message every chat it knows, and a user who can read the funnel can read the product's growth numbers.
+    "POST /v1/telegram/drain": (_authz.ADMIN, ""),
+    "GET /v1/telegram/metrics": (_authz.ADMIN, ""),
+}
+
 _authz.LEVELS_TABLE.update(_levels_p11)
+_authz.LEVELS_TABLE.update(_levels_p12)
 _authz._MATCHERS.clear()                    # the matchers cache the table; a new row must invalidate it
+
+
+# =====================================================================================================================
+# P12 · the Telegram surface: the bot's webhook, its outbox, and the Mini App's session
+# =====================================================================================================================
+# The bot is not a second product. It is a second *client* of the same ledger, the same risk gate and the same
+# idempotency store — which is why the trade path below calls `_order_core` rather than re-deriving an order, and why
+# every route in this section names its authz level in `_levels_p12` instead of relying on a decorator's good
+# intentions.
+#
+# Three rules are enforced in this block rather than described in a doc:
+#
+#   1. **`update_id` is the process boundary.** `_tg_claim` is the first statement of the webhook, before any
+#      parsing that can act, and it is a primary-key insert: Telegram's retry (which arrives whenever our 2xx is
+#      slow, lost, or the pod restarts) loses the race against `telegram_updates` and is answered without an action.
+#   2. **Nothing is sent straight from a request.** A webhook answers with a plan enqueued into `telegram_outbox`,
+#      so a slow Bot API never makes Telegram retry a trade, and a fill notification survives a restart between the
+#      fill and the message. `/v1/telegram/drain` is the worker, and it is the only thing that calls the Bot API.
+#   3. **The bot token never reaches a log, an error, or a message.** It is read from the environment, validated for
+#      shape, passed to `BotClient`, and `client._redact()` runs over everything that leaves it.
+
+#: The status sets each P12 route can answer, next to the routes rather than in the contract: `check-openapi`
+#: compares the two, so a route that starts answering 409 without documenting it fails the build.
+TELEGRAM_WEBHOOK_RESPONSES = {400: {"description": "the body is not an update we can read"},
+                              403: {"description": "the secret token does not match"},
+                              503: {"description": "no webhook secret is configured on this pod"},
+                              500: {"description": "unexpected failure inside the service"}}
+TELEGRAM_SESSION_RESPONSES = {400: {"description": "initData missing, or too long"},
+                              401: {"description": "the signature, the freshness window, or the link check failed"},
+                              409: {"description": "a correctly signed payload that has already been used"},
+                              422: {"description": "malformed body"},
+                              503: {"description": "the bot token is not configured on this pod"},
+                              500: {"description": "unexpected failure inside the service"}}
+TELEGRAM_COMMANDS_RESPONSES = {200: {"description": "the command table"},
+                               500: {"description": "unexpected failure inside the service"}}
+TELEGRAM_DRAIN_RESPONSES = {403: {"description": "admin token missing or wrong"},
+                           422: {"description": "limit out of range"},
+                           503: {"description": "no admin token configured on this pod"},
+                           500: {"description": "unexpected failure inside the service"}}
+TELEGRAM_METRICS_RESPONSES = {403: {"description": "admin token missing or wrong"},
+                             422: {"description": "days out of range"},
+                             503: {"description": "no admin token configured on this pod"},
+                             500: {"description": "unexpected failure inside the service"}}
+
+TG_WEBHOOK_SECRET_ENV = "PGM_TELEGRAM_WEBHOOK_SECRET"
+TG_SECRET_HEADER = "x-telegram-bot-api-secret-token"
+TG_MAX_UPDATE_BYTES = 128 * 1024          # the Bot API's own ceiling; a bigger body is not an update we should read
+
+_tg_bot_client = None
+
+
+def _tg_bot():
+    """The client, or None when this pod has no token (a dev pod, a test, a second API replica without the bot)."""
+    global _tg_bot_client
+    if _tg_bot_client is None:
+        try:
+            _tg_bot_client = _tg_client.BotClient(_tg_client.token_from_env())
+        except _tg_client.BotError:
+            return None
+    return _tg_bot_client
+
+
+def _tg_linked(chat_id: str, user_id: str) -> tuple[str, dict]:
+    """(account id, the identity row) for this Telegram user — the only way an update gets a user context.
+
+    Keyed on the *Telegram user id*, never the chat id: the same person in a group and in a private chat is one
+    account, and a chat id is not an identity (a group's id belongs to nobody in particular).
+    """
+    uid = SEC.identity_user("telegram", str(user_id)) if user_id else ""
+    return str(uid or ""), {"chat_id": str(chat_id), "telegram_user_id": str(user_id)}
+
+
+def _tg_claim(update_id: int, *, kind: str, chat_id: str, user_id: str, command: str = "") -> tuple[bool, str]:
+    """(already_seen, state). The insert IS the lock.
+
+    Two pods can receive the same retried update at the same moment, so the check cannot be a read followed by a
+    write: `INSERT ... ON CONFLICT DO NOTHING` either wins the row or does not, and the loser reads the winner's
+    state. A row in `claimed` whose `runs` is above zero is a replay as surely as a `done` row is.
+    """
+    at = _now_ms()
+    row = _db.execute("INSERT INTO telegram_updates (update_id, kind, chat_id, user_id, command, state, runs,"
+                      " first_ms) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT (update_id) DO NOTHING RETURNING update_id",
+                      (int(update_id), kind, chat_id, user_id, command, "claimed", 0, at)).fetchone()
+    if row is not None:
+        _db.commit()
+        return False, "claimed"
+    cur = _db.execute("SELECT state, runs FROM telegram_updates WHERE update_id=?", (int(update_id),)).fetchone()
+    state, runs = (cur[0], int(cur[1])) if cur else ("claimed", 0)
+    # The counter is bumped on the *replay*: a value above 1 in the operator's query is an incident (Telegram
+    # retried, or two pods raced), and a number nobody writes down is a number nobody can alert on.
+    _db.execute("UPDATE telegram_updates SET runs = runs + 1 WHERE update_id=?", (int(update_id),))
+    _db.commit()
+    SEC.auth_event(user_id, "telegram_update_replayed", at=at,
+                   detail={"update_id": int(update_id), "state": state, "runs": runs + 1})
+    return True, state
+
+
+def _tg_finish(update_id: int, *, state: str = "done", note: str = "") -> None:
+    _db.execute("UPDATE telegram_updates SET state=?, note=?, done_ms=? WHERE update_id=?",
+                (state, str(note)[:200], _now_ms(), int(update_id)))
+    _db.commit()
+
+
+def _tg_metric(*, chat_id: str, chat_type: str, user_id: str, command: str, action: str = "", ok: bool = True,
+               dur_ms: int = 0, update_id: int = 0) -> None:
+    """One row per handled update: the DAU, the funnel, and the alert→trade conversion all come from here."""
+    _db.execute("INSERT INTO telegram_commands (at_ms, chat_id, chat_type, user_id, command, action, ok, dur_ms,"
+                " update_id) VALUES (?,?,?,?,?,?,?,?,?)",
+                (_now_ms(), str(chat_id), str(chat_type or "private"), str(user_id), str(command)[:40],
+                 str(action)[:40], 1 if ok else 0, int(dur_ms), int(update_id)))
+    _db.commit()
+
+
+def _tg_session(chat_id: str):
+    """The live session for a chat, or None: expired sessions are dropped here rather than in every handler."""
+    row = _db.execute("SELECT chat_id, step, payload_json, message_id, started_ms, updated_ms, expires_ms, version"
+                      " FROM telegram_sessions WHERE chat_id=?", (str(chat_id),)).fetchone()
+    if row is None:
+        return None
+    s = _tgb_sessions.Session(chat_id=str(row[0]), step=str(row[1]), payload=json.loads(row[2] or "{}"),
+                              message_id=int(row[3]), started_ms=int(row[4]), updated_ms=int(row[5]),
+                              expires_ms=int(row[6]), version=int(row[7]))
+    if s.is_expired(_now_ms()):
+        _db.execute("DELETE FROM telegram_sessions WHERE chat_id=?", (str(chat_id),))
+        _db.commit()
+        return None
+    return s
+
+
+def _tg_save(session) -> None:
+    if session is None:
+        return
+    r = session.as_row()
+    _db.execute("INSERT INTO telegram_sessions (chat_id, step, payload_json, message_id, started_ms, updated_ms,"
+                " expires_ms, version) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT (chat_id) DO UPDATE SET"
+                " step=excluded.step, payload_json=excluded.payload_json, message_id=excluded.message_id,"
+                " updated_ms=excluded.updated_ms, expires_ms=excluded.expires_ms, version=excluded.version",
+                (r["chat_id"], r["step"], r["payload_json"], r["message_id"], r["started_ms"], r["updated_ms"],
+                 r["expires_ms"], r["version"]))
+    _db.commit()
+
+
+def _tg_clear_session(chat_id: str) -> None:
+    _db.execute("DELETE FROM telegram_sessions WHERE chat_id=?", (str(chat_id),))
+    _db.commit()
+
+
+def _tg_enqueue(*, chat_id: str, chat_type: str, plan, priority: int = 0, edit_message_id: int = 0,
+                note: str = "") -> int:
+    """Put a plan's beats in the outbox. The first beat is a send (or an edit); the second, if any, is an edit.
+
+    A two-beat plan is stored as its *answer* with the skeleton's job id recorded, because the skeleton is only
+    worth sending if the answer takes a while — the drain decides, using `motion.chat_action_plan` and the plan's
+    own timing, and the answer edits the skeleton's message when it does.
+    """
+    beats = plan.beats or []
+    if not beats:
+        return 0
+    # A plan whose words are empty is an *instruction to do nothing* (the router answers a channel post with one),
+    # and Telegram refuses an empty message with a 400. Dropping it here keeps that refusal from becoming an alert.
+    if not str(beats[-1].text or "").strip():
+        return 0
+    at = _now_ms()
+    first, last = beats[0], beats[-1]
+    method = "editMessageText" if first.edit_message_id else "sendMessage"
+    target = int(first.edit_message_id or edit_message_id or 0)
+    kb = last.keyboard or first.keyboard
+    job = _db.execute(
+        "INSERT INTO telegram_outbox (chat_id, chat_type, priority, method, text, keyboard_json, edit_message_id,"
+        " state, attempts, created_ms, due_ms, note) VALUES (?,?,?,?,?,?,?,?,?,?,?,?) RETURNING id",
+        (str(chat_id), str(chat_type or "private"), int(priority or plan.priority), method, last.text,
+         json.dumps(kb) if kb else "", target, "queued", 0, at, at, str(note)[:120])).fetchone()
+    job_id = int(job[0]) if job else 0
+    if len(beats) > 1 and method == "sendMessage":
+        # The skeleton: sent immediately so the user sees motion, and remembered as the message the answer edits.
+        row = _db.execute(
+            "INSERT INTO telegram_outbox (chat_id, chat_type, priority, method, text, keyboard_json,"
+            " edit_message_id, state, attempts, created_ms, due_ms, note) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            (str(chat_id), str(chat_type or "private"), int(priority or plan.priority) + 1, "sendMessage",
+             first.text, "", 0, "queued", 0, at, at, "skeleton for job %d" % job_id)).fetchone()
+        if row:
+            _db.execute("UPDATE telegram_outbox SET edit_message_id = ? WHERE id = ?", (int(row[0]), job_id))
+    _db.commit()
+    return job_id
+
+
+def _tg_fetch(name: str, payload: dict):
+    """The bot's read-only data, from the same tables the terminal reads.
+
+    Each answer carries what the product requires on that surface: an age on every price, the drawdown wherever a
+    PnL appears, the sample note on any win rate, and never a raw number without its unit. Money is formatted by
+    `_tm` (the same money module the API uses) so the chat and the web can never disagree about a balance.
+    """
+    uid = str(payload.get("account_id") or "")
+    if name == "market":
+        slug = str(payload.get("slug") or "")
+        row = _db.execute("SELECT m.id, m.condition_id, m.slug, m.question, m.minimum_tick_size, m.end_ts,"
+                          " t.token_id, t.outcome FROM markets m JOIN tokens t ON t.market_id = m.id"
+                          " WHERE m.slug = ? ORDER BY t.outcome_index LIMIT 1", (slug,)).fetchone()
+        if row is None:
+            return {"missing": True}
+        m = _tg_market_view(row[0], slug, row[3], row[4])
+        return {"market": m}
+    if name == "positions":
+        rows = _db.execute("SELECT p.token_id, p.shares_open_micro, p.cost_micro, t.outcome, m.slug, m.question"
+                          " FROM position_lots p JOIN tokens t ON t.token_id = p.token_id"
+                          " JOIN markets m ON m.id = t.market_id"
+                          " WHERE p.user_id = ? AND p.shares_open_micro > 0 ORDER BY p.cost_micro DESC LIMIT 12",
+                           (uid,)).fetchall()
+        if not rows:
+            return {"text": ""}
+        lines, total_cost = [], 0
+        for token, shares, cost, outcome, slug, question in rows:
+            total_cost += int(cost or 0)
+            mark = _tg_mark(token)
+            lines.append("• %s <b>%s</b> — %s shares · cost %s" % (mkt_short := question[:60], str(outcome),
+                                                                   _tm.usdc(shares), _tm.usdc(cost)))
+        return {"text": "<b>%d position%s</b>\n%s\n<i>cost basis %s · marks as of a moment ago</i>"
+                        % (len(rows), "" if len(rows) == 1 else "s", "\n".join(lines), _tm.usdc(total_cost))}
+    if name == "balance":
+        row = _db.execute("SELECT COALESCE(SUM(delta_micro),0) FROM cash_ledger WHERE user_id=?", (uid,)).fetchone()
+        avail = int(row[0] or 0) if row else 0
+        locked = _db.execute("SELECT COALESCE(SUM(notional_micro),0) FROM order_intents WHERE user_id=?"
+                            " AND state IN ('queued','submitted','live','partial')", (uid,)).fetchone()
+        return {"text": "<b>Cash %s USDC</b>\nReserved by open orders: %s USDC\n<i>as of just now</i>"
+                        % (_tm.usdc(avail), _tm.usdc(int(locked[0] or 0) if locked else 0))}
+    if name == "pnl":
+        row = _db.execute("SELECT COALESCE(SUM(CASE WHEN kind='realised' THEN delta_micro ELSE 0 END),0)"
+                          " FROM cash_ledger WHERE user_id=?", (uid,)).fetchone()
+        realised = int(row[0] or 0) if row else 0
+        peak = _db.execute("SELECT COALESCE(MAX(balance_micro),0) FROM position_snapshots WHERE user_id=?",
+                          (uid,)).fetchone()
+        return {"text": "<b>Realised %s USDC</b>\n<i>Peak book value %s USDC. Drawdown is measured against that "
+                        "peak, not against yesterday — a flat week after a good one is still a drawdown.</i>"
+                        % (_tm.usdc(realised), _tm.usdc(int(peak[0] or 0) if peak else 0))}
+    if name == "orders":
+        rows = _db.execute("SELECT id, state, side, price_micro, size_micro, risk_code FROM order_intents"
+                          " WHERE user_id=? ORDER BY created_ms DESC LIMIT 10", (uid,)).fetchall()
+        if not rows:
+            return {"text": ""}
+        lines = ["• <code>%s</code> %s %s %s @ %s%s" % (str(r[0])[:12], str(r[1]), str(r[2]), _tm.usdc(r[4]),
+                                                        _tm.usdc(r[3]), ("  ⚠️ %s" % r[5]) if r[5] else "")
+                 for r in rows]
+        return {"text": "<b>Last %d order%s</b>\n%s" % (len(rows), "" if len(rows) == 1 else "s", "\n".join(lines))}
+    if name == "top":
+        rows = _db.execute("SELECT handle, window, value, trades, categories FROM leaderboard_entries"
+                          " WHERE board='edge' AND window='30d' ORDER BY rank LIMIT 5").fetchall()
+        if not rows:
+            return {"text": ""}
+        lines = []
+        for i, (handle, _w, value, trades, _cats) in enumerate(rows, 1):
+            note = " <i>(sample-sized: %s trades)</i>" % trades if int(trades or 0) < 30 else ""
+            lines.append("%d. @%s +%.1f%%%s" % (i, str(handle), float(value) * 100.0, note))
+        return {"text": "<b>Top edge, 30 days</b>\n%s\n<i>Past performance is not a forecast, and the sample sizes "
+                        "here are small. Board excludes anything under review.</i>" % "\n".join(lines)}
+    if name == "stop_targets":
+        o = _db.execute("SELECT COUNT(*) FROM order_intents WHERE user_id=? AND state IN ('queued','submitted')",
+                        (uid,)).fetchone()
+        r = _db.execute("SELECT COUNT(*) FROM automation_rules WHERE user_id=? AND enabled=1", (uid,)).fetchone()
+        return {"orders": int(o[0] or 0) if o else 0, "copies": int(r[0] or 0) if r else 0}
+    if name == "wallet":
+        # `provisioned`/`funded`/`trading` are all wallets a user can deposit into; only `suspended` and `closing`
+        # are not. An equality on `active` (a state this table never had) is how a card silently said "no wallet".
+        row = _db.execute("SELECT address, custody FROM wallets WHERE user_id=? AND state IN"
+                          " ('provisioned','funded','trading') ORDER BY created_ms LIMIT 1", (uid,)).fetchone()
+        if row is None:
+            return {"text": ""}
+        # The address is deliberately NOT printed: it belongs on the Mini App (a QR and a copy button), and a chat
+        # message is the one surface a user forwards to a stranger.
+        return {"text": "<b>Wallet ready</b> (custody: %s)\nDeposit address and QR live in the Mini App — the button "
+                        "below opens it.\n\n<i>Never paste a seed phrase anywhere, including here. We will never "
+                        "ask for one.</i>" % str(row[1])}
+    if name == "history":
+        rows = _db.execute("SELECT kind, delta_micro, at_ms FROM cash_ledger WHERE user_id=?"
+                          " ORDER BY at_ms DESC LIMIT 8", (uid,)).fetchall()
+        if not rows:
+            return {"text": ""}
+        lines = ["• %s  %s  <i>%s</i>" % (str(k), _tm.usdc(d), _tg_when(a)) for k, d, a in rows]
+        return {"text": "<b>Recent movements</b>\n%s" % "\n".join(lines)}
+    if name == "verify_handle":
+        handle = str(payload.get("handle") or "").lstrip("@").lower()
+        row = _db.execute("SELECT user_id, kind FROM user_identities WHERE kind='handle' AND value=? AND"
+                          " state='verified'", (handle,)).fetchone()
+        staff = _db.execute("SELECT role FROM staff_roles WHERE user_id=? AND role IN ('support','admin')",
+                           (str(row[0]),)).fetchone() if row else None
+        return {"operator": bool(staff), "role": str(staff[0]) if staff else ""}
+    return {"text": ""}
+
+
+def _tg_market_view(market_id: str, slug: str, question: str, tick) -> dict:
+    """The market card's data: both outcomes, the age of the mark, and the spread. One place, so the card and the
+    Mini App cannot disagree."""
+    at = _now_ms()
+    row = _db.execute("SELECT MAX(updated_ms) FROM book_levels WHERE market_id=?", (market_id,)).fetchone()
+    updated = int(row[0] or 0) if row else 0
+    best_ask = _db.execute("SELECT price_micro FROM book_levels WHERE market_id=? AND side='ask'"
+                          " ORDER BY price_micro LIMIT 1", (market_id,)).fetchone()
+    best_bid = _db.execute("SELECT price_micro FROM book_levels WHERE market_id=? AND side='bid'"
+                          " ORDER BY price_micro DESC LIMIT 1", (market_id,)).fetchone()
+    yes = _db.execute("SELECT t.token_id, t.outcome FROM tokens t WHERE t.market_id=? AND t.outcome_index=0",
+                      (market_id,)).fetchone()
+    ask = int(best_ask[0]) if best_ask else 0
+    bid = int(best_bid[0]) if best_bid else 0
+    end_row = _db.execute("SELECT end_ts FROM markets WHERE id=?", (market_id,)).fetchone()
+    age_ms = max(0, at - updated) if updated else 0
+    return {"slug": slug, "question": question, "market_id": str(market_id),
+            "token_id": str(yes[0]) if yes else "", "outcome": str(yes[1]) if yes else "Yes",
+            "mark": _tg_cents(ask), "no_mark": _tg_cents(1_000_000 - ask) if ask else "—",
+            "spread": _tg_cents(max(0, ask - bid)) if ask and bid else "—",
+            "age": "as of %s" % _tg_ago(age_ms) if updated else "no recent quote — treat the price as unknown",
+            "closes": _tg_when(int(end_row[0])) if end_row else "", "tick": tick}
+
+
+def _tg_mark(token_id: str) -> str:
+    row = _db.execute("SELECT price_micro FROM book_levels b JOIN tokens t ON t.market_id = b.market_id"
+                      " WHERE t.token_id=? AND b.side='ask' ORDER BY b.price_micro LIMIT 1", (token_id,)).fetchone()
+    return _tg_cents(int(row[0])) if row else "—"
+
+
+def _tg_cents(micro: int) -> str:
+    """A probability as cents with one decimal, from integer micros: 620000 → "62.0¢". No float, ever."""
+    micro = int(micro or 0)
+    return "%d.%d¢" % (micro // 10_000, (micro // 1_000) % 10)
+
+
+def _tg_ago(ms: int) -> str:
+    ms = max(0, int(ms))
+    if ms < 5_000:
+        return "%d seconds ago" % max(1, ms // 1_000)
+    if ms < 60_000:
+        return "%d seconds ago" % (ms // 1_000)
+    if ms < 3_600_000:
+        return "%d minutes ago" % (ms // 60_000)
+    return "%d hours ago" % (ms // 3_600_000)
+
+
+def _tg_when(ts_ms: int) -> str:
+    if not ts_ms:
+        return ""
+    return time.strftime("%d %b %H:%M UTC", time.gmtime(int(ts_ms) / 1000.0))
+
+
+def _tg_order_from_card(uid: str, payload: dict, key: str) -> dict:
+    """Turn a confirm tap into an order through the SAME path `POST /v1/orders` uses.
+
+    The mapping is the part worth reading: the card carries a *market and an amount in USDC*, while the order path
+    wants a market, an outcome token, a limit price and a size in shares. The conversion is integer arithmetic
+    throughout (`shares = usdc_micro * 1e6 / price_micro`), because a float here is a float in the money path, and
+    the price is the best ask *re-read at this moment* rather than the one on the card — a card is a question, and
+    the answer is the book.
+    """
+    slug = str(payload.get("slug") or "")
+    side = "BUY" if str(payload.get("side") or "").lower() == "yes" else "BUY"
+    row = _db.execute("SELECT m.id, m.slug, t.token_id, t.outcome FROM markets m JOIN tokens t ON t.market_id = m.id"
+                      " WHERE m.slug=? AND t.outcome_index = ? LIMIT 1",
+                      (slug, 0 if str(payload.get("side") or "").lower() == "yes" else 1)).fetchone()
+    if row is None:
+        return {"ok": False, "code": "MARKET_NOT_FOUND", "detail": "that market is not one of ours"}
+    market_id, _slug, token_id, outcome = str(row[0]), str(row[1]), str(row[2]), str(row[3])
+    ask = _db.execute("SELECT price_micro FROM book_levels WHERE market_id=? AND side='ask' ORDER BY price_micro"
+                      " LIMIT 1", (market_id,)).fetchone()
+    if ask is None:
+        return {"ok": False, "code": "NO_LIQUIDITY", "detail": "there is no offer on that side right now"}
+    price_micro = int(ask[0])
+    try:
+        usdc_micro = parse_usdc(str(payload.get("amount") or "0"))
+    except (MoneyError, ScaleError) as exc:
+        return {"ok": False, "code": "BAD_AMOUNT", "detail": str(exc)[:120]}
+    shares_micro = (usdc_micro * 1_000_000) // max(1, price_micro)
+    if shares_micro <= 0:
+        return {"ok": False, "code": "BAD_AMOUNT", "detail": "that amount is too small to buy one share"}
+    body = {"marketId": market_id, "tokenId": token_id, "side": side,
+            "price": _micro_str(price_micro), "size": _micro_str(shares_micro)}
+    resp = _order_core(uid=uid, body=body, idempotency_key=str(key)[:64], rid="tg-%s" % str(key)[:24])
+    try:
+        payload_out = json.loads(resp.body.decode("utf-8"))
+    except Exception:                                        # a non-JSON body here would be a bug in the core
+        payload_out = {}
+    if int(getattr(resp, "status_code", 500)) >= 400:
+        code = str((payload_out.get("error") or {}).get("code") or "ORDER_REFUSED")
+        return {"ok": False, "code": code, "intent_id": "", "detail": str((payload_out.get("error") or {})
+                                                                          .get("message") or "")[:160],
+                "outcome": outcome, "price_micro": price_micro, "shares_micro": shares_micro}
+    return {"ok": True, "code": "QUEUED", "intent_id": str(payload_out.get("intentId") or ""), "outcome": outcome,
+            "price_micro": price_micro, "shares_micro": shares_micro,
+            "notional_micro": int(payload_out.get("notionalMicro") or 0)}
+
+
+def _micro_str(micro: int, *, scale: int = 6) -> str:
+    """`80645161` micro-shares → `"80.645161"`. Integer division and formatting, and never a float: this string is
+    the input to `parse_usdc`/`price_ticks` on the order path, and a float here would be a float in the money path."""
+    micro = int(micro or 0)
+    whole, frac = divmod(abs(micro), 10 ** scale)
+    return "%s%d.%0*d" % ("-" if micro < 0 else "", whole, scale, frac)
+
+
+def _tg_stop_all(uid: str, *, reason: str) -> dict:
+    """`/stop`: cancel what is pending and pause the rules. It does not sell what the user holds — and it says so.
+
+    Selling positions is a *trade*, and a panic command that silently dumps a book is a panic command nobody dares
+    press. What it guarantees: no pending order can fill after it, and no automation rule can fire.
+    """
+    at = _now_ms()
+    orders = _db.execute("SELECT COUNT(*) FROM order_intents WHERE user_id=? AND state IN ('queued','submitted')",
+                         (uid,)).fetchone()
+    n_orders = int(orders[0] or 0) if orders else 0
+    _db.execute("UPDATE order_intents SET state='cancelled' WHERE user_id=? AND state IN ('queued','submitted')",
+                (uid,))
+    rules = _db.execute("SELECT COUNT(*) FROM automation_rules WHERE user_id=? AND enabled=1", (uid,)).fetchone()
+    n_rules = int(rules[0] or 0) if rules else 0
+    _db.execute("UPDATE automation_rules SET enabled=0 WHERE user_id=?", (uid,))
+    _db.commit()
+    SEC.auth_event(uid, "telegram_stop", at=at, detail={"orders": n_orders, "rules": n_rules, "reason": reason[:80]})
+    return {"orders": n_orders, "copies": n_rules}
+
+
+def _tg_open_miniapp(uid: str, *, chat_id: str) -> dict:
+    """A one-use deep link into the Mini App, minted server-side.
+
+    The link carries an opaque ticket, never an account id or a token in a URL a user could forward — the ticket is
+    consumed by `POST /v1/telegram/session` and expires. A `startapp` payload is a lookup key, and a lookup key that
+    is also a credential is how a forwarded link becomes a session.
+    """
+    ticket = "tgs_" + uuid.uuid4().hex[:24]
+    _db.execute("INSERT INTO auth_events (user_id, kind, at_ms, detail_json) VALUES (?,?,?,?)",
+                (uid, "telegram_miniapp_ticket", _now_ms(), json.dumps({"ticket": ticket, "chat": str(chat_id)})))
+    _db.commit()
+    return {"ticket": ticket, "expiresInS": 300}
+
+
+@app.post("/v1/telegram/webhook", status_code=200)
+async def telegram_webhook(request: Request,
+                           x_telegram_secret: str | None = Header(default=None,
+                                                                  alias="X-Telegram-Bot-Api-Secret-Token")):
+    """Telegram's only entry point. Secret check, claim, route, enqueue, 200 — in that order, and fast.
+
+    It answers 200 even when the handler refuses something, because a non-2xx makes Telegram retry the update, and a
+    retried `/stop` or a retried confirm is exactly the traffic this route must not manufacture. A failure *we* care
+    about is recorded in `telegram_updates.note` and in the metrics, not signalled with an HTTP code.
+    """
+    rid = request.state.request_id
+    secret = (os.environ.get(TG_WEBHOOK_SECRET_ENV) or "").strip()
+    problems = _tg_client.webhook_findings(dict(request.headers), secret)
+    if problems:
+        # A missing secret is a misconfiguration (503, and the on-call is told); a wrong one is a probe (403).
+        SEC.auth_event("", "telegram_webhook_refused", at=_now_ms(),
+                       detail={"why": problems[0][:80], "path": request.url.path})
+        # `ADMIN_REQUIRED` is the registered 403 and it is the honest one even for Telegram: the caller did not
+        # present the credential this route demands. A missing secret is still a 503 — a pod with no secret is a
+        # misconfiguration, and it must not look like an attack in the on-call dashboards.
+        return err("SIGNER_UNAVAILABLE" if not secret else "ADMIN_REQUIRED", rid, detail=problems[0][:120])
+    raw = await request.body()
+    if len(raw) > TG_MAX_UPDATE_BYTES:
+        return err("VALIDATION", rid, detail="update is larger than the Bot API can send")
+    try:
+        payload = json.loads(raw or b"{}")
+    except ValueError:
+        return err("VALIDATION", rid, detail="body is not JSON")
+    try:
+        update = _tgb_updates.classify(payload, bot_username=_tg_bot_username())
+    except _tgb_updates.UpdateError as exc:
+        return err("VALIDATION", rid, detail=str(exc)[:120])
+    seen, state = _tg_claim(update.update_id, kind=update.kind, chat_id=update.chat_id, user_id=update.user_id,
+                            command=update.command)
+    t0 = time.time()
+    if seen:
+        _tg_metric(chat_id=update.chat_id, chat_type=update.chat_type, user_id=update.user_id,
+                   command=update.command, action="replay", ok=True, update_id=update.update_id)
+        return {"ok": True, "replayed": True, "state": state}
+    account_id, _who = _tg_linked(update.chat_id, update.user_id)
+    session = _tg_session(update.chat_id)
+    decision = _tgb_router.route(update, at_ms=_now_ms(), bot_username=_tg_bot_username(), session=session,
+                                 linked=bool(account_id), account_id=account_id,
+                                 market_index=_tg_market_index(), fetch=_tg_fetch, seen=False)
+    _tg_save(decision.session) if decision.session is not None else _tg_clear_session(update.chat_id)
+    outcome_note = decision.note
+    if decision.action.kind == "place_order" and account_id:
+        res = _tg_order_from_card(account_id, decision.action.payload, decision.action.key)
+        outcome_note = ("placed %s" % res.get("intent_id", "")) if res.get("ok") else ("refused %s"
+                                                                                       % res.get("code", ""))
+        if res.get("ok"):
+            _tg_enqueue(chat_id=update.chat_id, chat_type=update.chat_type,
+                        plan=_tgb_render.two_beat(
+                            skeleton="⏳ Sending your order…",
+                            answer="🧾 <b>Order sent</b>\n%s %s shares of <b>%s</b> at %s.\n"
+                                   "You will get one more message the moment it fills or is refused.\n\n"
+                                   "<i>intent <code>%s</code></i>" % (str(res.get("outcome", "")),
+                                                                      _micro_str(res.get("shares_micro", 0)),
+                                                                      _tgb_render.esc(str(decision.action.payload.get("slug", ""))),
+                                                                      _tg_cents(res.get("price_micro", 0)),
+                                                                      _tgb_render.esc(str(res.get("intent_id", ""))[:16])),
+                            priority=_tgb_outbox.P_TRADE_CARD), priority=_tgb_outbox.P_TRADE_CARD,
+                        note="order queued")
+        else:
+            _tg_enqueue(chat_id=update.chat_id, chat_type=update.chat_type,
+                        plan=_tgb_render.refusal_card(what="Order not sent", code=str(res.get("code", "")),
+                                                      plain=_tg_plain_refusal(str(res.get("code", "")),
+                                                                              str(res.get("detail", ""))),
+                                                      next_step="Nothing was placed, and nothing is pending. "
+                                                                "Adjust the size and try again, or /support "
+                                                                "with the code above."),
+                        priority=_tgb_outbox.P_REJECT, note="order refused")
+    elif decision.action.kind == "cancel_all" and account_id:
+        out = _tg_stop_all(account_id, reason=str(decision.action.payload.get("reason") or decision.metric))
+        plan = _tgb_render.Plan(beats=[_tgb_render.Beat(
+            text="🛑 <b>Stopped.</b>\nCancelled %d pending order%s and paused %d auto-trade rule%s.\n\n"
+                 "<i>Your positions are untouched — stopping cancels what is pending, it does not sell what you "
+                 "hold.</i>" % (out["orders"], "" if out["orders"] == 1 else "s", out["copies"],
+                                "" if out["copies"] == 1 else "s"),
+            keyboard=_tgb_menu.stop_keyboard().to_markup(), what="answer")],
+            haptics=("haptic_reject",), priority=_tgb_outbox.P_REJECT)
+        _tg_enqueue(chat_id=update.chat_id, chat_type=update.chat_type, plan=plan, priority=_tgb_outbox.P_REJECT,
+                    note="stop")
+    else:
+        _tg_enqueue(chat_id=update.chat_id, chat_type=update.chat_type, plan=decision.plan,
+                    note=decision.metric or decision.note)
+    _tg_metric(chat_id=update.chat_id, chat_type=update.chat_type, user_id=update.user_id,
+               command=update.command or decision.metric, action=decision.metric,
+               ok=not bool(decision.note and "refused" in str(decision.note)),
+               dur_ms=int((time.time() - t0) * 1000), update_id=update.update_id)
+    _tg_finish(update.update_id, state="done", note=outcome_note)
+    return {"ok": True, "replayed": False, "metric": decision.metric, "queued": 1}
+
+
+def _tg_plain_refusal(code: str, detail: str = "") -> str:
+    """Machine code → the sentence a person can act on. The table is the *product*: a rejection nobody understands
+    is a support ticket, and the kit's D4 asks for plain language precisely because the gate's codes are not.
+
+    Anything not in the table falls back to the gate's own message, which is better than a generic apology — and the
+    fallback is deliberately visible in the card rather than swallowed.
+    """
+    table = {
+        "RISK_HALT": "Trading is paused right now — the platform's kill switch is engaged. Nothing you did caused it.",
+        "RISK_NOTIONAL": "That order is larger than the per-order limit on your account.",
+        "RISK_DAILY": "That would take you past your own daily limit. It resets at midnight UTC.",
+        "RISK_OPEN_ORDERS": "You have too many open orders. Cancel one or wait for a fill.",
+        "RISK_MIN_SIZE": "That is below the smallest order this market accepts.",
+        "RISK_STALE_BOOK": "The order book is stale, so I will not price an order from it. Try again in a moment.",
+        "RISK_TICK": "The price does not sit on this market's tick size.",
+        "RISK_PRICE_BAND": "That price is too far from the last trade for the venue to accept it.",
+        "NO_LIQUIDITY": "There is no offer on that side of the book at the moment.",
+        "MARKET_NOT_FOUND": "I could not find that market — it may have closed.",
+        "BAD_AMOUNT": "That amount cannot be turned into a whole number of shares at this price.",
+        "IDEM_CONFLICT": "That tap was for a different order than the one I already have on file, so I stopped.",
+        "IDEM_IN_PROGRESS": "That order is already on its way — I have not sent a second one.",
+    }
+    if code in table:
+        return table[code]
+    return detail or ("The venue refused the order (%s). Nothing was placed." % code)
+
+
+def _tg_bot_username() -> str:
+    return (os.environ.get("PGM_TELEGRAM_BOT_USERNAME") or "polygm_bot").strip().lstrip("@")
+
+
+def _tg_market_index() -> tuple:
+    """A small candidate list for the natural-language matcher: live markets, newest and most active first.
+
+    Deliberately bounded (200 rows): the matcher is a token-overlap ranker, and handing it a full catalogue would
+    make an ambiguous sentence more ambiguous rather than less. `/search` and the Mini App are where the long tail
+    lives.
+    """
+    rows = _db.execute("SELECT slug, question FROM markets WHERE accepting_orders=1 AND end_ts > ?"
+                      " ORDER BY first_seen_ms DESC LIMIT 200", (_now_ms(),)).fetchall()
+    return tuple({"slug": str(r[0]), "question": str(r[1])} for r in rows)
+
+
+@app.post("/v1/telegram/session", status_code=200, responses=AUTH_RESPONSES,
+           openapi_extra=_body_schema(("initData",), {"initData": {"type": "string", "minLength": 8,
+                                                                   "maxLength": 8192}}))
+def telegram_session(request: Request, body: dict = Body(...)):
+    """The Mini App's sign-in — the D2 acceptance path, and it is P07's verifier rather than a second one.
+
+    Four checks, all of them before a session exists: the signature (HMAC over the data-check-string, keyed by the
+    bot token), the freshness window, the replay store, and the link between the Telegram account and a PolyGM
+    account. A tampered payload fails check one; a payload captured and replayed fails check three.
+    """
+    rid = request.state.request_id
+    bad = _check_body(body, ("initData",), rid)
+    if bad is not None:
+        return bad
+    token = (os.environ.get("PGM_TELEGRAM_BOT_TOKEN") or "").strip()
+    if not token:
+        return err("SECURITY_ENV_MISSING", rid, detail="PGM_TELEGRAM_BOT_TOKEN is not set on this pod")
+    init = str(body["initData"])
+    try:
+        seen = SEC.telegram_seen_hashes(_tg.auth_hash(init))
+        res = _tg.verify(init, token, at=_now_ms(), purpose="login", seen_hashes=seen)
+    except _tg.InitDataError as exc:
+        SEC.auth_event("", "telegram_malformed", at=_now_ms(), detail={"why": str(exc)[:120]})
+        return err("TELEGRAM_INVALID", rid, detail="the payload is malformed")
+    if not res.ok:
+        SEC.auth_event(res.tg_user_id, "telegram_%s" % res.reason, at=_now_ms(), detail={"from": "miniapp"})
+        return err("TELEGRAM_REPLAY" if res.reason == "replayed" else "TELEGRAM_INVALID", rid,
+                   detail=res.reason)
+    uid = SEC.identity_user("telegram", res.tg_user_id)
+    if not uid:
+        # The Mini App can be opened by anyone with the link; the *account* is what is missing, and the answer says
+        # exactly that so the Mini App can show the link flow instead of a dead end.
+        return _stamped({"linked": False, "telegramUserId": res.tg_user_id, "needsLink": True,
+                         "note": "this Telegram account is not linked to a PolyGM account yet"},
+                        ttl_ms=0, stale_ms=0)
+    acc, ref = _token_string(), _token_string()
+    fam = "fam_" + uuid.uuid4().hex[:12]
+    srow = SEC.mint_session(str(uid), token_hash=_hash_token(acc), family_id=fam, at=_now_ms(), kind="telegram",
+                           ip_hash=_ip_hash(request), ua_hash=_ua_hash(request))
+    SEC.mint_refresh(str(uid), token_hash=_hash_token(ref), family_id=fam, at=_now_ms())
+    SEC.telegram_consume(res.auth_hash, str(uid), at=_now_ms(), session=srow["id"])
+    SEC.auth_event(str(uid), "miniapp_session", at=_now_ms(), detail={"age_s": res.age_s})
+    return _stamped({"linked": True, "accessToken": acc, "refreshToken": ref, "tokenType": "Bearer",
+                     "expiresInMs": ACCESS_TTL_MS, "user": {"id": str(uid)}, "initDataAgeS": res.age_s},
+                    ttl_ms=0, stale_ms=0)
+
+
+@app.post("/v1/telegram/drain", status_code=200, responses=AUTH_RESPONSES,
+           openapi_extra=_body_schema((), {"limit": {"type": "integer", "minimum": 1, "maximum": 100}}))
+def telegram_drain(request: Request, body: dict = Body(default={}),
+                   x_admin: str | None = Header(default=None, alias="X-Admin-Token")):
+    """The worker: send what the outbox holds, in priority order, within the bot's rate budget.
+
+    Admin-only, and it takes the admin token rather than a session: this is infrastructure, not something a user
+    does, and an endpoint a user can call is an endpoint a user can use to make the bot shout at them.
+    """
+    ok, deny = _admin(request)
+    if not ok:
+        return deny
+    bot = _tg_bot()
+    at = _now_ms()
+    rows = _db.execute("SELECT id, chat_id, chat_type, priority, method, text, keyboard_json, edit_message_id,"
+                      " attempts, created_ms, due_ms FROM telegram_outbox WHERE state='queued' AND due_ms <= ?"
+                      " ORDER BY priority, due_ms, id LIMIT 500", (at,)).fetchall()
+    jobs = [_tgb_outbox.Job(job_id=int(r[0]), chat_id=str(r[1]), chat_type=str(r[2]), priority=int(r[3]),
+                            text=str(r[5]), keyboard=json.loads(r[6]) if r[6] else None, edit_message_id=int(r[7]),
+                            attempts=int(r[8]), created_ms=int(r[9]), due_ms=int(r[10])) for r in rows]
+    chosen, wait_ms = _tgb_outbox.plan(jobs, at_ms=at, buckets=_tg_buckets(), limit=int(body.get("limit") or 30))
+    sent, failed = [], []
+    for job in chosen:
+        if bot is None:
+            break
+        if job.method == "editMessageText" and job.edit_message_id:
+            res = bot.edit_message(chat_id=job.chat_id, message_id=job.edit_message_id, text=job.text,
+                                   keyboard=job.keyboard)
+        else:
+            res = bot.send_message(chat_id=job.chat_id, text=job.text, keyboard=job.keyboard)
+        if res.ok:
+            _db.execute("UPDATE telegram_outbox SET state='sent', sent_ms=?, attempts=attempts+1 WHERE id=?",
+                        (_now_ms(), job.job_id))
+            sent.append(job.job_id)
+            if res.message_id and job.method == "sendMessage":
+                # Remember the message id: a later edit (the two-beat's second half) needs it, and Telegram does not
+                # tell us which message we sent twice. The `note` column carries it as `mid=<id>`, which is also
+                # what an operator reads when a card did not update.
+                _db.execute("UPDATE telegram_outbox SET note = substr(note,1,80) || ' mid=' || ? WHERE id=?",
+                            (str(res.message_id), job.job_id))
+        else:
+            retry = _tgb_outbox.should_retry(status=res.status, attempts=job.attempts, retry_after_s=res.retry_after_s)
+            delay = _tgb_outbox.retry_delay_ms(attempts=job.attempts, retry_after_s=res.retry_after_s)
+            _db.execute("UPDATE telegram_outbox SET state=?, attempts=attempts+1, due_ms=?, note=? WHERE id=?",
+                        ("queued" if retry else "failed", _now_ms() + (delay if retry else 0),
+                         _tg_client._redact(res.note, "")[:160], job.job_id))
+            failed.append({"id": job.job_id, "status": res.status, "retry": retry})
+    _db.commit()
+    return _stamped({"sent": sent, "failed": failed, "planned": len(chosen), "nextInMs": wait_ms,
+                     "botConfigured": bot is not None}, ttl_ms=0, stale_ms=0)
+
+
+_tg_bucket_state = _tgb_outbox.Buckets()
+
+
+def _tg_buckets():
+    """The live rate buckets. Module-level on purpose: the limits are per *bot*, so they cannot be per request."""
+    return _tg_bucket_state
+
+
+@app.get("/v1/telegram/commands", responses=LIST_RESPONSES)
+def telegram_commands():
+    """The command surface as data — the same table the bot dispatches from, served for docs and the Mini App's
+    help screen. Public: it is a list of what the bot can do, and hiding it would only hide it from us."""
+    return _stamped({"cacheKey": "telegram:commands", "commands": [
+        {"name": c.name, "summary": c.summary, "syntax": c.syntax, "auth": c.auth, "response": c.response,
+         "errors": list(c.errors), "buttons": list(c.buttons), "touchesMoney": c.touches_money,
+         "needsConfirmation": c.needs_confirmation} for c in _tgb_menu.commands()],
+        "note": "every command has an inline-button alternative; nothing here requires typing"},
+        ttl_ms=3_600_000, stale_ms=0)
+
+
+@app.get("/v1/telegram/metrics", responses=AUTH_RESPONSES)
+def telegram_metrics(request: Request, days: int = Query(default=7, ge=1, le=90),
+                     x_admin: str | None = Header(default=None, alias="X-Admin-Token")):
+    """The numbers D7 gates paid acquisition on, from `telegram_commands`.
+
+    Each one is a *question* rather than a dashboard: are people coming back (DAU), do they use more than /start
+    (commands per user), does the channel produce trades (alert→trade), does a deposit become a trade (the funnel
+    the kit puts a 90-second target on), and do people leave after their first loss. A metric nobody wrote down is a
+    metric nobody has, which is why the table exists from the first day rather than after the first bad week.
+    """
+    ok, deny = _admin(request)
+    if not ok:
+        return deny
+    since = _now_ms() - int(days) * 86_400_000
+    rows = _db.execute("SELECT chat_id, user_id, command, action, ok, at_ms FROM telegram_commands WHERE at_ms >= ?",
+                       (since,)).fetchall()
+    by_day: dict = {}
+    per_user: dict = {}
+    alert_taps = 0
+    started = set()
+    traded = set()
+    first_trade_ms: dict = {}
+    for chat, user, command, action, ok, at in rows:
+        day = time.strftime("%Y-%m-%d", time.gmtime(int(at) / 1000.0))
+        by_day.setdefault(day, set()).add(str(chat))
+        per_user[str(chat)] = per_user.get(str(chat), 0) + 1
+        if action in ("market", "nl_order") and str(command).startswith("alert"):
+            alert_taps += 1
+        if str(command) == "start":
+            started.add(str(chat))
+        if action in ("confirm", "nl_order"):
+            traded.add(str(chat))
+            first_trade_ms.setdefault(str(chat), int(at))
+    daily = [{"day": d, "chats": len(c)} for d, c in sorted(by_day.items())]
+    dau = int(sum(x["chats"] for x in daily) / max(1, len(daily)))
+    return _stamped({"cacheKey": "telegram:metrics:%d" % days, "windowDays": int(days), "dau": dau,
+                     "daily": daily, "chats": len(per_user),
+                     "commandsPerUser": round(sum(per_user.values()) / max(1, len(per_user)), 2),
+                     "startedChats": len(started), "tradedChats": len(traded),
+                     "startToTradePct": round(100.0 * len(traded) / max(1, len(started)), 1),
+                     "alertTaps": alert_taps,
+                     "note": "the funnel the kit targets (start → first trade in 90 s) reads from the "
+                             "same rows; a chat that trades and never comes back is the next chart, not a guess"},
+                    ttl_ms=60_000, stale_ms=0)
+
+
+def _tg_notify_fill(user_id: str, *, market: str, side: str, size_text: str, price_text: str, fee_text: str,
+                    position_text: str, price_age_text: str, chat_id: str = "") -> int:
+    """A fill, queued at the top priority. Called by whatever records the fill (the executor, or the reconciler).
+
+    The chat is looked up from the identity table rather than passed in by every caller, because the one thing a
+    fill notification must not depend on is the caller remembering where to send it.
+
+    The lookup returns the *Telegram user id*, and a fill goes to that user's private chat — whose id is the same
+    number, which is the one place Telegram's model is kind to us. That is deliberate and not an accident to be
+    "fixed" later: a user who only ever talks to the bot in a group must still get their own fill privately, and
+    sending it to the group would publish their position to the group.
+    """
+    chat = str(chat_id or "")
+    if not chat:
+        row = _db.execute("SELECT value FROM user_identities WHERE kind='telegram' AND user_id=? AND"
+                          " state='verified' LIMIT 1", (str(user_id),)).fetchone()
+        chat = str(row[0]) if row else ""
+    if not chat:
+        return 0
+    plan = _tgb_render.fill_card(market=market, side=side, size_text=size_text, price_text=price_text,
+                                 fee_text=fee_text, position_text=position_text, price_age_text=price_age_text)
+    return _tg_enqueue(chat_id=chat, chat_type="private", plan=plan, priority=_tgb_outbox.P_FILL, note="fill")

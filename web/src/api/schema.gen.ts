@@ -1167,6 +1167,129 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/telegram/webhook": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Telegram's only entry point — the update that must never run twice
+         * @description The bot's webhook, answered by the API process rather than by a second runtime: the money path is Python,
+         *     and a bot written against a TypeScript framework would either reimplement the risk gate or add a network
+         *     hop into our own service for every trade. Telegram retries any update it did not get a 2xx for, and the
+         *     update most likely to arrive twice is the tap where the user pressed Confirm, so the very first statement
+         *     here claims `update_id` in `telegram_updates` — a primary-key insert, not a read followed by a write,
+         *     because two pods can receive the same retry at the same instant. A duplicate is answered 200 with
+         *     `replayed: true` and executes nothing.
+         *
+         *     The request is authenticated by `X-Telegram-Bot-Api-Secret-Token` rather than by a bearer: Telegram has no
+         *     session, so the table lists this route as public and the handler refuses it before parsing anything.
+         */
+        post: operations["postTelegramWebhook"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/telegram/session": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Mini App sign-in — initData verified against the bot token, then a session
+         * @description The Mini App's only credential is the `initData` Telegram hands the webview, and it is verified with the
+         *     same P07 verifier the web login uses: an HMAC over the alphabetically sorted data-check-string keyed by
+         *     `HMAC_SHA256("WebAppData", bot_token)`, a freshness window, and a consume-once store. A tampered payload
+         *     fails the signature; a captured one that is presented twice fails the replay store; an expired one fails
+         *     the window even though its signature is perfect.
+         *
+         *     An account that is not yet linked is answered `200` with `linked: false` rather than an error: the Mini
+         *     App can be opened by anyone with the link, and "you have no account here yet" is a step, not a failure.
+         */
+        post: operations["postTelegramSession"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/telegram/commands": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The command surface as data — every command, its syntax, its auth level and its buttons
+         * @description Served from the same table the router dispatches from, so the documentation cannot drift from the bot. Every
+         *     row carries an inline-button alternative: the command surface exists for people who type, and the buttons
+         *     exist because most people do not.
+         */
+        get: operations["getTelegramCommands"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/telegram/drain": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * The outbox worker — send what is queued, in priority order, inside the rate budget
+         * @description Nothing is sent straight from a webhook: a plan is enqueued, and this endpoint is the only thing that calls
+         *     the Bot API. That is what keeps a slow Bot API from making Telegram retry a trade, and what lets a fill
+         *     notification survive a restart between the fill and the message. Priority leads the send order — a user's
+         *     own fill goes before a public channel broadcast, and a chat on cooldown does not block the queue behind it.
+         */
+        post: operations["postTelegramDrain"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/telegram/metrics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The funnel D7 gates paid acquisition on
+         * @description DAU, commands per user, started-versus-traded chats, and the alert→trade count — read from
+         *     `telegram_commands`, which records one row per handled update from the first day rather than from the first
+         *     bad week. A chat that trades and never returns is the next chart, not a guess.
+         */
+        get: operations["getTelegramMetrics"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/leaderboard/methodology": {
         parameters: {
             query?: never;
@@ -3066,6 +3189,22 @@ export interface components {
             plan: string;
             ruleCount: number;
             note: string;
+        };
+        /**
+         * @description One row of the bot's command surface. `buttons` is not decoration — a command with no inline alternative is
+         *     reachable only by typing it, and `menu_findings()` fails the build for one.
+         */
+        TelegramCommand: {
+            name: string;
+            summary: string;
+            syntax: string;
+            /** @enum {string} */
+            auth: "public" | "linked" | "owner" | "admin";
+            response: string;
+            errors?: string[];
+            buttons: string[];
+            touchesMoney?: boolean;
+            needsConfirmation?: boolean;
         };
         /**
          * @description USDC as a dot-decimal string — signed where the number can be negative (realised PnL, improvement,
@@ -6360,6 +6499,194 @@ export interface operations {
                 };
             };
             500: components["responses"]["Internal"];
+        };
+    };
+    postTelegramWebhook: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Telegram-Bot-Api-Secret-Token": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    [key: string]: unknown;
+                };
+            };
+        };
+        responses: {
+            /** @description handled (or already handled) — 200 even when the handler refuses something, because a non-2xx makes Telegram retry, and a retried /stop is traffic this route must not manufacture */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        ok: boolean;
+                        replayed: boolean;
+                        /** @enum {string} */
+                        state?: "claimed" | "done" | "failed";
+                        metric?: string;
+                        queued?: number;
+                    };
+                };
+            };
+            400: components["responses"]["Validation"];
+            403: components["responses"]["Denied"];
+            500: components["responses"]["Internal"];
+            503: components["responses"]["Denied"];
+        };
+    };
+    postTelegramSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    initData: string;
+                };
+            };
+        };
+        responses: {
+            /** @description a session, or a signed statement that this Telegram account has no PolyGM account yet */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Stamped"] & {
+                        linked?: boolean;
+                        needsLink?: boolean;
+                        accessToken?: string;
+                        refreshToken?: string;
+                        tokenType?: string;
+                        expiresInMs?: number;
+                        telegramUserId?: string;
+                        initDataAgeS?: number;
+                    };
+                };
+            };
+            400: components["responses"]["Validation"];
+            401: components["responses"]["Denied"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Validation"];
+            500: components["responses"]["Internal"];
+            503: components["responses"]["Denied"];
+        };
+    };
+    getTelegramCommands: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description the command table */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Stamped"] & {
+                        commands: components["schemas"]["TelegramCommand"][];
+                        note?: string;
+                    };
+                };
+            };
+            500: components["responses"]["Internal"];
+        };
+    };
+    postTelegramDrain: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Admin-Token": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    limit?: number;
+                };
+            };
+        };
+        responses: {
+            /** @description what went out, what was refused and whether it will be retried */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Stamped"] & {
+                        sent: number[];
+                        failed: {
+                            id?: number;
+                            status?: number;
+                            retry?: boolean;
+                        }[];
+                        planned: number;
+                        nextInMs?: number;
+                        botConfigured: boolean;
+                    };
+                };
+            };
+            403: components["responses"]["Denied"];
+            422: components["responses"]["Validation"];
+            500: components["responses"]["Internal"];
+            503: components["responses"]["Denied"];
+        };
+    };
+    getTelegramMetrics: {
+        parameters: {
+            query?: {
+                days?: number;
+            };
+            header: {
+                "X-Admin-Token": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description the funnel */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Stamped"] & {
+                        windowDays: number;
+                        dau: number;
+                        chats: number;
+                        commandsPerUser?: number;
+                        startedChats?: number;
+                        tradedChats?: number;
+                        startToTradePct?: number;
+                        alertTaps?: number;
+                        daily?: {
+                            day?: string;
+                            chats?: number;
+                        }[];
+                        note?: string;
+                    };
+                };
+            };
+            403: components["responses"]["Denied"];
+            422: components["responses"]["Validation"];
+            500: components["responses"]["Internal"];
+            503: components["responses"]["Denied"];
         };
     };
     getLeaderboardMethodology: {
