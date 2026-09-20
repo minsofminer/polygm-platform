@@ -30,7 +30,9 @@ web/src/screens/MarketRail.tsx        D6: info rail, resolution text, holders wi
 web/src/screens/MarketView.tsx        the binary/few-outcome composition (chart + book + ticket + rail)
 web/src/screens/EventView.tsx         the negRisk composition (outcome table drives the book)
 web/app/markets/page.tsx              SSR of the first page, then hand-off to MarketsClient
-web/app/market/[market_id]/page.tsx   SSR detail; 404 → notFound()
+web/app/market/[market]/page.tsx   SSR detail; 404 → notFound()  (D6 renamed the segment `[market_id]` →
+                                     `[market]`: one folder serves both `/market/<0x id>` and `/market/<slug>`,
+                                     because Next forbids two dynamic names at the same level)
 web/app/event/[event_id]/page.tsx     SSR event + first outcome's book
 ```
 
@@ -248,7 +250,7 @@ Three things this phase deliberately did not build, each with the reason and the
 Numbers are what the gate pairs the `[UNVERIFIED — confirm before launch: …]` slugs against; the items are
 owned by roles the launch review replaces with people.
 
-1. **`lighthouse-routes` — Lighthouse ≥ 90 on `/markets`, `/market/[market_id]` and `/event/[event_id]`, with
+1. **`lighthouse-routes` — Lighthouse ≥ 90 on `/markets`, `/market/<id or slug>` and `/event/[event_id]`, with
    LCP < 2.5 s on a mid-range Android over throttled 4G.** The budget has 2 KB of room; the commit that pushes
    `/markets` over 200 KB is the moment this becomes a blocker. `[owner: frontend-owner]`
 2. **`frame-trace-ladder` — a DevTools trace of the book at 10 Hz for 60 s with 200 levels per side**, plus a

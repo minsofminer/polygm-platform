@@ -49,4 +49,12 @@ export const ROUTE_NOTES: Readonly<Partial<Record<RouteKey, string>>> = {
   addressList: "the list carries no full address by design; the add response is the only reveal",
   addressRemove: "factor-protected: a missing code is a 403 TOTP_REQUIRED, so the screen asks before it sends",
   linkWallet: "needs the signature challenge; P07 refused to consume a proof without one, this is where it is made",
+  // D6's five public rows. Their notes are one line each for the same reason every other note here is: this
+  // module is read by the gate and by its own test, never by a screen — but a public route is worth a sentence
+  // precisely because nothing in the app calls it.
+  publicTraderPage: "the row, its nine standings, the qualifiers and the card; a handle that is not listed is a 404",
+  publicMarketPage: "the odds with their age, the order-book state and the resolution text as plain text",
+  publicBoardPage: "the board's formula, gate and tie-breaks above rows that each carry their own sample size",
+  publicSitemap: "handles, boards and markets, with the caps and the truncation served beside the URLs",
+  publicBlocks: "operator-only: the live blocks, each with its reason, listed by digest and never by address",
 };

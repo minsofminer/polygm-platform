@@ -327,8 +327,8 @@ class TestCodesAndLinks(unittest.TestCase):
         self.assertNotEqual(token, rc.make_token())
         self.assertNotEqual(rc.make_token(seed="fixed"), rc.make_token(seed="fixed"),
                             "a seed mixes in; it is not the source of the entropy")
-        self.assertEqual(rc.link_for(token), "https://polygm.app/r/" + token)
-        self.assertEqual(rc.code_link("Polymarket-Mike"), "https://polygm.app/r/c/polymarketmike")
+        self.assertEqual(rc.link_for(token), "https://openout.app/r/" + token)
+        self.assertEqual(rc.code_link("Polymarket-Mike"), "https://openout.app/r/c/polymarketmike")
         self.assertEqual(rc.normalise("Poly-Mike"), "polymike")
         with self.assertRaises(ValueError):
             rc.link_for("mike")

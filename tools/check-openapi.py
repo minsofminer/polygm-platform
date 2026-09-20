@@ -125,6 +125,14 @@ TABLE_FOR_PATH = {
     "/v1/referrals/accrue": "REFERRAL_ACCRUE_RESPONSES",
     ("GET", "/v1/referrals/review"): "REFERRAL_REVIEW_RESPONSES",
     ("POST", "/v1/referrals/review"): "REFERRAL_REVIEW_SET_RESPONSES",
+    # D6: the public pages. The trades that make a platform findable are the ones it does not require a session
+    # for, and they are the same six routes a crawler and a scraper both find — hence a table each.
+    "/v1/public/trader/{handle}": "PUBLIC_TRADER_RESPONSES",
+    "/v1/public/market/{slug}": "PUBLIC_MARKET_RESPONSES",
+    "/v1/public/leaderboard/{board}": "PUBLIC_BOARD_RESPONSES",
+    "/v1/public/sitemap": "PUBLIC_SITEMAP_RESPONSES",
+    ("GET", "/v1/public/blocks"): "PUBLIC_BLOCK_LIST_RESPONSES",
+    ("POST", "/v1/public/blocks"): "PUBLIC_BLOCK_RESPONSES",
     # A path with a read and a write has TWO tables, and they differ by exactly the rows that describe the
     # difference: only the write takes an Idempotency-Key, so only the write answers its 400. Keyed by
     # (verb, path) and looked up before the bare path, because a single name per path would force one of the
@@ -325,11 +333,6 @@ def compare_live(rep: Report, doc: dict, ops: dict) -> None:
     except Exception as e:  # noqa: BLE001 — an app that will not boot IS the finding, not a skipped check
         rep.fail("app imports — %s: %s" % (type(e).__name__, e))
         return
-    try:
-        os.remove(db)
-    except OSError:
-        pass
-
     live: dict[str, set[str]] = {}
     for route in impl.app.routes:
         methods = getattr(route, "methods", None)
@@ -450,6 +453,20 @@ def compare_live(rep: Report, doc: dict, ops: dict) -> None:
     with contextlib.redirect_stdout(io.StringIO()):
         r = client.get("/v1/markets", params={"sortBy": probe})
     rep.check("a sort the contract does NOT claim is rejected", r.status_code == 422, "got %d" % r.status_code)
+
+    # The throwaway database is removed HERE, after the live probes and not straight after the import. It used to
+    # be removed before them, which was invisible for as long as the app held one shared connection open: POSIX
+    # keeps the inode alive for an open handle, so every probe read the migrated-but-unlinked file and passed.
+    # The day a connection is opened *per thread* — which is what P11's D6 sweep had to do, because one shared
+    # `sqlite3` connection across uvicorn's thread pool raises `InterfaceError` under load — the removal turned
+    # seven live probes into `no such table: markets` 500s, because `sqlite3.connect` cheerfully creates an empty
+    # database at a path it cannot find. A cleanup that only works while the thing it cleans is still open is not
+    # a cleanup; it is an accident with a comment on it.
+    for suffix in ("", "-wal", "-shm"):
+        try:
+            os.remove(db + suffix)
+        except OSError:
+            pass
 
 
 def schema_agreement(contract: dict, served: dict) -> list[str]:

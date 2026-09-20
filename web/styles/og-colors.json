@@ -1,0 +1,16 @@
+{
+  "note": "generated from brand/tokens.css by tools/build-web-tokens.mjs — an ImageResponse draws outside the document, so it cannot read a custom property; this file is the token, not a copy of it",
+  "theme": "dark",
+  "colors": {
+    "bg-base": "#0c0e13",
+    "bg-elevated": "#1c1f27",
+    "border-strong": "#45474e",
+    "text-primary": "#e6edf3",
+    "text-secondary": "#8b929b",
+    "text-muted": "#62646a",
+    "brand-primary": "#2e5cff",
+    "brand-on-primary": "#ffffff",
+    "result-profit": "#16a34a",
+    "result-loss": "#ef4444"
+  }
+}

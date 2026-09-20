@@ -1043,14 +1043,25 @@ def integration_findings(srv) -> list:
     import threading
     results: list = []
     threads = [threading.Thread(target=lambda: results.append(
-        req(srv, "GET", "/api/v1/markets", cookies=expired, headers=origin)[0])) for _ in range(5)]
+        req(srv, "GET", "/api/v1/markets", cookies=expired, headers=origin))) for _ in range(5)]
     for th in threads:
         th.start()
     for th in threads:
         th.join(40)
-    if len(results) != 5 or any(s != 200 for s in results):
+    # The statuses alone are not actionable: a 500 from the API and a 500 from the proxy look identical in a
+    # list of five numbers, and this drill failed twice on a loaded machine with exactly that list. Capture the
+    # body and the API's log tail for the failing ones — a drill that cannot say WHY it failed is a drill whose
+    # next failure costs another afternoon.
+    if len(results) != 5 or any(r[0] != 200 for r in results):
+        detail = "; ".join("%d %s" % (r[0], (r[1] or "")[:160]) for r in results if r[0] != 200)
+        tail = ""
+        try:
+            tail = open(srv.log_path).read()[-600:].replace("\n", " ")[-400:]
+        except Exception:
+            pass
         problems.append("5 concurrent reads on an expired access token gave %s — that is the refresh "
-                        "single-flight failing, and upstream it ends every session the user has" % results)
+                        "single-flight failing, and upstream it ends every session the user has | %s | api: %s"
+                        % ([r[0] for r in results], detail, tail))
     st, body, _ = req(srv, "GET", "/profile")
     if st not in (302, 307, 308) and "Terminal" in body:
         problems.append("an anonymous /profile response carried the protected frame (%d) — the logged-out flash" % st)

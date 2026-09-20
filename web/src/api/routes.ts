@@ -156,6 +156,33 @@ export const ROUTES = {
     whileMissing: "refuses",
     owner: "P11",
   },
+  // P11 D6: the public pages. Five rows for six operations: `/v1/public/blocks` is a READ and a WRITE with
+  // different status sets, and only the read is reachable from a screen — the write is an operator's lever
+  // (admin token), so it is deliberately NOT in this ledger. A screen that could block an address is a screen
+  // that can silence a reader.
+  publicTraderPage: {
+    method: "GET",
+    path: "/v1/public/trader/{handle}",
+    built: true,
+    whileMissing: "refuses",
+    owner: "P11",
+  },
+  publicMarketPage: {
+    method: "GET",
+    path: "/v1/public/market/{slug}",
+    built: true,
+    whileMissing: "refuses",
+    owner: "P11",
+  },
+  publicBoardPage: {
+    method: "GET",
+    path: "/v1/public/leaderboard/{board}",
+    built: true,
+    whileMissing: "refuses",
+    owner: "P11",
+  },
+  publicSitemap: { method: "GET", path: "/v1/public/sitemap", built: true, whileMissing: "refuses", owner: "P11" },
+  publicBlocks: { method: "GET", path: "/v1/public/blocks", built: true, whileMissing: "refuses", owner: "P11" },
   // P11 D5: the referral programme. Five rows, and the split is the model's: the terms are PUBLIC (a programme
   // whose terms are discovered after the money moves is a complaint), the link and the funnel are USER-scoped,
   // and the two operator routes are not in this ledger at all — a screen must never be able to reach the accrual

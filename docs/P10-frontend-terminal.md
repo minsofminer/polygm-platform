@@ -1,6 +1,6 @@
 # P10 — Frontend: the terminal (tape, dossiers, whales, radar, portfolio, copy, automation, alerts)
 
-Status: **D1–D9 built; all nine surfaces reachable** — `/terminal`, `/trader/[anon]`, `/whales`,
+Status: **D1–D9 built; all nine surfaces reachable** — `/terminal`, `/trader/<anon or handle>`, `/whales`,
 `/radar`, `/portfolio`, `/copy`, `/automation`, `/alerts`. D8 and D9 were built last, as this phase's closing
 work, because the P10 screen list names them and a screen shipped against an API that does not exist is not a
 screen. The earlier reading that put them in P11 was a misread of the kit: `prompts/P11-leaderboard.md` is the
@@ -23,7 +23,7 @@ verified one endpoint at a time is a chain nobody has ever walked.
 |---|---------|-------|
 | D1 | three-column terminal: left rail, centre (chart + Activity/Traders/Holders), right rail, resizable and collapsible, per-user persistence, mobile as tabs | **built and mounted** (`TerminalLayout.tsx` + `TerminalScreen.tsx`, `/terminal`), 7 watchlist tests |
 | D2 | live tape: filters (absolute **and** market-relative notional), classification badges with their rule, virtualised, coalesced at 20+ fills/s, "paused — N new", click → market, shift-click → watchlist, sound off by default | built (`web/src/terminal/TapePanel.tsx`, `tape.ts`, `useTerminal.ts`), 21 unit tests |
-| D3 | trader dossier: four windows of one metric set, PnL curve with a mandatory drawdown overlay, behaviour labels with methodology + disclaimer, "insufficient sample" instead of a win rate below the gate | **built** (`src/terminal/{dossier.ts,DossierView.tsx}`, `app/trader/[anon]/page.tsx`), 21 unit + 7 render tests |
+| D3 | trader dossier: four windows of one metric set, PnL curve with a mandatory drawdown overlay, behaviour labels with methodology + disclaimer, "insufficient sample" instead of a win rate below the gate | **built** (`src/terminal/{dossier.ts,DossierView.tsx}`, `app/trader/[who]/page.tsx`), 21 unit + 7 render tests |
 | D4 | whale tracker: threshold feed, saved views with channel/severity, per-market and global, severity formula stated, inline alert-rule creation | **built** (`src/terminal/{whales.ts,WhaleTracker.tsx}`, `app/whales/page.tsx`), 17 unit + 4 render tests |
 | D5 | Wallet Radar: ≤10 markets, four rankings, row = wallet + matched markets + bought/sold + realised PnL + win rate + classification, one-click track/follow/copy/open, cost control | **built** (`src/terminal/{radar.ts,RadarView.tsx}`, `app/(app)/radar/page.tsx`), 14 unit + 4 render tests, on the gated API (25 API tests) |
 | D6 | portfolio: positions with mark and unrealised, negRisk groups, order history with `unknown` rows marked, PnL curve + benchmark, CSV export, empty state | **built** (`src/terminal/{portfolio.ts,PortfolioView.tsx}`, `app/(app)/portfolio/page.tsx`), 17 unit + 6 render tests |

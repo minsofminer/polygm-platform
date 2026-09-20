@@ -1,15 +1,17 @@
 # P11 — Leaderboard, Rankings & Referrals
 
-Status: **D1, D2, D3, D4 and D5 built**, verified by `tools/p11-gate-check.py` at **22/22** (16 scanners
-canaried, `docs/verification/P11-gate.txt`) with the whole backend suite at **990 tests OK**, the web suite at
-**397 tests in 44 files OK** and `check-openapi` at 498/0. D1 is the specification, the integrity rules and the
+Status: **D1–D6 built**, verified by `tools/p11-gate-check.py` at **28/28** (18 scanners canaried,
+`docs/verification/P11-gate.txt`) with the whole backend suite at **1021 tests OK**, the web suite at **424 tests
+in 48 files OK** and `check-openapi` at 535/0 (69 paths, 106 schemas). D1 is the specification, the integrity rules and the
 ranking engine; D2 is the rankings API, the population the boards are demonstrated on, and the read path they are
 ranked from; D3 is the standing a wallet can see — its rank, its gap to the place above, its sparkline and the
 board it can put two other wallets beside; D4 is the reader's own row on all nine boards, pinned when it is off
 the page, with the listing control that decides whether that row is tied to an account; D5 is referrals — the
 reward model and its argument, the Sybil rules in their order of precedence, the clawback, the builder-code
-revocation ground, the funnel a referrer reads, and the payout and tax terms that go with being paid. D6–D7 are
-next: the public SSR pages and the anti-gaming dashboard. This file is written as the phase is built.
+revocation ground, the funnel a referrer reads, and the payout and tax terms that go with being paid. D6 is the public pages — three server-rendered,
+crawlable, shareable surfaces with a generated card each, structured data that says only what the page shows, and
+the budget and block machinery that keeps them serving under a scraper. **D7, the anti-gaming dashboard, is next.**
+This file is written as the phase is built.
 
 The phase's acceptance sentence, from the kit, is the thing everything below is arranged around:
 
@@ -31,7 +33,7 @@ better rank — is the one a user reports as a bug.
 | D3 | profile integration: rank badge, 30-day rank sparkline, "why this rank", follow/copy from the row, compare up to 3 | **built** — `GET /v1/leaderboard/{rank,compare,follows}` + `POST /v1/leaderboard/follows`; `0014_follows.sql` + its SQLite twin; `web/src/terminal/{board.ts,BoardPanel.tsx}` on `/leaderboard`; 49 API tests + 18 + 7 + 2 web tests |
 | D4 | self-rank: your own position on every board, pinned when off-page, the unranked state, private-by-default with an opt-in | **built** — `GET /v1/leaderboard/me` + `GET|POST /v1/leaderboard/identity`; `0015_leaderboard_identity.sql` + its SQLite twin; `web/src/terminal/{selfRank.ts,SelfRank.tsx}` mounted in `BoardPanel` and rendered on `/leaderboard`; 16 API tests + 10 + 6 + 1 web tests |
 | D5 | referrals: link + short code, the reward model and its argument, Sybil defence (first matched order over a notional threshold, device/IP/funding dedupe, velocity limits, review queue, clawback, hard self-referral block), the referrer dashboard, payout terms | **built** — `packages/polygm_core/referrals/{terms,sybil,code}.py`, 37 unit tests; `0016_referrals.sql` + its SQLite twin; `GET /v1/referrals/terms`, `GET /me`, `POST /code`, `POST /apply`, `POST /accrue`, `GET\|POST /review`; `web/src/terminal/{referrals.ts,ReferralsView.tsx}` on `/referrals`; 26 API tests + 9 + 4 web tests |
-| D6 | public SSR pages: `/trader/<handle>`, `/market/<slug>`, `/leaderboard/<board>` with OG images, structured data, rate limiting | not started |
+| D6 | public SSR pages: `/trader/<handle>`, `/market/<slug>`, `/leaderboard/<board>` with OG images, structured data, rate limiting | **built** — `packages/polygm_core/public_pages/{urls,budget,structured,cards}.py` (pure layer) + `0017_public_pages.sql` and `0018_append_only_grants.sql` with their SQLite twins; six operations (`GET /v1/public/{trader,market,leaderboard,sitemap}`, `GET\|POST /v1/public/blocks`); `web/{app/trader/[who],app/market/[market],app/leaderboard/[board]}` each with a page and an `opengraph-image` (three card routes for the board family: the plain, `/w/<window>` and `/c/<category>` forms); `web/src/public/*`; 18 + 12 backend tests, 26 web tests; gate c23–c28 |
 | D7 | anti-gaming dashboard: fast climbers, correlated clusters, synthetic referral chains, unusual builder-code attribution; exclude and flag in one click | not started |
 
 ## 2. Decisions taken here, and why
@@ -560,6 +562,131 @@ retry button sends the same request twice" is the failure that turns a claim int
 visitor gets the public terms and the rules, not a login wall: the terms are the thing somebody shares a link to
 read.
 
+### 2.35 A public page is rendered on the server, and it must work for a client with no cookies at all
+
+The three pages are React Server Components with no client component in the tree except the number layer's
+`<Number>` island (the product rule is one numeric renderer, and it is a client component). What that buys is the
+unfurler: a crawler runs no JavaScript, so a page that fetches its payload in the browser unfurls as an empty card
+and indexes as an empty document. `web/src/public/*` is therefore server-only by construction, and c23 asserts it —
+a `"use client"` in any of the five page/view modules fails the gate.
+
+The failure this caught is worth keeping. The views first read through `serverRead`, the app's RSC read path — and
+`serverRead` goes through the session proxy, which was written for pages that have a session: no access cookie means
+*refresh the access token*, no refresh token means **401**. Every public page therefore answered 200 with an error
+state in the body and `noindex` in the head for every stranger, which is exactly the audience these pages exist for.
+`web/src/api/public-read.ts` is the fix: the same envelope and stamp handling (so a page cannot disagree with the
+client about freshness), no cookies read, none written, no rotation attempted — a public page cannot log anybody out.
+The check that found it is c28, which fetches the pages from a real `next start` + uvicorn pair with no cookie jar;
+an in-process test could not, because the API itself answers these routes fine.
+
+### 2.36 The card carries the page's own strings, and its qualifiers are a priority list
+
+`public_pages/cards.py` builds the card from the payload the page renders: the same formatted numbers, not a second
+rounding, so a card cannot disagree with the page it came from. The footnote has a **priority order** — provisional
+first, then the drawdown, then at most the caller's own notes — because the two facts this phase refuses to drop are
+the age of the record and the risk that produced the return, and a card is the artifact that gets screenshotted
+without the page around it. The first version appended the notes and then inserted the drawdown by deleting whatever
+collided, which deleted "provisional" instead: the bug was a priority, so the code is a priority list now.
+`PublicCard.provisional` exists so that "does this card owe its reader the provisional sentence" is a property of
+the card rather than an inference every consumer makes separately — the gate, the web view and the alt text all read
+the same flag, and the flag is `ageDays < 7`, the same test the noindex rule uses.
+
+### 2.37 The machine-readable breadcrumb is the trail the page renders
+
+A `BreadcrumbList` that names a section the page never prints is a claim, and the API cannot avoid it honestly: the
+web owns the copy and translates it. The first version had the graph saying "Leaderboard" while the page's own trail
+said "the boards" — c23's `card_findings` refused it, which is the check working. So the split is: the API names the
+trail from its **own payload** (the card's brand, the board's label, the question — every name is a string the
+payload carries, which is what `structured.unbacked()` enforces), and each view hands the trail it rendered to
+`JsonLd`, which **rewrites the `BreadcrumbList`'s items** to it. A crawler then shows the same trail a reader sees.
+The last step keeps the payload's canonical URL, because a trail whose final link is missing renders as unlinked
+text.
+
+### 2.38 Who may index what is a decision, and it is made once per page kind
+
+`public_pages/urls.py` `robots_for` is one function with three answers: a market is always indexable (its question
+is the search intent), a board is indexable only if it has rows (an empty board is a thin page), and a trader page is
+`noindex, follow` while the wallet is unranked or its record is younger than the provisional window — a page that
+publishes a three-day streak as if it were a track record is the thing this phase's integrity rules exist to
+prevent. The API's answer travels in the payload and the page's `generateMetadata` prints it, so there is no second
+opinion in the route file. The canonical URL is the API's too: the site origin is one constant
+(`_BASE_URL()` ← `PGM_PUBLIC_BASE`, default `https://openout.app`), which is what keeps the sitemap, the canonical
+link and the card URL identical by construction rather than by review.
+
+### 2.39 The budget is per kind and across kinds, and a block is by digest
+
+Public pages have no account behind them, so the abuse control cannot be per user and must not be per IP address in
+a way that punishes a NAT (one exit is thousands of readers — the limits are deliberately generous: 600 traders a
+minute, 1200 markets, 300 boards, 10 sitemaps, 3000 cards, and a cross-kind total of 5000 a minute, where 10
+sitemaps is roughly 14,500 URLs). The subject is a salted digest (`i_…`), never the address; the decision is
+`passwords.lock_state`'s fixed window — the same function the login lock uses, because a second fixed-window
+implementation is a second set of off-by-ones; a refusal is `429` with `Retry-After` and `X-RateLimit-*` served on
+the allowed path too (a crawler that can see its budget slows down, one that cannot discovers the limit); and coming
+straight back ten times past a limit writes an **auto-block**, which is what makes the difference between a limit
+and a defence. Blocks are scoped (`all` or one kind), expire (1–168 hours), and are written and lifted by an
+operator token — `public_page_blocks` records the digest, the scope, the reason and `created_by`, so "who blocked
+what, when" is a query rather than a memory. c24 walks the whole sequence, including that clearing the block restores
+200 on every public page.
+
+### 2.40 One URL grammar in four places, and the card at one suffix off it
+
+The same path shape is written in the contract, in the web route ledger, in `urls.py` and in the sitemap, and c26
+reads all four and fails when they disagree — the failure it is looking for is a page that exists at one URL and is
+published as canonical at another, which halves its signal and doubles its cache. The OG route is the page URL plus
+`/opengraph-image`, always: an unfurler's cache key is the URL, so a second convention is a second card. `sitemap`
+caps come from `public_page_budget` (defaults 2000 handles, 2000 markets) and the truncated flag is served rather
+than swallowed, so an operator can see the day the cap starts hiding pages.
+
+### 2.41 The OG card is generated from the same payload and cached by the framework
+
+`revalidate = 86400` on all three card routes: a card that regenerates per request is a card whose numbers move
+under a reader comparing it with the page, and a card is the one artifact whose job is to be stable in a timeline.
+The palette comes from `styles/og-colors.json`, written by `build-web-tokens.mjs` from the same brand tokens the app
+uses, so the card cannot drift from the product's colours; the 1200×630 layout is `src/public/og.tsx`, and it renders
+the payload's own strings — no formatter, no arithmetic, nothing that could round differently.
+
+### 2.42 One SQLite connection across uvicorn's threads was a one-in-five 500, and the gate found it
+
+D6's sweep ran P08's c11 drill (five parallel reads on an expired access token) and it failed **twice in four runs**
+with `[500, 200, 200, 200, 500]`. The message named a status and nothing else, so the drill now captures the response
+body and the API's log tail — and the body said `sqlite3.InterfaceError: bad parameter or other API misuse` thrown
+out of a plain `SELECT /v1/markets`. One `sqlite3` connection was being shared by every request thread
+(`check_same_thread=False` only silenced the check that would have told us); `sqlite3` connections are not
+thread-safe, and interleaving `execute`/`fetchall` on one is undefined behaviour. The fix is the shape a real
+database forces anyway: **a connection per thread** (`ThreadConnection`), WAL plus `busy_timeout=5000` so a
+concurrent writer waits, connections of dead threads reaped (a connection is three file descriptors, and the suite
+hit `Too many open files` before the reap existed), and the configuration a test installs on `_db` (the trace
+callback that counts queries) carried to every connection instead of only the caller's.
+
+Two lessons came with it. **The database path is bound at import**, not read per connection: a process that imports
+the app against one file and then changes `PGM_DB_PATH` (the contract audit boots a throwaway database) was handing
+its request threads a file that did not exist, and `sqlite3.connect` creates an empty one rather than failing — so
+the answers were `no such table: markets` 500s. And the audit itself had a latent bug of the same family: it removed
+its throwaway database *immediately after import*, which was invisible only while one shared connection held the
+unlinked inode open. The removal moved to the end of the function. Both are recorded here rather than in the P08
+document because D6's sweep found them, and neither was visible from a green test line.
+
+### 2.43 An append-only promise needs both halves, and seventeen tables had one
+
+`0005_triggers.sql` does two things for the append-only set: it creates `polygm_reject_mutation()` triggers, and it
+revokes UPDATE/DELETE from `PUBLIC` and `polygm_app` in a `DO` block. The block can only name tables that exist when
+it runs — `REVOKE ... ON <a table that does not exist yet>` is an error — so every append-only table added after 0005
+had to write its own grant, and none of them did: seventeen tables (the auth trail, the wash findings, the copy
+engine's would-be actions, the drill records, the leaderboard exclusions, the referral accruals) were append-only by
+trigger and writable by the application role. The mirror-image gap was also there: `leaderboard_exclusions` has been
+in the portable `APPEND_ONLY` list since D1 and Postgres never got a trigger at all.
+`0018_append_only_grants.sql` closes both, and the gate's c27 re-derives the two sets on every run — the declared
+list (parsed out of `build-sqlite-migrations.py` with `ast`, because a scan of `CREATE TRIGGER` statements cannot tell
+a live trigger from one 0012 left behind on a table 0016 dropped) against the triggers and the `REVOKE` names.
+
+### 2.44 The P08 flake was a test race, not a slow box
+
+With the suite grown to 48 files, `npm run test` failed about two runs in three inside the gate and never when the
+file was run alone. The failing assertion was `screen.getAllByRole("checkbox")` immediately after an awaited button:
+the rows arrive with the followers read, and asking for them synchronously is a race with a mock that resolves a tick
+later. The neighbouring test awaited its boxes. Raising timeouts would have made it pass and left the race in place;
+`findAllByRole` is the fix, and it is checked by running the suite three times.
+
 ## 3. Where the numbers come from
 
 * `tests/test_leaderboard_rank.py` — **20 tests, OK** (`python3 -m unittest discover -s tests -p "test_leaderboard_rank.py"`).
@@ -572,7 +699,14 @@ read.
   reasons (9 settled markets; 21 markets of forty cents). Measured on that population: **64 ranked**, 7 unranked,
   **5 blown up**, 1 provisional, 1 disputed result withheld, and the gate pair at ranks 12/47 has **48 versus 26
   settled markets** — the smaller sample ranked *below*, and the sentence explaining it is served by `/why`.
-* `tools/check-openapi.py` — **498 passed, 0 failed** (the contract gained the seven leaderboard paths and 22
+* The whole backend suite on the D6 tree: **1021 tests, OK** (`python3 -m unittest discover -s tests`, 87.3 s,
+  no skips) — the D5 count was 990. The D6 additions are `tests/test_public_pages.py` (19: `urls`'s grammar and
+  the robots decisions, `budget`'s two-window arithmetic and the auto-block rule, `structured.unbacked` and
+  `leak_findings`, the card's footnote priority) and `tests/test_public_pages_api.py` (12: the trader page's nine
+  standings and 404 parity with an unclaimed handle, the market page's odds age and verbatim resolution text, the
+  board page's formula/gate/tie-breaks, the sitemap's caps and audit, the block routes' operator token and digest
+  storage, and the public reads' audit rows).
+* `tools/check-openapi.py` — **535 passed, 0 failed** on the D6 tree (498 in D5) (the contract gained the seven leaderboard paths and 22
   components in D2, D3's four routes, D4's `me`/`identity` pair with six components and the `HANDLE_TAKEN` code,
   and D5's seven referral operations with nine schemas — `ReferralTerms`, `ReferralTermSheet`, `ReferralLink`,
   `ReferralMe`, `ReferralCode`, `ReferralApply`, `ReferralAccrue`, `ReferralReviewList`, `ReferralReviewSet` —
@@ -585,7 +719,23 @@ read.
   property path does not resolve — the sub-object needs a top-level schema (`ReferralTermSheet` exists for exactly
   that reason). The status sets must equal the app's own response table plus `_INTERNAL`'s 500 and the implicit
   200, which is what caught the admin routes' missing `503 SIGNER_UNAVAILABLE`.
-* `tools/p11-gate-check.py` — **22/22 checks, 16/16 scanners canaried**, recorded in `docs/verification/P11-gate.txt`, 17.3 s. D5 adds c19 `reward_needs_a_trade` (a clean apply is `pending` and §2.25's "no trade, no referral" — an unqualified referee on whose orders no fee was paid writes **zero** accrual rows — and then, once qualified, the accrual is 25% of the **observed** $8 fee, not the expected $40: "1 accrual row(s), 8.00 of fee observed; 0 findings"), c20 `second_wallet_is_caught` (a second wallet on one funding source refused 409 `REFUSED`, a shared device opened for review, a self-referral refused 409 `SELF_REFERRAL` with no attribution row written and the builder code disabled with "self-referral" in its note, two review items open), c21 `dashboard_arithmetic` (two referees: signups/funded/trading/earned = 2, accrued 2,000,000 micro, the totals equal to the row sums, the review count equal to the queue) and c22 `payout_reality_and_clawback` (the $20 minimum as the gap from the **payable** balance, the 30-day hold, seven published rules, the future-day 422, a clawback cancelling the unpaid share without deleting a row, and the absent referrer leaderboard). Four new canaries (`referral_model`, `referral_collisions`, `referral_dashboard`, `referral_terms`) plant violations in each scanner's own input and fail the run if it walks past them. c17 walks the self-rank (`/me` = nine board answers, the pin's board and rank agreeing with the board's own row, `private` for a fresh account, the unranked wallet's steps naming a number, 401 without a session); c18 walks the identity (no handle in any public payload before opt-in, the handle on exactly that wallet's row after it, a second account claiming it refused with 409 `HANDLE_TAKEN`, opt-out removing the link but keeping the row and the rank, the owner's own payloads still carrying it, and at least two `leaderboard.identity` audit rows).
+* `tools/p11-gate-check.py` — **28/28 checks, 18/18 scanners canaried**, recorded in `docs/verification/P11-gate.txt`, 17.3 s. D5 adds c19 `reward_needs_a_trade` (a clean apply is `pending` and §2.25's "no trade, no referral" — an unqualified referee on whose orders no fee was paid writes **zero** accrual rows — and then, once qualified, the accrual is 25% of the **observed** $8 fee, not the expected $40: "1 accrual row(s), 8.00 of fee observed; 0 findings"), c20 `second_wallet_is_caught` (a second wallet on one funding source refused 409 `REFUSED`, a shared device opened for review, a self-referral refused 409 `SELF_REFERRAL` with no attribution row written and the builder code disabled with "self-referral" in its note, two review items open), c21 `dashboard_arithmetic` (two referees: signups/funded/trading/earned = 2, accrued 2,000,000 micro, the totals equal to the row sums, the review count equal to the queue) and c22 `payout_reality_and_clawback` (the $20 minimum as the gap from the **payable** balance, the 30-day hold, seven published rules, the future-day 422, a clawback cancelling the unpaid share without deleting a row, and the absent referrer leaderboard). Four D5 canaries (`referral_model`, `referral_collisions`, `referral_dashboard`, `referral_terms`) plant
+violations in each scanner's own input and fail the run if it walks past them. D6 adds c23 (`public_pages_exist_and_are_server_rendered`: the eleven page/view files present, each route importing its view and reading on the
+server, no `"use client"` in any of them, `revalidate` on every card route, the market page's odds through the
+number layer with a freshness, the breadcrumb handed to the graph by all three views, and the four public routes
+answering 200 with a `robots` answer and a cache key), c24 (`the_budget_refuses_and_then_blocks`: ten sitemap walks
+past the budget refused with 429 and a `Retry-After`, the digest blocked, the block scoped to the kind and then to
+`all`, every other public page 429 while it is live, and 200 again after it is lifted), c25 (`no_address_and_the_card_carries_its_qualifiers`: four payloads scanned for addresses and non-pseudonym wallets, the graph's claims
+against the page they were served with, the provisional and drawdown lines on a card that says it is provisional,
+the market card's price age, the board card's formula and gate), c26 (`the_pages_are_published_once`: five routes in
+the contract and the ledger, `urls.py`'s three kinds, the live sitemap listing all three with a URL that is the
+canonical one, the caps and count agreeing, the sitemap itself indexable, and the OG URL one suffix off the page),
+c27 (`append_only_has_both_halves`) and c28 (`the_pages_render_for_a_stranger`: the three pages fetched from a real
+`next start` + uvicorn pair with no cookie jar, each 200 with a document, a canonical link, structured data, a row
+on the board page and no address anywhere in the HTML, plus the three card routes answering with an image). Two new
+canaries plant the violations c27 and c28 are built on — the append-only halves (both directions, including the
+`FOREACH ... ARRAY` form the grants are written in) and a payload with an address three levels down, a graph claim
+the page never makes, and a provisional card that lost its sentence. c17 walks the self-rank (`/me` = nine board answers, the pin's board and rank agreeing with the board's own row, `private` for a fresh account, the unranked wallet's steps naming a number, 401 without a session); c18 walks the identity (no handle in any public payload before opt-in, the handle on exactly that wallet's row after it, a second account claiming it refused with 409 `HANDLE_TAKEN`, opt-out removing the link but keeping the row and the rank, the owner's own payloads still carrying it, and at least two `leaderboard.identity` audit rows).
   c3 is the phase's own acceptance sentence walked over the API (rank 47 with 26 settled markets above rank 12
   with 48, and `/why` saying so in one sentence), c15 is the standing a wallet can read back (the badge, the
   re-derivable gap, the empty sparkline that says "no history yet"), and c16 is the comparison that must not
@@ -630,7 +780,9 @@ read.
 
 ## 4. Open, in the order it should be closed
 
-1. **D6–D7** as listed in §1.
+1. **D7** as listed in §1 — the internal anti-gaming dashboard: fast climbers, correlated clusters, synthetic
+   referral chains, wallets whose volume hits our builder code unusually, with one-click exclude and flag. D6 is
+   closed (§2.35–§2.44), and `0018`'s grants plus c27 mean the schema half of the exclusion path is already guarded.
 2. **The eligibility floor re-derived on production data** ($500 and its $0.02-median sensitivity are a judgement,
    §2.2), plus a real **category taxonomy**: `seed_leaderboard` invents four strings (Politics/Sports/Crypto/
    Finance) because the venue's own tags are not in our ingest yet, and the category board is only as meaningful
@@ -656,15 +808,29 @@ read.
    per tick, and the frame trace that would prove it belongs with P10's harness, which exists (`npm run measure:tape`).
    The D5 panel is not on that path at all — it renders on entry, holds no subscriptions and polls nothing — so it
    adds no frame work to measure.
-7. **The `REVOKE`/grant block does not yet name the 0016 tables.** `0005_triggers.sql` enumerates the append-only
-   set for both the trigger list and the `polygm_app` grant block, and `referral_accruals` is append-only by
-   trigger and by `UNIQUE (referrer, referee, day)` but is not in the grant half of that list. On Postgres the
-   trigger is the guard and the grant is the belt; the belt is the thing a migration that "just needs to fix a
-   number" cannot be careful past. It is a one-line addition to two arrays in a file that is already generated
-   from, so it lands with D6's migration rather than being smuggled into D5's after its record was written.
+7. ~~The `REVOKE`/grant block does not yet name the 0016 tables.~~ **Closed by D6**, and it was larger than it
+   looked: seventeen tables (not one) were append-only by trigger and writable by the application role, because
+   0005's `DO` block cannot name a table that does not exist yet and every migration after it had to write its own
+   grant. Reading it also turned up `leaderboard_exclusions`, declared append-only in the portable list since D1
+   with no Postgres trigger at all. `0018_append_only_grants.sql` grants for the whole declared set and creates the
+   missing trigger; gate c27 re-derives both sides from the declaration on every run. **What is not verified here
+   is the SQL itself**: this environment has no Postgres, so the block is read rather than run, and the first
+   Postgres deploy must confirm the grant list applies (it is `pg_roles`-guarded and `to_regclass`-guarded, so it
+   is safe on a database that has not applied every earlier migration).
 8. **A green test line is not evidence when the HTTP layer is missing.** `python3 -m unittest discover -s tests`
    prints `OK` with the API tests *skipped* on a machine where `fastapi` is not installed, and this environment
    reinstalls from `requirements.txt` per session, so the D5 sweep read a green `Ran 990 tests ... OK` that had
    skips in it. The suite now gets read for its skip count as well as its result (`OK` with no parenthetical), and
    the same is true of the gates: P08 c2 and c11 exist precisely because a missing dependency there produces a
    *failure*, which is the better behaviour and the reason those checks are worth their runtime.
+
+9. **A connection per thread costs the suite time, and that is accepted.** The whole backend suite went from 83.0 s
+   (D5, one shared connection) to 87.3 s (D6, one connection per thread, each opening WAL). The alternative — one
+   connection behind one lock — serialises every request through a mutex and is worse under the load this exists
+   for. If the number becomes a problem, the shape to reach for is a small pool with a lease, not a shared handle.
+10. **The public pages' canonical URLs point at `https://openout.app` and the preview serves `127.0.0.1`.** That is
+   correct in production and confusing in a preview, so it is written down rather than fixed: `PGM_PUBLIC_BASE` is
+   the one knob, and the sitemap, the canonical links and the card URLs all follow it.
+11. **The public gate's subject is the client address as this process sees it.** Behind a load balancer that is the
+   balancer unless `X-Forwarded-For` is trusted, so the deployed value of that header is a launch item: the limit
+   is generous enough that a mis-set subject degrades politely, but the auto-block's blast radius depends on it.

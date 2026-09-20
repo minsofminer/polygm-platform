@@ -27,6 +27,7 @@ import argparse
 import importlib.util
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -34,6 +35,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 TMP = ROOT / ".tmp"
+#: The web tree. D6 is the first phase whose deliverable lives here — three SSR pages and their card routes —
+#: so the gate needs a root for them; the rule the other checks follow still holds, and every path below is named
+#: rather than globbed, because a check that says "some page exists" is a check that passes on the wrong page.
+WEB = ROOT / "web"
 for _p in (str(ROOT / "packages"), str(ROOT / "services" / "api"), str(ROOT / "tests")):
     if _p not in sys.path:
         sys.path.insert(0, _p)
@@ -80,6 +85,33 @@ def sh(argv, cwd: Path = ROOT, timeout: int = 900) -> tuple[int, str]:
     except FileNotFoundError as f:
         return 127, "cannot run %s: %s" % (argv[0], f)
     return p.returncode, p.stdout + p.stderr
+
+
+#: D6's three SSR pages and their card routes, as the web tree lays them out.
+#:
+#: The segment names are `[who]` and `[market]` rather than `[handle]`/`[slug]` because each URL space already had
+#: a dynamic segment (the dossier's pseudonym, the app's market id) and Next forbids two dynamic names at one
+#: level. The PUBLIC path is the one the API publishes (`/trader/<handle>`, `/market/<slug>`,
+#: `/leaderboard/<board>`), and that is what this list is about: the file names are an implementation detail, the
+#: URLs are a promise.
+PUBLIC_PAGES = (
+    "app/trader/[who]/page.tsx",
+    "app/trader/[who]/opengraph-image.tsx",
+    "app/market/[market]/page.tsx",
+    "app/market/[market]/opengraph-image.tsx",
+    "app/leaderboard/[board]/page.tsx",
+    "app/leaderboard/[board]/opengraph-image.tsx",
+    "app/leaderboard/[board]/w/[window]/page.tsx",
+    "app/leaderboard/[board]/w/[window]/opengraph-image.tsx",
+    "app/leaderboard/[board]/c/[category]/page.tsx",
+    "app/leaderboard/[board]/c/[category]/opengraph-image.tsx",
+)
+
+#: The views and the pure layer behind them.
+PUBLIC_VIEWS = ("src/public/TraderView.tsx", "src/public/MarketView.tsx", "src/public/BoardView.tsx",
+                "src/public/ShareCard.tsx", "src/public/Chrome.tsx", "src/public/JsonLd.tsx",
+                "src/public/card.ts", "src/public/rows.ts", "src/public/og.tsx", "src/public/boardRoute.ts",
+                "src/public/wire.ts")
 
 
 def read(path: Path) -> str:
@@ -140,6 +172,29 @@ class Probe:
             return r.status_code, r.json()
         except ValueError:
             return r.status_code, {}
+
+    def list_handle(self, uid: str, handle: str, *, rank: int = 0) -> tuple[int, dict]:
+        """Publish `handle` on a wallet the board actually RANKS, as `uid`.
+
+        The subtlety this helper exists for: the identity write is made as the account that claimed the wallet, and
+        a probe posting as `u-demo` while the wallet belongs to somebody else gets a 422 about a missing wallet
+        rather than a page. (The gate found that the first time it ran: the check said "the handle could not be
+        listed" and the real reason was the wrong principal.)
+        """
+        app = self.app()
+        rows = self.board(board="risk_adjusted").get("rows") or []
+        for row in rows[rank:]:
+            wallet = app._wallet_for_anon(row["anon"]) or ""
+            if not wallet:
+                continue
+            # A wallet another account already claimed cannot be re-claimed (`user_identities` is UNIQUE on
+            # (kind, value)), so the helper walks down the board until it finds one nobody in this run has taken.
+            owner = self.rows("SELECT user_id FROM user_identities WHERE kind='wallet' AND value=?", (wallet,))
+            if owner and str(owner[0][0]) != str(uid):
+                continue
+            self.link(uid, wallet)
+            return self.post_as(uid, "/v1/leaderboard/identity", {"state": "listed", "handle": handle})
+        return 0, {}
 
     def post_key(self, url: str, body: dict) -> tuple[int, dict]:
         """A write with a well-formed key: every mutating route here requires one, and a 422 about the key would
@@ -260,6 +315,61 @@ class Probe:
 
 
 # --------------------------------------------------------------------------------------------------- scanners
+ADDRESS_RX = re.compile(r"0x[0-9a-fA-F]{6,}")
+
+
+def card_findings(payload: dict) -> list[str]:
+    """The card and the structured data, checked against the page they were served with.
+
+    Two rules, both of them about the artifact that travels alone. **The card must not be able to disagree with the
+    page**: every claim in the graph has to be a string the payload also carries, and the vocabulary rule that
+    decides what counts as a claim (`ProfilePage`, `@type` values, URLs) is NOT re-implemented here — it is imported
+    from `polygm_core.public_pages.structured`, the layer that builds the graph and whose `unbacked()` is unit-tested
+    in `tests/test_public_pages.py`. A second opinion about what counts as a claim is a second answer to "is this
+    page lying", and this repo has already paid for that lesson once.
+
+    And **the card must carry its qualifiers**: a card that says it is provisional without saying so, or prints a
+    profit with no drawdown, is the failure this whole deliverable exists to prevent — so the scanner reads the
+    card's own `provisional` flag rather than inferring the duty from `ranked`.
+    """
+    out: list[str] = []
+    sys.path.insert(0, str(ROOT / "packages"))
+    from polygm_core.public_pages import structured as pp_structured
+
+    page = {k: v for k, v in payload.items() if k != "structuredData"}
+    # `unbacked(graphs, payload)` wants an ITERABLE of nodes: a bare dict iterates its keys, and the first run of
+    # this scanner obliged by reporting `$ = '@type'` — a finding about the scanner rather than about the page.
+    graph = payload.get("structuredData") or []
+    out += ["the graph claims %s, which is not a field on the page" % claim[:64]
+            for claim in pp_structured.unbacked(graph, page)]
+    card = payload.get("card") or {}
+    foot = " | ".join(str(f).lower() for f in (card.get("footnote") or []))
+    if card.get("provisional") and "provisional" not in foot:
+        out.append("a provisional card carries no provisional line: %s" % foot)
+    if card.get("ranked") and "drawdown" not in foot:
+        out.append("a ranked card carries no drawdown")
+    if not (payload.get("notes") or []):
+        out.append("the page carries no notes, so nothing on it qualifies the row")
+    return out
+WALLET_RX = re.compile(r"\b0x[0-9a-fA-F]{40}\b")
+
+
+def public_payload_findings(payloads: list[tuple[str, dict]]) -> list[str]:
+    """Every string in every public payload, checked for an address at any depth.
+
+    `json.dumps` rather than a hand-walk, because the failure this catches is a field a component added three
+    levels down: an `evidence` object, a sorted `links` map, a `structuredData` node. The rule is the pseudonym
+    scheme's, and it has to hold at every depth or it is decoration.
+    """
+    findings: list[str] = []
+    for label, body in payloads:
+        blob = json.dumps(body, default=str)
+        hits = WALLET_RX.findall(blob) or ADDRESS_RX.findall(blob)
+        if hits:
+            findings.append("%s carries an address: %s" % (label, hits[:2]))
+    return findings
+
+
 def win_rate_gate_findings(rows: list[dict], gate: int = 20) -> list[str]:
     """Every win rate is behind the sample gate, and it is the rate OF the sample printed beside it.
 
@@ -1580,6 +1690,395 @@ def c22_payout_reality_and_clawback(p: Probe) -> tuple[str, bool, str]:
             % (terms.get("payoutMinMicro"), terms.get("settleHoldDays"), len(terms.get("rules") or []),
                len(findings), ("; " + "; ".join(findings[:3])) if findings else ""))
 
+def c23_public_pages_exist_and_are_server_rendered(p: Probe) -> tuple[str, bool, str]:
+    """D6: the three pages exist, are wired to a view, are rendered on the server, and carry a card.
+
+    The kit's D6 is one sentence — every trader who shares their page is doing our marketing — and it fails in
+    three quiet ways that a screenshot would not show: a page that exists but imports nothing (an unreachable
+    file), a page that is a client component (an unfurler runs no JavaScript, so the card unfurls empty), and a
+    page with no `opengraph-image` (the link is a bare URL in every timeline it is posted in).
+
+    The last assertion is the one with a history: a public page must NOT import the app shell's providers, because
+    that is 100+ KB of client code on the critical path of a page whose only reader is a stranger.
+    """
+    findings: list[str] = []
+    for rel in PUBLIC_PAGES + PUBLIC_VIEWS:
+        if not (WEB / rel).exists():
+            findings.append("%s does not exist" % rel)
+    wiring = {
+        "app/trader/[who]/page.tsx": "TraderView",
+        "app/market/[market]/page.tsx": "MarketView",   # the module is @/public/MarketView; the export is MarketPublicView
+        "app/leaderboard/[board]/page.tsx": "BoardView",
+        "app/leaderboard/[board]/w/[window]/page.tsx": "BoardView",
+        "app/leaderboard/[board]/c/[category]/page.tsx": "BoardView",
+    }
+    for page, view in wiring.items():
+        body = read(WEB / page)
+        module = view.split("#")[0].split(" ")[0]
+        if body and ("@/public/%s" % module) not in body:
+            findings.append("%s does not import @/public/%s — the route and the surface are not wired" % (page, view))
+        if body and "serverRead" not in body and "loadBoard" not in body:
+            findings.append("%s reads nothing on the server" % page)
+    for rel in ("src/public/TraderView.tsx", "src/public/MarketView.tsx", "src/public/BoardView.tsx",
+                "src/public/ShareCard.tsx", "src/public/JsonLd.tsx"):
+        body = read(WEB / rel)
+        if '"use client"' in body:
+            findings.append("%s is a client component: an unfurler runs no JavaScript, so the page unfurls empty" % rel)
+    # The graph's breadcrumb has to be the trail the page RENDERS: the API names it in its own words (it has no
+    # idea what copy the page will use), so each view states its trail once and hands that one value to both the
+    # chrome and the JSON-LD. A view that passes only the graph is a page whose markup says "Leaderboard" while
+    # its reader sees "the boards" — which is what c23 found before this was fixed.
+    for rel in ("src/public/TraderView.tsx", "src/public/MarketView.tsx", "src/public/BoardView.tsx"):
+        body = read(WEB / rel)
+        if "trail: Crumb[]" not in body or "trail={trail}" not in body or "crumbs={trail}" not in body:
+            findings.append("%s renders a trail and states a different one to the graph" % rel)
+    for rel in PUBLIC_PAGES:
+        if rel.endswith("opengraph-image.tsx") and "revalidate" not in read(WEB / rel):
+            findings.append("%s does not set `revalidate`: a card that regenerates every request is a card whose "
+                            "numbers move under a reader comparing it with the page" % rel)
+    # the price surface on the market page goes through the number layer with a freshness, like every other one
+    market = read(WEB / "src/public/MarketView.tsx")
+    if 'kind="price"' not in market or "freshness=" not in market:
+        findings.append("the public odds are rendered without the number layer's freshness")
+
+    # ...and then the pages are actually served, because a file check passes on a route nothing can reach.
+    code, listed = p.list_handle("u-gate-d6", "gate_public")
+    if code != 200:
+        findings.append("the handle could not be listed (%d): %s" % (code, listed.get("error")))
+    served: list[str] = []
+    for path in ("/v1/public/trader/gate_public", "/v1/public/market/fed-cut-sept",
+                 "/v1/public/leaderboard/risk_adjusted", "/v1/public/sitemap"):
+        code, body = p.get(path)
+        if code != 200:
+            findings.append("%s answered %d" % (path, code))
+            continue
+        served.append(path)
+        if not body.get("robots"):
+            findings.append("%s serves no robots answer, so nothing decides its indexability" % path)
+        if not body.get("cacheKey"):
+            findings.append("%s serves no cache key" % path)
+    trader = p.get("/v1/public/trader/gate_public")[1]
+    if trader.get("url") and not str(trader["url"]).startswith("https://"):
+        findings.append("the trader page's canonical URL is not absolute: %s" % trader.get("url"))
+    if trader.get("cardKey") and not trader.get("card"):
+        findings.append("the trader page serves a cardKey with no card")
+    if trader.get("structuredData"):
+        findings += card_findings(trader)   # the graph and the card against the page they were served with
+    return ("%d page/view files present, %d wired, %d public routes served, no client component, every card cached"
+            % (len(PUBLIC_PAGES) + len(PUBLIC_VIEWS), len(wiring), len(served)), not findings,
+            "; ".join(findings[:6]))
+
+
+def c24_the_budget_refuses_and_then_blocks(p: Probe) -> tuple[str, bool, str]:
+    """D6: a sitemap walk is refused past the budget, and coming back past the refusal is a block.
+
+    The public pages are the only surfaces in the product with no account behind them, so their abuse protection
+    is the whole protection. The check walks the real limiter: it clears its own rows, walks the sitemap until the
+    API says 429, keeps going, and then asserts that (a) a block exists, (b) it is a DIGEST and not an address,
+    (c) it applies to every public page and not only the one that was scraped, and (d) a fresh caller is still
+    served — a budget that denies the world is an outage with a nicer name.
+    """
+    findings: list[str] = []
+    p.exec("DELETE FROM public_page_hits")
+    p.exec("DELETE FROM public_page_blocks")
+    limit = int(p.app()._pp.budget.BUDGET["sitemap"][0])
+    codes = [p.get("/v1/public/sitemap")[0] for _ in range(limit + 12)]
+    if 200 not in codes:
+        findings.append("no sitemap walk was served at all: %s" % codes[:5])
+    if 429 not in codes:
+        findings.append("%d walks never hit the budget" % len(codes))
+    else:
+        first = codes.index(429)
+        if any(c == 200 for c in codes[first:]):
+            findings.append("a walk was served after the budget was spent (position %d)" % first)
+    blocks = p.rows("SELECT subject_hash, scope, reason, kind, until_ms FROM public_page_blocks")
+    if not blocks:
+        findings.append("a caller who kept going past the lock was never blocked")
+    else:
+        subject, scope, reason, kind, _until = blocks[0]
+        if not str(subject).startswith("i_") or "127.0.0.1" in str(subject):
+            findings.append("the block stores something that is not a digest: %r" % str(subject)[:40])
+        if scope != "all":
+            findings.append("the auto-block is scoped to %r, so it protects one page" % scope)
+        if kind != "auto" or len(str(reason)) < 8:
+            findings.append("the auto-block has no reason a support agent could read: %r" % reason)
+        if p.get("/v1/public/market/fed-cut-sept")[0] != 429:
+            findings.append("the block does not reach the other public pages")
+    # and a reader who was never over the limit is unaffected by somebody else's block
+    p.exec("DELETE FROM public_page_blocks")
+    p.exec("DELETE FROM public_page_hits")
+    if p.get("/v1/public/market/fed-cut-sept")[0] != 200:
+        findings.append("clearing the block did not restore service")
+    return ("a %d-walk budget refuses with 429 and blocks the caller, by digest, across every public page" % limit,
+            not findings, "; ".join(findings[:5]))
+
+
+def c25_no_address_and_the_card_carries_its_qualifiers(p: Probe) -> tuple[str, bool, str]:
+    """D6: every public payload is greppable for an address, and a shared card keeps its qualifiers.
+
+    Two rules with one shape: what a stranger receives. The scanner walks every public read the probe can reach —
+    including a trader page, which is the only one that names a person — and then checks the card itself: a ranked
+    trader card carries the provisional label and the drawdown, a market card carries the price's age, and the
+    payload's own `notes` are in the card's footnote rather than only on the page. The card is the artifact that
+    travels without the page around it, so this is the check that decides whether the share is honest.
+    """
+    findings: list[str] = []
+    app = p.app()
+    rows = p.board(board="risk_adjusted").get("rows") or []
+    if not rows:
+        return ("no public payload carries an address, and every card keeps its qualifiers", True, "no board")
+    handle = "gate_public"
+    code, listed = p.list_handle("u-gate-d6", handle)
+    if code != 200:
+        findings.append("the handle could not be listed (%d): %s" % (code, listed.get("error")))
+    payloads: list[tuple[str, dict]] = [
+        ("trader", p.get("/v1/public/trader/" + handle)[1]),
+        ("market", p.get("/v1/public/market/fed-cut-sept")[1]),
+        ("board", p.get("/v1/public/leaderboard/risk_adjusted")[1]),
+        ("sitemap", p.get("/v1/public/sitemap")[1]),
+    ]
+    findings += public_payload_findings(payloads)
+    card = (payloads[0][1].get("card") or {})
+    foot = [str(f).lower() for f in (card.get("footnote") or [])]
+    joined = " | ".join(foot)
+    if card.get("provisional") and "provisional" not in joined:
+        findings.append("a provisional trader card lost its provisional line: %s" % foot)
+    if card.get("ranked") and "drawdown" not in joined:
+        findings.append("a ranked trader card lost its drawdown")
+    if not (payloads[0][1].get("notes") or []):
+        findings.append("the trader page carries no notes, so nothing on it qualifies the row")
+    mcard = (payloads[1][1].get("card") or {})
+    mfoot = " | ".join(str(f).lower() for f in (mcard.get("footnote") or []))
+    if not re.search(r"ago|as of|second|minute|hour", mfoot):
+        findings.append("the market card does not say how old its odds are: %s" % mfoot)
+    if not (payloads[2][1].get("formula") and payloads[2][1].get("gate")):
+        findings.append("the board page does not carry the formula and the gate it ranked by")
+    return ("4 public payloads clean of addresses, %s" % ("cards qualified" if not findings else "cards checked"),
+            not findings, "; ".join(findings[:6]))
+
+
+def c26_the_pages_are_published_once(p: Probe) -> tuple[str, bool, str]:
+    """D6: the contract, the ledger, the API's own index and the pages all agree about one URL grammar.
+
+    A public page that exists at a URL different from the one the API publishes as canonical is a page with two
+    addresses and half the signal. This check reads the four places the grammar is written — `contracts/
+    openapi.yaml`, the web route ledger, `public_pages/urls.py`, and the live sitemap — and fails if any of them
+    disagrees. It also asserts the three rules that make the grammar a decision rather than a convention: the
+    sitemap lists all three kinds, a `noindex` page is absent from the trader list only when it is unlisted, and
+    the OG URL is the page URL plus one suffix (an unfurler's cache key is the URL, so a second convention is a
+    second card).
+    """
+    findings: list[str] = []
+    contract = read(ROOT / "contracts" / "openapi.yaml")
+    ledger = read(WEB / "src" / "api" / "routes.ts")
+    urls = read(ROOT / "packages" / "polygm_core" / "public_pages" / "urls.py")
+    for path in ("/v1/public/trader/{handle}", "/v1/public/market/{slug}", "/v1/public/leaderboard/{board}",
+                 "/v1/public/sitemap", "/v1/public/blocks"):
+        if path not in contract:
+            findings.append("%s is not in the contract" % path)
+        if path not in ledger:
+            findings.append("%s is not in the web route ledger" % path)
+    for kind in ("trader", "market", "leaderboard"):
+        if ('"%s"' % kind) not in urls:
+            findings.append("urls.py has no %s kind" % kind)
+    code, listed_body = p.list_handle("u-gate-d26", "gate_grammar")
+    if code != 200:
+        findings.append("the handle could not be listed (%d): %s" % (code, listed_body.get("error")))
+    sitemap = p.get("/v1/public/sitemap")[1]
+    listed = [u.get("url", "") for u in (sitemap.get("urls") or [])]
+    for kind in ("trader", "market", "leaderboard"):
+        if not any(("/%s/" % kind) in u for u in listed):
+            findings.append("the sitemap lists no %s URL" % kind)
+    canonical = p.app()._pp.urls.page_url("trader", "gate_grammar", base=p.app()._BASE_URL())
+    if canonical not in listed:
+        findings.append("the sitemap's trader URL is not the canonical one: %s not in %s"
+                        % (canonical, [u for u in listed if "/trader/" in u][:2]))
+    if sitemap.get("count") != len(listed) or "caps" not in sitemap:
+        findings.append("the sitemap's count and its URLs disagree, or it serves no caps")
+    if sitemap.get("robots") and not str(sitemap["robots"]).startswith("index"):
+        findings.append("the sitemap itself asks not to be indexed: %r" % sitemap.get("robots"))
+    # the OG URL is derived, never re-invented
+    og = p.app()._pp.urls.og_url("trader", "gate_public")
+    if not og.endswith("/trader/gate_public/opengraph-image"):
+        findings.append("the OG URL is not the page URL plus a suffix: %s" % og)
+    return ("5 public routes in the contract and the ledger, %d sitemap URLs, one URL grammar" % len(listed),
+            not findings, "; ".join(findings[:6]))
+
+
+def _p08_module():
+    """`tools/p08-gate-check.py`, imported for its `Servers` context — the real uvicorn + `next start` pair.
+
+    D6's claim is a page a stranger opens, and nothing short of two real servers answers it: an in-process
+    TestClient renders no HTML, and `next build` type-checks a page without ever fetching a payload. Reusing P08's
+    bootstrapper rather than writing a second one is the point — the plane that serves the terminal is the plane
+    that must serve these pages, and a second boot would be a second set of env defaults to keep in step.
+    """
+    if "_p08" not in globals():
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("p08gate_for_p11", ROOT / "tools" / "p08-gate-check.py")
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules["p08gate_for_p11"] = mod
+        spec.loader.exec_module(mod)
+        globals()["_p08"] = mod
+    return globals()["_p08"]
+
+
+def _call(port: int, method: str, path: str, *, body: dict | None = None, headers: dict | None = None):
+    """One HTTP call to a local port, returning (status, body, content-type). No cookie jar: the public pages are
+    the surfaces that must work with no cookies at all, so a jar would be testing a session nobody has."""
+    import http.client
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=30)
+    payload = None if body is None else json.dumps(body)
+    hdrs = {"accept": "text/html,application/json;q=0.9", **(headers or {})}
+    if payload is not None:
+        hdrs["content-type"] = "application/json"
+    try:
+        conn.request(method, path, body=payload, headers=hdrs)
+        resp = conn.getresponse()
+        text = resp.read().decode("utf-8", "replace")
+        return resp.status, text, resp.getheader("content-type") or ""
+    finally:
+        conn.close()
+
+
+def public_page_findings(app_mod, web_port: int, api_port: int) -> list:
+    """What a stranger's browser and an unfurler get, checked on the rendered HTML rather than on the payload.
+
+    Five rules, each one a way a page can be *served* and still fail the kit's sentence ("every trader who shares
+    their page is doing our marketing"):
+
+    * **200 with a real document**, for a request with no cookies, no `X-User-Id` and no session of any kind.
+    * **The numbers are on the page**, not only in a payload: the board's rows and the market's question appear in
+      the HTML, because a page that renders client-side is a page a crawler sees empty.
+    * **The canonical URL and the JSON-LD are in the head**, and the JSON-LD parses — an unfurler that cannot read
+      it shows the URL as its title.
+    * **No address anywhere in the HTML**, which is the one leak the whole pseudonym design is for (the payload
+      scanners already refuse it; this is the rendered document, where a stray `console.log`-shaped prop would land).
+    * **The OG route answers with an image**, because a card that 500s unfurls as a broken image on every timeline
+      it is posted in — and it is the artifact that outlives the link.
+    """
+    out: list[str] = []
+    # The row to publish is read from the SERVED board, not from a call into the app module: an in-process read
+    # would answer even if the route were broken, and the page under test is rendered from the route.
+    status, body, _ = _call(api_port, "GET", "/v1/leaderboard?board=risk_adjusted&limit=5",
+                            headers={"accept": "application/json"})
+    try:
+        rows = (json.loads(body).get("rows") or []) if status == 200 else []
+    except ValueError:
+        rows = []
+    if not rows:
+        return ["the seeded population has no rows to publish a handle on (%d)" % status]
+    wallet = app_mod._wallet_for_anon(rows[0]["anon"]) or ""
+    user = "u-gate-d28"
+    app_mod._db.execute("INSERT OR IGNORE INTO users (id, created_ms, tier) VALUES (?,?,'free')", (user, 1))
+    app_mod._db.execute("DELETE FROM user_identities WHERE kind='wallet' AND user_id=?", (user,))
+    app_mod._db.execute("INSERT INTO user_identities (kind, value, user_id, state, claimed_ms, verified_ms,"
+                        " proof_kind, revoked_ms) VALUES ('wallet',?,?,'verified',?,?,'gate',NULL)",
+                        (wallet, user, 1, 1))
+    status, text, _ = _call(api_port, "POST", "/v1/leaderboard/identity",
+                            body={"state": "listed", "handle": "gate_served"},
+                            headers={"X-User-Id": user, "Idempotency-Key": "g11-d28-listed"})
+    if status != 200:
+        return ["the handle could not be listed through the served API (%d): %s" % (status, text[:160])]
+    pages = ("/leaderboard/risk_adjusted", "/market/fed-cut-sept", "/trader/gate_served")
+    for path in pages:
+        status, html, ctype = _call(web_port, "GET", path)
+        if status != 200 or "text/html" not in ctype:
+            out.append("%s answered %s %s" % (path, status, ctype))
+            continue
+        if not html.lstrip().lower().startswith("<!doctype html"):
+            out.append("%s is not a document" % path)
+        if 'rel="canonical"' not in html:
+            out.append("%s carries no canonical link" % path)
+        if "application/ld+json" not in html:
+            out.append("%s carries no structured data" % path)
+        if path.startswith("/leaderboard") and "w_2cfb79dff4" not in html and "#1" not in html:
+            out.append("%s does not contain a single ranked row: a board page that renders no rows is a page a "
+                       "crawler indexes as empty" % path)
+        for m in ADDRESS_RX.finditer(html):
+            out.append("%s serves an address: %s" % (path, m.group(0)[:12]))
+    for path in ("/trader/gate_served/opengraph-image", "/leaderboard/risk_adjusted/opengraph-image",
+                 "/market/fed-cut-sept/opengraph-image"):
+        status, body, ctype = _call(web_port, "GET", path)
+        if status != 200 or "image" not in ctype:
+            out.append("the card route %s answered %s %s" % (path, status, ctype))
+    return out
+
+
+def c28_the_pages_render_for_a_stranger(p: Probe) -> tuple[str, bool, str]:
+    """D6: the three pages and their cards, fetched from the running pair by a client with no session at all."""
+    p08 = _p08_module()
+    import importlib
+    try:
+        with p08.Servers() as srv:
+            sys.path.insert(0, str(ROOT / "services/api"))
+            import seed_leaderboard
+            seed_leaderboard.seed_sqlite()
+            app_mod = importlib.import_module("app")
+            findings = public_page_findings(app_mod, srv.web_port, srv.api_port)
+    except Exception as exc:
+        return ("3 public pages and their cards, fetched by a client with no session", False,
+                "the plane did not boot: %s: %s" % (type(exc).__name__, str(exc)[:180]))
+    return ("3 pages rendered and 3 cards served by the running pair for a session-less client",
+            not findings, "; ".join(findings[:6]))
+
+
+def declared_append_only() -> list[str]:
+    """The append-only set, read from the list the SQLite triggers are generated from.
+
+    `tools/build-sqlite-migrations.py`'s `APPEND_ONLY` is the one place the set is *declared*; the Postgres triggers
+    are scattered across migrations (0005 for the tables that existed then, each later migration for its own) and
+    the grants are in 0005, 0016 and 0018. Scanning `CREATE TRIGGER` statements instead would be worse than reading
+    the declaration: `referral_events` still has a trigger in 0012's text although 0016 dropped the table, and a
+    scan cannot tell that from a live one — which is the same reason the declaration exists. Parsed with `ast`
+    rather than imported, so a gate run never executes a migration tool to answer a question about a list.
+    """
+    import ast
+    src = (ROOT / "tools" / "build-sqlite-migrations.py").read_text()
+    for node in ast.parse(src).body:
+        if isinstance(node, ast.Assign) and getattr(node.targets[0], "id", "") == "APPEND_ONLY":
+            return list(ast.literal_eval(node.value))
+    raise RuntimeError("APPEND_ONLY is not declared in tools/build-sqlite-migrations.py")
+
+
+def append_only_findings(migrations: dict, declared: list[str]) -> list:
+    """Declared append-only tables missing either half of the promise.
+
+    Both halves matter and they fail differently: without the trigger our own code can rewrite evidence, and without
+    the REVOKE the application role can. The D6 sweep found **seventeen** tables with a trigger and no grant — every
+    append-only table born after 0005, whose `DO $$` block could not name a table that did not exist yet — and the
+    mirror image: `leaderboard_exclusions`, declared append-only in the portable list since D1, with no Postgres
+    trigger at all. `db/migrations/0018_append_only_grants.sql` closes both, and this is the check that would have
+    caught either one.
+    """
+    trig, revoked = set(), set()
+    for text in migrations.values():
+        for m in re.finditer(r"CREATE TRIGGER\s+append_only_\w+\s+[^;]*?ON\s+(\w+)", text, re.I | re.S):
+            trig.add(m.group(1))
+        for m in re.finditer(r"REVOKE[^;]*?UPDATE[^;]*?ON\s+(\w+)", text, re.I | re.S):
+            revoked.add(m.group(1))
+        for m in re.finditer(r"FOREACH t IN ARRAY ARRAY\[(.*?)\]", text, re.S):
+            # `[a-z0-9_]+`, not `[a-z_]+`: `flag_audit_p06` has a digit, and a scanner that silently drops it
+            # reports a table as unguarded while the migration three files away grants for it.
+            revoked |= set(re.findall(r"'([a-z0-9_]+)'", m.group(1)))
+    out = []
+    for t in declared:
+        if t not in trig:
+            out.append("%s is declared append-only and no migration creates its trigger" % t)
+        if t not in revoked:
+            out.append("%s is append-only and no REVOKE names it, so the app role can rewrite it" % t)
+    return out
+
+
+def c27_append_only_has_both_halves(p: Probe) -> tuple[str, bool, str]:
+    """The trigger AND the grant, for every declared append-only table — the invariant D6 found broken twice."""
+    migrations = {f.name: f.read_text() for f in sorted((ROOT / "db" / "migrations").glob("*.sql"))}
+    declared = declared_append_only()
+    findings = append_only_findings(migrations, declared)
+    return ("%d declared append-only table(s) have a trigger and a REVOKE" % len(declared),
+            not findings, "; ".join(findings[:6]))
+
+
 CHECKS = (c1_contract, c2_no_addresses, c3_gate_pair, c4_win_rate_gate, c5_refusals, c6_no_hidden_losses,
           c7_integers_only, c8_freshness, c9_read_plans, c10_history, c11_exclusions, c12_population,
           c13_published, c14_board_orders, c15_wallet_standing, c16_comparison_and_follows,
@@ -1587,7 +2086,17 @@ CHECKS = (c1_contract, c2_no_addresses, c3_gate_pair, c4_win_rate_gate, c5_refus
           # D5. The two halves of the kit's second acceptance sentence, then the two rules that decide whether the
           # programme is solvent and survivable.
           c19_reward_needs_a_trade, c20_second_wallet_is_caught, c21_dashboard_arithmetic,
-          c22_payout_reality_and_clawback)
+          c22_payout_reality_and_clawback,
+          # D6. The pages, the budget that keeps them serving, the payloads a stranger receives, and the one URL
+          # grammar three artifacts have to agree about.
+          c23_public_pages_exist_and_are_server_rendered, c24_the_budget_refuses_and_then_blocks,
+          c25_no_address_and_the_card_carries_its_qualifiers, c26_the_pages_are_published_once,
+          # ...and the schema invariant D6 found broken while reading 0005 for the D6 migration: an append-only
+          # table needs a trigger AND a grant, and four tables had only the first.
+          c27_append_only_has_both_halves,
+          # D6's own sentence, on the rendered document: 200 for a client with no cookies, the rows in the HTML,
+          # the canonical link and the graph in the head, no address anywhere, and a card that is an image.
+          c28_the_pages_render_for_a_stranger)
 
 
 # --------------------------------------------------------------------------------------------------- self-test
@@ -1848,6 +2357,52 @@ def self_test() -> int:
         got = [len(referral_terms_findings(no_claw, payout)), len(referral_terms_findings(good, no_form)),
                len(referral_terms_findings(no_marker, payout)), len(referral_terms_findings(good, wrong_min))]
         return all(n >= 1 for n in got), got
+
+    @canary
+    def append_only_halves():
+        """D6's schema scanner, in both directions: nothing fires on a guarded table, and each half fires alone.
+
+        The two halves fail independently, and the grant is the one that shipped broken seventeen times. The array
+        form is planted too: the grant lives in a `FOREACH ... ARRAY[...]` block in 0005 and 0018, so a scanner that
+        only understood `REVOKE ... ON t` would call every table in those two files unguarded.
+        """
+        both = {"0018.sql": "CREATE TRIGGER append_only_thing\n    BEFORE UPDATE OR DELETE ON thing\n"
+                            "    FOR EACH ROW EXECUTE FUNCTION f();\n"
+                            "REVOKE UPDATE, DELETE ON thing FROM PUBLIC;"}
+        no_grant = {"0018.sql": "CREATE TRIGGER append_only_thing BEFORE UPDATE OR DELETE ON thing"
+                                " FOR EACH ROW EXECUTE FUNCTION f();"}
+        no_trigger = {"0018.sql": "REVOKE UPDATE, DELETE ON thing FROM PUBLIC;"}
+        array_form = {"0005.sql": "FOREACH t IN ARRAY ARRAY['thing','other']\n    LOOP",
+                      "0018.sql": "CREATE TRIGGER append_only_thing BEFORE UPDATE OR DELETE ON thing"
+                                  " FOR EACH ROW EXECUTE FUNCTION f();"}
+        got = [len(append_only_findings(both, ["thing"])), len(append_only_findings(no_grant, ["thing"])),
+               len(append_only_findings(no_trigger, ["thing"])), len(append_only_findings(array_form, ["thing"]))]
+        return got == [0, 1, 1, 0], got
+
+    @canary
+    def public_payloads_and_cards():
+        """D6's two scanners, on planted violations: an address three levels down, a graph claim the page never
+        makes, and a provisional card that lost the sentence that qualifies it.
+
+        The address is planted in a NESTED object on purpose — the failure this scanner exists for is a field a
+        component added inside `evidence` or a sorted `links` map, and a scanner that only read the top level would
+        pass on exactly the payload it is meant to catch.
+        """
+        clean = {"card": {"kind": "trader", "title": "@deep_book", "ranked": True, "provisional": True,
+                          "footnote": ["provisional: fewer than 7 days of history", "drawdown 400"]},
+                 "notes": ["provisional: 3 days of history"],
+                 "structuredData": [{"@type": "ProfilePage", "name": "@deep_book", "url": "https://x.example/t"}]}
+        nested = {"payload": {"deep": {"evidence": {"wallet": "0x" + "ab" * 20}}}}
+        unbacked = {"card": {"ranked": True, "provisional": False, "footnote": ["drawdown 400"]},
+                    "notes": ["worst drawdown 400"],
+                    "structuredData": [{"@type": "ProfilePage", "description": "$9,999,999 profit"}]}
+        unqualified = {"card": {"ranked": True, "provisional": True, "footnote": ["drawdown 400"]},
+                       "notes": ["provisional: 3 days of history"]}
+        no_notes = dict(clean, notes=[])
+        got = [len(public_payload_findings([("planted", nested)])), len(card_findings(unbacked)),
+               len(card_findings(unqualified)), len(card_findings(no_notes))]
+        assert public_payload_findings([("clean", clean)]) == []
+        return got == [1, 1, 1, 1], got
 
     @canary
     def p10_scanners_still_work():

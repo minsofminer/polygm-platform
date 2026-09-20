@@ -203,3 +203,18 @@ CREATE INDEX referral_payouts_status_ix ON referral_payouts (status, created_ms)
 CREATE TRIGGER append_only_referral_accruals
     BEFORE UPDATE OR DELETE ON referral_accruals
     FOR EACH ROW EXECUTE FUNCTION polygm_reject_mutation();
+
+-- The grant half of the same promise, in the migration that creates the table rather than in 0005: 0005 enumerates
+-- what existed when it ran, and `REVOKE ... ON <a table that does not exist yet>` is an error, so a table born five
+-- migrations later cannot be named there. (`db/migrations/0018_append_only_grants.sql` is the systematic version of
+-- this block: it grants for every table the append-only list declares, and the P11 gate's c27 fails if a declared
+-- table is missing either half. This one stays local because the rule is "the migration that creates an
+-- append-only table grants for it".)
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'polygm_app') THEN
+        REVOKE UPDATE, DELETE, TRUNCATE ON referral_accruals FROM PUBLIC;
+        REVOKE UPDATE, DELETE, TRUNCATE ON referral_accruals FROM polygm_app;
+        GRANT INSERT, SELECT ON referral_accruals TO polygm_app;
+    END IF;
+END $$;

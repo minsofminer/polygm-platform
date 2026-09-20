@@ -16,6 +16,7 @@ import json
 import os
 import re
 import sqlite3
+import threading
 import time
 import uuid
 from dataclasses import asdict
@@ -39,6 +40,7 @@ from polygm_core.radar import rankings as _radar
 from polygm_core.referrals import code as _rc
 from polygm_core.referrals import sybil as _sy
 from polygm_core.referrals import terms as _rt
+from polygm_core import public_pages as _pp
 from polygm_core.risk.gate import Intent, Limits, MarketState, evaluate, norm_tick
 from polygm_core.risk.idempotency import Idem
 from polygm_core.security import authz as _authz
@@ -134,6 +136,7 @@ CODES = {
     "ADMIN_REQUIRED": ("this route is admin-only", 403, False),
     "LOGIN_FAILED": ("wrong user name or password", 401, False),
     "ACCOUNT_LOCKED": ("too many attempts; try again later", 429, True),
+    "RATE_LIMITED": ("too many requests; try again shortly", 429, True),
     "TOTP_REQUIRED": ("a 6-digit code is needed for this action", 403, False),
     "TOTP_INVALID": ("that code did not work", 403, False),
     "TOTP_LOCKED": ("the authenticator is locked after too many tries", 429, True),
@@ -323,12 +326,111 @@ def _now_ms() -> int:
     return int(time.time() * 1000)
 
 
-def _connect() -> sqlite3.Connection:
-    db = os.environ.get("PGM_DB_PATH", str(ROOT / "var" / "polygm.db"))
-    Path(db).parent.mkdir(parents=True, exist_ok=True)
-    c = sqlite3.connect(db, isolation_level=None, check_same_thread=False)
+# The database path is resolved ONCE, at import, and every connection — including the ones threads open later —
+# uses that value. Reading the environment inside the connection factory instead looks equivalent and is not: a
+# process that imports this module against one file and then changes `PGM_DB_PATH` (a test harness, `check-openapi`
+# booting a second app, a tool that migrates a throwaway database) hands its request threads connections to a file
+# that may not exist yet, and `sqlite3.connect` *creates* an empty one rather than failing — so the requests answer
+# `no such table: markets` as a 500. That was the shape of the seven failures the contract audit caught.
+_DB_PATH = os.environ.get("PGM_DB_PATH", str(ROOT / "var" / "polygm.db"))
+
+
+def _connect(db: str = "") -> sqlite3.Connection:
+    path = db or _DB_PATH
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    c = sqlite3.connect(path, isolation_level=None, check_same_thread=False)
     c.execute("PRAGMA journal_mode=WAL"); c.execute("PRAGMA foreign_keys=ON")
+    c.execute("PRAGMA busy_timeout=5000")
     return c
+
+
+class ThreadConnection:
+    """A SQLite connection **per thread**, because one shared connection is a data race.
+
+    `sqlite3` refuses to share a connection between threads for a reason, and `check_same_thread=False` only
+    silences the check that would have told us: two threads interleaving `execute()` and `fetchall()` on one
+    connection is undefined behaviour in the C library underneath. P08's c11 drill — five parallel reads on an
+    expired access token — failed about one run in three with `sqlite3.InterfaceError: bad parameter or other API
+    misuse` thrown out of a plain `SELECT /v1/markets`, which arrived as a 500 that a reader of the drill's
+    status list could only have written off as a flake. It was not a flake, it was this.
+
+    Uvicorn serves requests on a worker thread pool, so the fix is the shape a real database would have forced
+    anyway: **each thread gets its own connection**, WAL lets them read in parallel, and `busy_timeout` makes a
+    concurrent writer wait instead of failing. Everything is already written against `_db.execute(...)`, so this
+    proxy is invisible to call sites, and there is no shared cursor for two threads to step on.
+
+    Two deliberate non-changes: `isolation_level=None` (autocommit with explicit `BEGIN` where the code wants a
+    transaction) and the default synchronous mode — WAL + `synchronous=NORMAL` would be faster and would trade
+    durability on power loss for it, which is a decision for a deployment record and not for a concurrency fix.
+    """
+
+    def __init__(self, factory) -> None:
+        self._factory = factory
+        self._lock = threading.Lock()
+        self._conns: dict[int, sqlite3.Connection] = {}
+        self._trace = None
+
+    def _conn(self) -> sqlite3.Connection:
+        tid = threading.get_ident()
+        c = self._conns.get(tid)
+        if c is None:
+            self._reap()
+            c = self._factory()
+            if self._trace is not None:
+                c.set_trace_callback(self._trace)
+            self._conns[tid] = c
+        return c
+
+    def _reap(self) -> None:
+        """Close the connections of threads that have exited.
+
+        A connection is three file descriptors (the db, the WAL and the shm), and both a test run and a server
+        churn threads — one per `TestClient`, one per uvicorn worker that retires. Without this the suite reached
+        `OSError: [Errno 24] Too many open files` after a thousand tests, which is a leak wearing a resource
+        limit's clothes: the thread that owned the connection is gone, so nothing can ever use it again.
+        """
+        alive = {t.ident for t in threading.enumerate()}
+        with self._lock:
+            for tid in [t for t in self._conns if t not in alive]:
+                try:
+                    self._conns.pop(tid).close()
+                except Exception:                      # already closed: nothing to reap
+                    self._conns.pop(tid, None)
+
+    def set_trace_callback(self, cb) -> None:
+        """A trace that only sees the calling thread's queries is a trace that reports zero queries.
+
+        `test_markets_surfaces` counts the queries one page costs by installing a trace callback and making a
+        request — and the request is served on a worker thread, so with a connection per thread there is nothing
+        to count unless the proxy carries the setting to every connection it hands out, including the ones it has
+        not opened yet. (This is the same mistake in miniature as the connection sharing it replaced: state that
+        lives on "the connection" has to live on the thing that decides which connection you get.)
+        """
+        self._trace = cb
+        with self._lock:
+            conns = list(self._conns.values())
+        for c in conns:
+            c.set_trace_callback(cb)
+        self._conn().set_trace_callback(cb)
+
+    def close(self) -> None:
+        """Close every connection this process opened — used by tests that tear a database down."""
+        with self._lock:
+            conns, self._conns = list(self._conns.values()), {}
+        for c in conns:
+            try:
+                c.close()
+            except Exception:                          # already closed, or closed under us: nothing to do
+                pass
+
+    def __getattr__(self, name):                       # execute, executemany, executescript, commit, rollback…
+        return getattr(self._conn(), name)
+
+    def __enter__(self):
+        return self._conn().__enter__()
+
+    def __exit__(self, *exc):                          # pragma: no cover - no call site uses `with _db:` today,
+        return self._conn().__exit__(*exc)
 
 
 # The tables this process reads or writes. Not "nice to have": if `orders` is missing, the failure would
@@ -361,7 +463,19 @@ def _require_schema(c: sqlite3.Connection) -> None:
 app = FastAPI(title="Openout API", version="1.0.0",
               description="Read endpoints are public or user-scoped. Every mutating endpoint requires an "
                           "Idempotency-Key header (P04 rule 5) and is versioned under /v1/.")
-_db = _connect()
+def _thread_connection() -> sqlite3.Connection:
+    """A new connection for a new thread, checked for the schema the boot check checks for the first one.
+
+    A thread that gets a connection to the wrong database (or to a file that did not exist until the connection
+    created it) used to be an empty schema answering every request with a 500. The check is one `PRAGMA table_info`
+    per table per thread, paid once, and the failure it produces is the loud one `_require_schema` already writes.
+    """
+    c = _connect(_DB_PATH)
+    _require_schema(c)
+    return c
+
+
+_db = ThreadConnection(_thread_connection)
 _require_schema(_db)
 FLAGS = Flags.from_env()
 LIMITS = Limits()           # the boot fallback; the per-request copy in place_order overlays the flag store
@@ -5962,6 +6076,48 @@ REFERRAL_REVIEW_SET_RESPONSES = {400: {"description": "no Idempotency-Key"},
                                  409: {"description": "the Idempotency-Key was reused with a different body"},
                                  422: {"description": "an unknown decision, or one with no reason"}}
 
+# ============================================================================== P11 · D6 · the public pages ====
+# Three pages that exist to be shared, plus the two artefacts a crawler needs (a sitemap) and the lever that
+# stops one (a block). They are the only surfaces here an anonymous caller can reach, which is why the budget
+# below is the first thing in this file rather than a decorator applied later: an unauthenticated read path is
+# a load source, and "we will add rate limiting" is how a launch day becomes an incident.
+
+PUBLIC_TRADER_RESPONSES = {
+    404: {"description": "no listed trader carries that handle — and a handle that is taken but not listed "
+                         "answers identically, because the difference is not a stranger's business"},
+    429: {"description": "too many public page requests from this address"},
+    422: {"description": "a handle that is not the shape a handle has"},
+}
+PUBLIC_MARKET_RESPONSES = {
+    404: {"description": "no market carries that slug"},
+    429: {"description": "too many public page requests from this address"},
+    422: {"description": "a slug that is not the shape a slug has"},
+}
+PUBLIC_BOARD_RESPONSES = {
+    404: {"description": "no board by that name"},
+    429: {"description": "too many public page requests from this address"},
+    422: {"description": "an unknown window or category"},
+}
+PUBLIC_SITEMAP_RESPONSES = {
+    429: {"description": "too many public page requests from this address — a sitemap walk is the load this "
+                         "budget is smallest for"},
+}
+# The read and the write answer different sets, so they get different tables: a read that cannot 422 on a
+# missing reason should not advertise one, and the P10 copy-configs pair is the precedent for splitting them.
+PUBLIC_BLOCK_LIST_RESPONSES = {
+    403: {"description": "not an operator token"},
+    503: {"description": "no operator token is configured on this box"},
+}
+# Written out rather than built by unpacking the read's table: tools/check-openapi.py reads these constants
+# with ast.literal_eval, and a `**` in the dict literal makes the whole table invisible to it - the audit then
+# compares the contract against an EMPTY set and reports the yaml as over-promising. Duplication is the cheaper
+# mistake here (the two lists are checked against each other by the split-table rule the P10 pair already has).
+PUBLIC_BLOCK_RESPONSES = {
+    403: {"description": "not an operator token"},
+    503: {"description": "no operator token is configured on this box"},
+    422: {"description": "a reason is required, and the block has to expire"},
+}
+
 for _t in (TAPE_FILLS_RESPONSES, FACETS_RESPONSES, WHALES_RESPONSES, TRADER_RESPONSES, COPY_CREATE_RESPONSES,
            COPY_GUARD_RESPONSES, COPY_MONITOR_RESPONSES, PORTFOLIO_RESPONSES, WHALE_VIEW_RESPONSES,
            RADAR_RESPONSES, RADAR_JOB_RESPONSES, COPY_LIST_RESPONSES, WHALE_VIEW_LIST_RESPONSES,
@@ -5974,7 +6130,9 @@ for _t in (TAPE_FILLS_RESPONSES, FACETS_RESPONSES, WHALES_RESPONSES, TRADER_RESP
            LEADERBOARD_ME_RESPONSES, LEADERBOARD_IDENTITY_RESPONSES, LEADERBOARD_IDENTITY_SET_RESPONSES,
            LEADERBOARD_COMPARE_RESPONSES, LEADERBOARD_FOLLOWS_RESPONSES, LEADERBOARD_FOLLOW_RESPONSES,
            REFERRAL_TERMS_RESPONSES, REFERRAL_ME_RESPONSES, REFERRAL_CODE_RESPONSES, REFERRAL_APPLY_RESPONSES,
-           REFERRAL_ACCRUE_RESPONSES, REFERRAL_REVIEW_RESPONSES, REFERRAL_REVIEW_SET_RESPONSES):
+           REFERRAL_ACCRUE_RESPONSES, REFERRAL_REVIEW_RESPONSES, REFERRAL_REVIEW_SET_RESPONSES,
+                   PUBLIC_TRADER_RESPONSES, PUBLIC_MARKET_RESPONSES, PUBLIC_BOARD_RESPONSES,
+                   PUBLIC_SITEMAP_RESPONSES, PUBLIC_BLOCK_LIST_RESPONSES, PUBLIC_BLOCK_RESPONSES):
     _t.update(_INTERNAL)                       # every route can 500 through the app-wide handler
 del _t
 # ------------------------------------------------------------------ P11 D4 · self-rank and the identity you appear under
@@ -7068,6 +7226,591 @@ def _ref_review_work(rid: str, body: dict):
     return _stamped(out, ttl_ms=5_000, stale_ms=flags().stale_ms_tape, as_of_ms=at)
 
 
+# -------------------------------------------------------------------------------------------------------------
+# P11 · D6 · the public pages: the budget, the three reads, the sitemap and the block lever.
+#
+# Everything below serves a caller we cannot identify, so three rules are applied once, here, rather than in
+# each route: the caller is a salted digest and never an address (the same function the referral signals use,
+# so there is one salt and one implementation to rotate); the window is counted before the payload is built, so
+# a refused request costs a lookup and not a ranking; and the payload a route returns is the payload the card,
+# the structured data and the sitemap are built from, so there is one set of public facts per page and not four
+# that agree by review.
+#
+# What these routes do NOT do, deliberately:
+#   * they do not resolve a handle to an account, a wallet, an address or a balance - the page's subject is a
+#     pseudonym (§2.19), and this route is what makes that a structural fact rather than a styling choice;
+#   * they do not serve an unlisted handle differently from a missing one: both are 404 with the same body, so
+#     the page cannot be used to ask "is this handle taken?" one string at a time;
+#   * they do not build a second ranking. Every board number comes from `_lb_board`, the same call the app uses.
+
+_PP_CARD_TTL_MS = 86_400_000
+
+
+def _public_budget_row(key: str, default: str) -> str:
+    """A bound the product chose, read from a row so it is one edit rather than one deploy."""
+    row = _db.execute("SELECT value FROM public_page_budget WHERE key=?", (str(key),)).fetchone()
+    return str(row[0]) if row and str(row[0]).strip() else str(default)
+
+
+def _public_window(kind: str, subject: str, now_ms: int, *, window_ms: int) -> tuple[int, int, int]:
+    """(window start, hits in it, locked-until) for this subject and kind.
+
+    The window is fixed from the first hit and read back from the row rather than recomputed from the clock: a
+    request that arrives halfway through a window must not reset its own budget, and two API processes sharing
+    a database must agree on when the window began.
+    """
+    row = _db.execute("SELECT window_start_ms, hits, locked_until_ms FROM public_page_hits "
+                      "WHERE kind=? AND subject_hash=? ORDER BY window_start_ms DESC LIMIT 1",
+                      (str(kind), str(subject))).fetchone()
+    if row is None:
+        return int(now_ms), 0, 0
+    start = _tm._int(row[0])
+    if int(now_ms) - start >= int(window_ms):
+        return int(now_ms), 0, 0
+    return start, _tm._int(row[1]), _tm._int(row[2])
+
+
+def _public_write(kind: str, subject: str, start_ms: int, hits: int, locked_until_ms: int,
+                  now_ms: int) -> None:
+    """Record the hit. SELECT-then-write rather than an upsert, because the two engines spell that differently
+    and a dialect conditional in a rate limiter is a rate limiter that is wrong on one of them."""
+    row = _db.execute("SELECT hits FROM public_page_hits WHERE kind=? AND subject_hash=? AND window_start_ms=?",
+                      (str(kind), str(subject), int(start_ms))).fetchone()
+    if row is None:
+        _db.execute("INSERT INTO public_page_hits (kind, subject_hash, window_start_ms, hits, locked_until_ms,"
+                    " last_ms) VALUES (?,?,?,?,?,?)",
+                    (str(kind), str(subject), int(start_ms), int(hits), int(locked_until_ms), int(now_ms)))
+    else:
+        _db.execute("UPDATE public_page_hits SET hits=?, locked_until_ms=?, last_ms=? "
+                    "WHERE kind=? AND subject_hash=? AND window_start_ms=?",
+                    (int(hits), int(locked_until_ms), int(now_ms), str(kind), str(subject), int(start_ms)))
+
+
+def _public_blocks(subject: str) -> list[dict]:
+    rows = _db.execute("SELECT scope, reason, until_ms, kind FROM public_page_blocks WHERE subject_hash=?",
+                       (str(subject),)).fetchall()
+    return [{"scope": r[0], "reason": r[1], "until_ms": r[2], "kind": r[3]} for r in rows] if rows else []
+
+
+def _public_gate(request: Request, kind: str) -> tuple[dict, JSONResponse | None]:
+    """Count this request, then decide. Returns (meta, refusal) and never raises.
+
+    The order matters and is the whole design: a *blocked* subject is refused without spending a budget row, a
+    refused subject has its hits recorded (which is what makes the auto-block rule able to see "came back ten
+    times past the limit"), and only an allowed request goes on to build a payload.
+
+    `X-RateLimit-*` is served on the allowed path too, because a well-behaved crawler that can see its remaining
+    budget will slow down, and one that cannot will discover the limit by being refused.
+    """
+    rid = request.state.request_id
+    now = _now_ms()
+    salt = _ref_salt()                                     # one salt for everything we digest, one rotation
+    subject = _pp.budget.subject_hash(str(getattr(request.client, "host", "") or "unknown"), salt)
+    spec = _pp.budget.BUDGET.get(str(kind), _pp.budget.BUDGET["leaderboard"])
+
+    live = _pp.budget.block_for(_public_blocks(subject), scope=str(kind), at_ms=now)
+    if live:
+        resp = err("RATE_LIMITED", rid)
+        resp.headers["Retry-After"] = str(max(1, int(live["retryAfterMs"]) // 1000))
+        resp.headers["Cache-Control"] = "no-store"
+        return {"subject": subject, "blocked": True, "reason": live["reason"]}, resp
+
+    # The cross-kind budget is checked first: it is the only one a loop over all four kinds cannot escape.
+    t_start, t_hits, _ = _public_window("all", subject, now, window_ms=int(_pp.budget.TOTAL[1]))
+    total = _pp.budget.decide_total(hits=t_hits + 1, window_start_ms=t_start, at_ms=now)
+    start, hits, locked_until = _public_window(str(kind), subject, now, window_ms=int(spec[1]))
+    verdict = _pp.budget.decide_hits(kind=str(kind), hits=hits + 1, window_start_ms=start, at_ms=now)
+
+    wrote_lock = 0
+    if not verdict["allowed"]:
+        wrote_lock = now + int(spec[2])
+        _public_write(str(kind), subject, start, hits + 1, wrote_lock, now)
+    if not total["allowed"]:
+        _public_write("all", subject, t_start, t_hits + 1, now + int(_pp.budget.TOTAL[2]), now)
+
+    if not verdict["allowed"] or not total["allowed"]:
+        # Coming straight back ten times past a limit is a scraper rather than a reader whose browser retried.
+        auto, why = _pp.budget.should_auto_block(findings=[], hits=hits + 1, limit=int(spec[0]))
+        if auto and wrote_lock:
+            _db.execute("INSERT INTO public_page_blocks (subject_hash, scope, reason, kind, until_ms,"
+                        " created_ms, created_by) VALUES (?,?,?,?,?,?,?)",
+                        (subject, "all", why, "auto", now + 600_000, now, ""))
+        refusal = err("RATE_LIMITED", rid)
+        refusal.headers["Retry-After"] = str(max(1, int(verdict["retryAfterMs"] or total["retryAfterMs"]) // 1000))
+        refusal.headers["Cache-Control"] = "no-store"
+        return {"subject": subject, "kind": kind, "limit": int(spec[0])}, refusal
+
+    _public_write(str(kind), subject, start, hits + 1, locked_until if locked_until > now else 0, now)
+    _public_write("all", subject, t_start, t_hits + 1, 0, now)
+    return {"subject": subject, "kind": kind, "limit": int(spec[0]),
+            "remaining": max(0, int(verdict["remaining"])),
+            "windowMs": int(spec[1])}, None
+
+
+def _public_headers(meta: dict, kind: str, tag: str) -> dict:
+    """The headers every public read carries: the cache contract, the validator, and the budget's own number."""
+    return {"Cache-Control": _pp.urls.cache_control(str(kind)), "ETag": str(tag),
+            "X-RateLimit-Limit": str(int(meta.get("limit") or 0)),
+            "X-RateLimit-Remaining": str(int(meta.get("remaining") or 0)),
+            "Vary": "Accept-Encoding"}
+
+
+def _public_trader_handle(handle: str) -> tuple[str, str] | None:
+    """(user id, canonical handle) for a *listed* handle, or None.
+
+    One indexed read against the partial unique index D6 added, and the state filter is part of the query rather
+    than checked afterwards: an account that turned listing off must stop resolving here in the same instant it
+    stops appearing on a board, and a check that happens after the fetch is a check somebody reorders.
+    """
+    row = _db.execute("SELECT user_id, handle FROM leaderboard_identity "
+                      "WHERE state='listed' AND handle=? AND handle <> ''", (str(handle),)).fetchone()
+    if row is None:
+        return None
+    return str(row[0]), str(row[1])
+
+
+def _public_trader_notes(row: dict, standing: dict) -> list[str]:
+    """The qualifiers that travel with the numbers, built from the row itself.
+
+    Each sentence is a consequence of a rule the rest of the phase already enforces (the sample gate, the
+    provisional window, the disputed-market exclusion, the drawdown). Composing them here rather than in the
+    card or the page is what makes the card and the page carry the same claims: they both read this list.
+    """
+    notes: list[str] = []
+    settled = _tm._int(row.get("settledMarkets"))
+    if row.get("winRateBps") is None:
+        gate_n = _tm._int(standing.get("sampleGate") or _lb_boards.MIN_RESOLVED)
+        notes.append("win rate is behind the sample gate: %d settled markets, %d needed" % (settled, gate_n))
+    if _tm._int(row.get("ageDays")) < 7:
+        notes.append("provisional: %d days of history, nothing rankable before 7" % _tm._int(row.get("ageDays")))
+    if _tm._int(row.get("maxDrawdownMicro")):
+        notes.append("worst drawdown %s" % fmt_usdc(_tm._int(row.get("maxDrawdownMicro"))))
+    if _tm._int(row.get("disputedMarkets")):
+        notes.append("%d disputed market(s) excluded from this row" % _tm._int(row.get("disputedMarkets")))
+    return notes[:3]
+
+
+@app.get("/v1/public/trader/{handle}", responses=PUBLIC_TRADER_RESPONSES)
+def get_public_trader(handle: str, request: Request):
+    """The public dossier behind a listed handle: server-rendered first, crawlable second, and shareable third.
+
+    D4's served copy promised that "there is one handle per traded wallet: /trader/<handle> resolves to the same
+    wallet as its pseudonym". This route is that promise, and it resolves to the *pseudonym* and stops: the
+    account id, the wallet address and the balance behind it are not in this payload at any depth, which is also
+    what lets the OG card and the JSON-LD be built from it without a second scrub.
+    """
+    rid = request.state.request_id
+    meta, refusal = _public_gate(request, "trader")
+    if refusal is not None:
+        return refusal
+    wanted, why = _pp.urls.normalise_handle(handle)
+    if why:
+        return err("VALIDATION", rid, detail=why, where=["handle"])
+    found = _public_trader_handle(wanted)
+    if found is None:
+        return err("NOT_FOUND", rid)
+    uid, canonical = found
+    at = _now_ms()
+    wallets = _lb_wallets_for(str(uid))
+    if not wallets:
+        return err("NOT_FOUND", rid)
+    wallet = dict(wallets[0])
+    anon = str(wallet["anon"])
+    try:
+        standing = _lb_self_wallet(wallet, at_ms=at, window="", days=30, page=_LB_PAGE_SIZE)
+    except ValueError as exc:                                                      # pragma: no cover - spec only
+        return err("VALIDATION", rid, detail=str(exc), where=["window"])
+    default_board = next((str(b["id"]) for b in _lb_boards.BOARDS if b.get("isDefault")), "risk_adjusted")
+    entry = next((e for e in standing["boards"] if e["board"] == default_board and not e.get("category")), None)
+    if entry is None:
+        return err("NOT_FOUND", rid)
+    board = _lb_board(board_id=default_board, window="", at_ms=at)
+    raw = next((r for r in board["rows"] if str(r.get("wallet")) == anon), None)
+    if raw is None:
+        return err("NOT_FOUND", rid)
+    row = _lb_row_out(raw, total=board["rankedTotal"], handles={anon: canonical})
+    notes = _public_trader_notes(row, entry)
+    url = _pp.urls.page_url("trader", canonical, base=_BASE_URL())
+    card = _pp.cards.trader_card(
+        handle=canonical,
+        headline=(("rank #%d of %d on the risk-adjusted board" % (_tm._int(row.get("rank")),
+                                                                 _tm._int(board["rankedTotal"])))
+                  if entry.get("state") == "ranked" else "not ranked yet"),
+        stats=[("realised", str(row.get("realised") or fmt_usdc(_tm._int(row.get("realisedMicro"))))),
+               ("settled markets", str(_tm._int(row.get("settledMarkets")))),
+               ("win rate", (_bps_text(_tm._int(row.get("winRateBps"))) if row.get("winRateBps") is not None
+                             else "behind sample gate"))],
+        notes=notes, ranked=entry.get("state") == "ranked",
+        provisional=_tm._int(row.get("ageDays")) < 7,
+        drawdown=(fmt_usdc(_tm._int(row.get("maxDrawdownMicro"))) if _tm._int(row.get("maxDrawdownMicro")) else ""),
+        url=url)
+    # The trail is built from the payload's OWN names — the card's brand, the board's label, the card's title —
+    # rather than from section names invented here. A breadcrumb is the one node in the graph that is pure
+    # vocabulary, and the temptation is to exempt it from `unbacked()` and hand-write "Leaderboard"; the gate's c23
+    # refused, correctly, because a crawler showing a section name the page never prints is a claim we made up.
+    # The web replaces these names with the ones it renders (see `JsonLd`'s `crumbNames`), so the machine-readable
+    # trail and the visible trail are the same trail.
+    graph = _pp.structured.graph(
+        _pp.structured.breadcrumb([(str(card.get("brand")), _BASE_URL()),
+                                   (str(board["label"] or default_board),
+                                    _pp.urls.page_url("leaderboard", default_board, base=_BASE_URL())),
+                                   (str(card["title"]), url)]),
+        _pp.structured.profile_page(handle=canonical, url=url, headline=str(card["subtitle"]), notes=notes,
+                                    board_url=_BASE_URL() + "/leaderboard"))
+    body = {
+        "cacheKey": "public-trader:%s" % canonical,
+        "handle": canonical, "anon": anon, "url": url,
+        "robots": _pp.urls.robots_for(kind="trader", ranked=entry.get("state") == "ranked",
+                                      age_days=_tm._int(row.get("ageDays")), rows=1),
+        # Nine answers, not five: the category board is four boards wearing one name (§2.12), and a public
+        # profile that printed only the main five would hide the standing a specialist is most likely to share.
+        # Each entry carries the URL of the board it is a row of, so the page links back to what it cites.
+        "standing": [{"board": e["board"], "label": e.get("label"), "category": e.get("category") or "",
+                      "state": e.get("state"), "rank": e.get("rank"),
+                      "rankedTotal": e.get("rankedTotal"), "rankBadge": e.get("rankBadge"),
+                      "url": _pp.urls.page_url("leaderboard", str(e["board"]), base=_BASE_URL(),
+                                               category=str(e.get("category") or ""))}
+                     for e in standing["boards"]],
+        "headline": {"board": default_board, "window": board["window"], "rank": _tm._int(row.get("rank")),
+                     "rankedTotal": _tm._int(board["rankedTotal"]), "settledMarkets": _tm._int(row.get("settledMarkets")),
+                     "winRateBps": row.get("winRateBps"), "realisedMicro": _tm._int(row.get("realisedMicro")),
+                     "realised": row.get("realised"), "maxDrawdownMicro": _tm._int(row.get("maxDrawdownMicro")),
+                     "maxDrawdown": row.get("drawdown"), "state": row.get("state"),
+                     "ageDays": _tm._int(row.get("ageDays"))},
+        "notes": notes, "card": card, "cardKey": _pp.cards.card_key(card), "structuredData": graph,
+        # The gate this page quotes is the one its own notes are written against — the board's own gate when the
+        # entry carries one, otherwise the leaderboard's. It shipped as `or 0`, which is a number that cannot be
+        # right in any world: a page claiming "0 settled markets needed" beside a row that says otherwise is the
+        # exact class of bug the sample gate exists to prevent, and the D6 web test caught it by rendering it.
+        "sampleGate": _tm._int(entry.get("sampleGate") or row.get("sampleGate") or _lb_boards.MIN_RESOLVED),
+        "links": {"methodology": "/v1/leaderboard/methodology", "board": "/v1/leaderboard",
+                  "og": _pp.urls.og_url("trader", canonical, base=_BASE_URL())},
+        "note": ("this page is public because the trader listed a handle; the row is the same row it would be "
+                 "privately, and turning listing off removes the address, not the rank"),
+    }
+    _pp_audit("public.trader", canonical, meta, rid)
+    return JSONResponse(content=_stamped(body, ttl_ms=30_000, stale_ms=flags().stale_ms_tape, as_of_ms=at),
+                        headers=_public_headers(meta, "trader", _pp.urls.etag(body)))
+
+
+@app.get("/v1/public/market/{slug}", responses=PUBLIC_MARKET_RESPONSES)
+def get_public_market(slug: str, request: Request):
+    """The market page a news story links to: the question, the odds, the freshness, and nothing account-shaped.
+
+    The odds come from the same rows `/v1/markets/{id}` prints, and the freshness stamp is the market's own
+    `updated_ms`, not `now` — a crawlable odds page is the one surface where a stale price is quoted as current
+    by somebody who never opened the app, so the age travels in the payload, the card's footnote and a header.
+    """
+    rid = request.state.request_id
+    meta, refusal = _public_gate(request, "market")
+    if refusal is not None:
+        return refusal
+    wanted, why = _pp.urls.normalise_slug(slug)
+    if why:
+        return err("VALIDATION", rid, detail=why, where=["slug"])
+    row = _db.execute(
+        "SELECT m.id, m.question, m.accepting_orders, m.minimum_tick_size, m.minimum_order_size, m.fee_type, "
+        "m.end_ts, m.slug, m.updated_ms, e.title, e.slug, COALESCE(mt.category, 'Other'), "
+        "COALESCE(s.volume_24h_micro, 0), COALESCE(s.liquidity_micro, 0), a.last_price_micro, "
+        "COALESCE(a.volume_7d_micro, 0), COALESCE(a.open_interest_micro, 0), m.condition_id "
+        "FROM markets m LEFT JOIN events e ON e.id = m.event_id "
+        "LEFT JOIN market_meta mt ON mt.market_id = m.id LEFT JOIN market_stats s ON s.condition_id = m.condition_id "
+        "LEFT JOIN market_activity a ON a.market_id = m.id "
+        "WHERE m.slug = ? AND m.slug IS NOT NULL AND m.slug <> ''", (wanted,)).fetchone()
+    if row is None:
+        return err("NOT_FOUND", rid)
+    at = _now_ms()
+    market_id = str(row[0])
+    tokens = _db.execute("SELECT outcome, is_winner FROM tokens WHERE market_id=? ORDER BY outcome_index",
+                         (market_id,)).fetchall() or []
+    outcomes = [{"outcome": str(t[0]), "winner": (None if t[1] is None else bool(t[1]))} for t in tokens]
+    price = row[14]
+    opened = int(price) if price is not None else None
+    age_ms = max(0, at - _tm._int(row[8]))
+    url = _pp.urls.page_url("market", str(row[7]), base=_BASE_URL())
+    fresh = _freshness_text(age_ms)
+    card = _pp.cards.market_card(
+        question=str(row[1]),
+        odds=[("yes" if i == 0 else "outcome %d" % (i + 1), fmt_usdc(opened)) for i, _t in enumerate(outcomes[:3])]
+             if outcomes and opened is not None else [("odds", "not quoted yet")],
+        meta=["odds as of %s" % fresh, "%s volume 24h" % fmt_usdc(_tm._int(row[12]))],
+        url=url)
+    body = {
+        "cacheKey": "public-market:%s" % wanted,
+        "marketId": market_id, "slug": str(row[7]), "url": url,
+        "robots": _pp.urls.robots_for(kind="market"),
+        "question": str(row[1]), "eventTitle": str(row[9] or ""), "eventSlug": str(row[10] or ""),
+        "category": str(row[11]), "acceptingOrders": bool(row[2]), "endDate": row[6],
+        # `_micro_of`, not `float(...)`: the minimum order size is a decimal STRING from upstream and the venue
+        # writes values like "5" and "0.5", so multiplying a float by 10**6 is a rounding decision taken on the
+        # money path by accident. (get_market above still does it and is carried as an open item: changing it
+        # there moves a printed terminal string, which is a P08/P09 regression test's decision, not D6's.)
+        "minimumTickSize": norm_tick(row[3]), "minimumOrderSize": fmt_usdc(_micro_of(str(row[4]))),
+        "feeType": str(row[5]), "outcomes": outcomes,
+        # Verbatim, exactly as the terminal serves it: the resolution text is the one string an outsider writes
+        # and the CLIENT renders it as text (P09 c5 sanitises at the render, not here).
+        "resolutionCriteria": (_db.execute("SELECT resolution_criteria, resolution_source FROM market_meta "
+                                           "WHERE market_id=?", (market_id,)).fetchone() or ["", ""])[0],
+        "odds": {"lastPriceMicro": opened, "lastPrice": (fmt_usdc(opened) if opened is not None else None),
+                 "volume24hMicro": _tm._int(row[12]), "volume24h": fmt_usdc(_tm._int(row[12])),
+                 "volume7d": fmt_usdc(_tm._int(row[15])), "liquidity": fmt_usdc(_tm._int(row[13])),
+                 "openInterest": fmt_usdc(_tm._int(row[16])),
+                 "ageMs": age_ms, "ageText": fresh, "quotedFrom": "market_activity.last_price_micro"},
+        # An odds page is quoted out of context, so the two things that decide whether the quote is meaningful
+        # are stated beside it: is the market still taking orders, and how old is this number.
+        "quoteNote": ("this market is not accepting orders; the price is the last traded price and not a quote"
+                      if not bool(row[2]) else "the price is the last trade our ingest recorded"),
+        "card": card, "cardKey": _pp.cards.card_key(card),
+        "structuredData": _pp.structured.graph(
+            # The category (when the market has one) is the middle step: it is a string this payload carries, and
+            # the markets index is the page it belongs to. A market with no category gets the two-step trail.
+            _pp.structured.breadcrumb([(str(card.get("brand")), _BASE_URL())]
+                                      + ([(str(row[11]), _BASE_URL() + "/markets")]
+                                         if str(row[11] or "").strip() else [])
+                                      + [(str(row[1])[:80], url)]),
+            _pp.structured.market_event(name=str(row[1]), url=url,
+                                        end_date=("" if row[6] in (None, "") else str(row[6])),
+                                        accepting=bool(row[2]))),
+        "links": {"terminal": "/market/%s" % market_id, "book": "/v1/markets/%s/book" % market_id,
+                  "og": _pp.urls.og_url("market", str(row[7]), base=_BASE_URL())},
+    }
+    _pp_audit("public.market", wanted, meta, rid)
+    return JSONResponse(content=_stamped(body, ttl_ms=15_000, stale_ms=flags().stale_ms_book, as_of_ms=at),
+                        headers=_public_headers(meta, "market", _pp.urls.etag(body)))
+
+
+@app.get("/v1/public/leaderboard/{board}", responses=PUBLIC_BOARD_RESPONSES)
+def get_public_leaderboard(board: str, request: Request,
+                           window: str = Query(default="", pattern="^(|24h|7d|30d|90d|all)$"),
+                           category: str = Query(default="", max_length=32),
+                           limit: int = Query(default=25, ge=1, le=100)):
+    """A board as a page: the same rows the app ranks, cut to a page a crawler can read in one request.
+
+    The board's own formula, gate, cadence and exclusions count travel with it, because a public ranking without
+    its methodology is the thing this phase exists to replace — and the row's sample size travels with the row
+    (§2.10) so a screenshot of this page carries the number that qualifies it.
+    """
+    rid = request.state.request_id
+    meta, refusal = _public_gate(request, "leaderboard")
+    if refusal is not None:
+        return refusal
+    board_id = str(board or "").strip().lower()
+    if board_id not in _lb_boards.BOARD_IDS:
+        return err("NOT_FOUND", rid, detail="that is not a board", where=["board"])
+    at = _now_ms()
+    try:
+        full = _lb_board(board_id=board_id, window=str(window or ""), at_ms=at, category=str(category or ""))
+    except ValueError as exc:
+        return err("VALIDATION", rid, detail=str(exc), where=["window", "category"])
+    handles = _lb_published_handles()
+    rows = [_lb_row_out(r, total=full["rankedTotal"], handles=handles) for r in full["rows"][:int(limit)]]
+    url = _pp.urls.page_url("leaderboard", board_id, base=_BASE_URL(), window=str(window or ""),
+                            category=str(category or ""))
+    notes = [("%s — %s" % (full["label"], full["formula"])),
+             ("%d ranked, %d excluded; every row carries its own sample size"
+              % (full["rankedTotal"], _tm._int(full.get("excludedTotal"))))]
+    card = _pp.cards.leaderboard_card(
+        board=str(full["label"]), window=str(full["window"]),
+        rows=[(r.get("handle") or ("@" + str(r["anon"])[:10]), str(r.get("rankBadge", {}).get("text", "")))
+              for r in rows[:3]],
+        notes=notes, url=url)
+    body = {
+        "cacheKey": "public-board:%s:%s:%s" % (board_id, full["window"], category or "-"),
+        "board": board_id, "label": full["label"], "url": url,
+        "robots": _pp.urls.robots_for(kind="leaderboard", rows=int(full["rankedTotal"])),
+        "window": full["window"], "category": (full.get("category") or ""),
+        "formula": full["formula"], "gate": full["gate"], "tieBreaks": full["tieBreaks"],
+        "cadenceMs": full["cadenceMs"], "rankedTotal": full["rankedTotal"],
+        "excludedTotal": _tm._int(full.get("excludedTotal")), "blewUpCount": full["blewUpCount"],
+        "provisionalCount": full["provisionalCount"], "rows": rows, "rowCount": len(rows),
+        "notes": notes, "card": card, "cardKey": _pp.cards.card_key(card),
+        "structuredData": _pp.structured.graph(
+            # Two steps, and that is the honest shape: a board IS the index, so there is no ancestor between the
+            # site root and the board except the brand, and inventing one is how a trail becomes a claim.
+            _pp.structured.breadcrumb([(str(card.get("brand")), _BASE_URL()), (str(full["label"]), url)]),
+            _pp.structured.item_list(name="%s — %s" % (full["label"], full["window"]), url=url,
+                                     rows=[(_tm._int(r.get("rank")), (r.get("handle") or str(r["anon"])), "")
+                                           for r in rows[:25]])),
+        "links": {"methodology": "/v1/leaderboard/methodology", "boards": "/v1/leaderboard/boards",
+                  "og": _pp.urls.og_url("leaderboard", board_id, base=_BASE_URL(), window=str(window or ""))},
+        "note": ("every eligible wallet is on this board, including the ones that blew up: a ranking that hides "
+                 "the bad rows is a ranking of a different population than the one it claims"),
+    }
+    _pp_audit("public.board", body["cacheKey"], meta, rid)
+    return JSONResponse(content=_stamped(body, ttl_ms=60_000, stale_ms=flags().stale_ms_tape, as_of_ms=at),
+                        headers=_public_headers(meta, "leaderboard", _pp.urls.etag(body)))
+
+
+@app.get("/v1/public/sitemap", responses=PUBLIC_SITEMAP_RESPONSES)
+def get_public_sitemap(request: Request):
+    """What a crawler should walk, bounded by a number that is a row rather than a constant.
+
+    Three lists, each ordered by the thing that decides whether it is worth crawling: **handles** by rank on the
+    default board (the pages people share), **markets** by 24h volume (the pages a news story links), and
+    **boards** (six plus the four category boards). The caps are served with the payload, because a sitemap that
+    silently truncates is a sitemap whose coverage nobody can measure — and the day the cap bites, the numbers
+    in the response are the argument for raising it.
+    """
+    rid = request.state.request_id
+    meta, refusal = _public_gate(request, "sitemap")
+    if refusal is not None:
+        return refusal
+    at = _now_ms()
+    cap_h = int(_public_budget_row("sitemap_handles", "2000"))
+    cap_m = int(_public_budget_row("sitemap_markets", "2000"))
+    board = _lb_board(board_id="risk_adjusted", window="", at_ms=at)
+    handles = _lb_published_handles()
+    listed = [r for r in board["rows"] if handles.get(str(r.get("wallet")))]
+    urls = [{"url": _pp.urls.page_url("trader", handles[str(r["wallet"])], base=_BASE_URL()),
+             "changefreq": "daily", "priority": "0.8"} for r in listed[:cap_h]]
+    for b in _lb_boards.BOARD_IDS:
+        urls.append({"url": _pp.urls.page_url("leaderboard", b, base=_BASE_URL()), "changefreq": "hourly",
+                     "priority": "0.7"})
+    for c in _lb_boards.CATEGORIES:
+        urls.append({"url": _pp.urls.page_url("leaderboard", "category", base=_BASE_URL(), category=str(c)),
+                     "changefreq": "daily", "priority": "0.5"})
+    prow = _db.execute("SELECT m.slug FROM markets m LEFT JOIN market_stats s ON s.condition_id = m.condition_id "
+                       "WHERE m.slug IS NOT NULL AND m.slug <> '' AND m.accepting_orders = ? "
+                       "ORDER BY COALESCE(s.volume_24h_micro, 0) DESC LIMIT ?",
+                       (True, cap_m)).fetchall() or []
+    for r in prow:
+        urls.append({"url": _pp.urls.page_url("market", str(r[0]), base=_BASE_URL()), "changefreq": "hourly",
+                     "priority": "0.6"})
+    _pp_audit("public.sitemap", "cap:%d" % len(urls), {"kind": "sitemap"}, rid)
+    body = {"cacheKey": "public-sitemap", "robots": "index, follow", "generatedAtMs": at, "count": len(urls),
+            "caps": {"handles": cap_h, "markets": cap_m},
+            "truncated": {"handles": len(listed) > cap_h, "markets": len(prow) >= cap_m},
+            "urls": urls,
+            "note": ("a sitemap is the one public surface where being incomplete is invisible: the caps are "
+                     "served beside the URLs so a truncated walk is measurable rather than assumed")}
+    return JSONResponse(content=_stamped(body, ttl_ms=900_000, stale_ms=0, as_of_ms=at),
+                        headers=_public_headers(meta, "sitemap", _pp.urls.etag(body)))
+
+
+@app.get("/v1/public/blocks", responses=PUBLIC_BLOCK_LIST_RESPONSES)
+def get_public_blocks(request: Request, x_admin: str | None = Header(default=None, alias="X-Admin-Token")):
+    """The live blocks, newest first, with the reason each one exists. Operator-only.
+
+    A block list is a lever with a support cost, so it is readable: the on-call asked "is this person blocked?"
+    should be able to answer with a query rather than by reading a rate-limiter's logs.
+    """
+    ok, e = _admin(request)
+    if e:
+        return e
+    at = _now_ms()
+    rows = _db.execute("SELECT subject_hash, scope, reason, kind, until_ms, created_ms, created_by "
+                       "FROM public_page_blocks WHERE until_ms > ? ORDER BY until_ms ASC",
+                       (at,)).fetchall() or []
+    return _stamped({"blocks": [{"subject": str(r[0]), "scope": str(r[1]), "reason": str(r[2]),
+                                "kind": str(r[3]), "untilMs": _tm._int(r[4]), "createdMs": _tm._int(r[5]),
+                                "createdBy": str(r[6])} for r in rows], "liveCount": len(rows), "asOfMs": at},
+                    ttl_ms=0, stale_ms=0, as_of_ms=at)
+
+
+@app.post("/v1/public/blocks", responses=PUBLIC_BLOCK_RESPONSES,
+          openapi_extra=_body_schema(("address", "reason", "hours"), {
+              "address": {"type": "string", "minLength": 3, "maxLength": 120,
+                          "description": "digested with the referral salt and never stored"},
+              "reason": {"type": "string", "minLength": 8, "maxLength": 400},
+              "hours": {"type": "integer", "minimum": 1, "maximum": 168},
+              "scope": {"type": "string", "enum": ["all"] + list(_pp.urls.KINDS), "default": "all"},
+              "createdBy": {"type": "string", "maxLength": 120}}))
+def post_public_block(request: Request, body: dict = Body(...),
+                      idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+                      x_admin: str | None = Header(default=None, alias="X-Admin-Token")):
+    """Block an address digest from the public pages for a stated time, with a stated reason.
+
+    The address is digested here and never stored: an operator who wants to block `203.0.113.7` sends it, and
+    what lands is `i_…`. The reason and the expiry are both required, because a block without either is
+    indistinguishable from a bug from the outside — and the caller may not block for longer than a week, which
+    is the difference between abuse protection and a grudge with a database row.
+    """
+    rid = request.state.request_id
+    ok, e = _admin(request)
+    if e:
+        return e
+    bad = _check_body(body, ("address", "reason", "hours"), rid,
+                      allowed=("address", "reason", "hours", "scope", "createdBy"))
+    if bad is not None:
+        return bad
+    hours = body.get("hours")
+    if isinstance(hours, bool) or not isinstance(hours, int) or hours < 1 or hours > 168:
+        return err("VALIDATION", rid, where=["hours"])
+    reason = str(body.get("reason") or "").strip()
+    if len(reason) < 8:
+        return err("VALIDATION", rid, where=["reason"])
+    scope = str(body.get("scope") or "all").strip().lower()
+    if scope not in ("all",) + tuple(_pp.urls.KINDS):
+        return err("VALIDATION", rid, where=["scope"])
+    now = _now_ms()
+    salt = _ref_salt()
+    subject = _pp.budget.subject_hash(str(body.get("address") or ""), salt)
+    bad_key = _idem_shape(idempotency_key)
+    if bad_key is not None:
+        return bad_key
+    until = now + int(hours) * 3_600_000
+
+    def work() -> dict:
+        before = _db.execute("SELECT until_ms FROM public_page_blocks WHERE subject_hash=? AND scope=?",
+                             (subject, scope)).fetchone()
+        if before is None:
+            _db.execute("INSERT INTO public_page_blocks (subject_hash, scope, reason, kind, until_ms, created_ms,"
+                        " created_by) VALUES (?,?,?,?,?,?,?)",
+                        (subject, scope, reason, "manual", until, now, str(body.get("createdBy") or "operator")))
+        else:
+            _db.execute("UPDATE public_page_blocks SET reason=?, until_ms=?, created_ms=?, created_by=? "
+                        "WHERE subject_hash=? AND scope=?",
+                        (reason, until, now, str(body.get("createdBy") or "operator"), subject, scope))
+        _pp_audit("public.block", "%s:%s" % (scope, subject[:10]), {"kind": scope}, rid)
+        return _stamped({"subject": subject, "scope": scope, "untilMs": until, "hours": int(hours),
+                         "extended": before is not None,
+                         "note": "the address is digested on the way in: what is stored cannot be reversed"},
+                        ttl_ms=0, stale_ms=0, as_of_ms=now)
+
+    return _idem_run(_operator_subject(), str(idempotency_key), body, rid, work)
+
+
+def _pp_audit(action: str, subject: str, meta: dict, rid: str) -> None:
+    """One audit row per public read, at a volume that is safe because the subject is a digest.
+
+    Public reads are audited at all for one reason: the day somebody asks "did our pages serve a crawler more
+    than they served readers", the answer has to be a query rather than an argument. The row carries the digest
+    and the kind, never the address, and never the payload.
+    """
+    try:
+        _db.execute("INSERT INTO audit_log (at_ms, actor_type, actor_id, action, target_table, target_id,"
+                    " request_id, detail_json) VALUES (?,?,?,?,?,?,?,?)",
+                    (_now_ms(), "service", "", str(action), "public_page", str(subject)[:64], str(rid),
+                     json.dumps({"kind": str(meta.get("kind") or "")}, sort_keys=True)))
+        _db.commit()
+    except Exception:                                                              # pragma: no cover - audit only
+        return
+
+
+def _freshness_text(age_ms: int) -> str:
+    """The age of a price in words, from the same thresholds the terminal's freshness pill uses."""
+    ms = max(0, int(age_ms))
+    if ms < 15_000:
+        return "seconds ago"
+    if ms < 90_000:
+        return "%dm ago" % max(1, ms // 60_000)
+    if ms < 3_600_000:
+        return "%d minutes ago" % (ms // 60_000)
+    return "%dh ago" % (ms // 3_600_000)
+
+
+def _BASE_URL() -> str:
+    return _pp.urls.base_url(os.environ.get("PGM_PUBLIC_BASE") or "")
+
+
+def _bps_text(bps: int) -> str:
+    """`63.4%` from bps, in integers. The card is rendered by an image pipeline with no number layer, so the
+    string is built here from the same integer the board ranks by - and it is built without a float, because a
+    rate that rounds differently in the image than in the row is the disagreement this whole phase is about."""
+    b = _tm._int(bps)
+    return "%d.%d%%" % (b // 100, (b % 100) // 10)
+
+
 _levels_p11 = {
     "GET /v1/leaderboard": (_authz.PUBLIC, ""),
     "GET /v1/leaderboard/boards": (_authz.PUBLIC, ""),
@@ -7103,5 +7846,17 @@ _levels_p11 = {
     "POST /v1/referrals/review": (_authz.ADMIN, ""),
 }
 _authz.LEVELS_TABLE.update(_levels_p10)
+_levels_p11.update({
+    # D6. The three page reads and the sitemap are PUBLIC for the same reason `/v1/tape` is: they are the
+    # published surface, and requiring a session to read a page whose whole purpose is to be indexed would make
+    # the feature impossible. The block list is ADMIN, and it is the only lever on this surface that can refuse
+    # an address outright - which is exactly the kind of power that should not be reachable without a token.
+    "GET /v1/public/trader/{handle}": (_authz.PUBLIC, ""),
+    "GET /v1/public/market/{slug}": (_authz.PUBLIC, ""),
+    "GET /v1/public/leaderboard/{board}": (_authz.PUBLIC, ""),
+    "GET /v1/public/sitemap": (_authz.PUBLIC, ""),
+    "GET /v1/public/blocks": (_authz.ADMIN, ""),
+    "POST /v1/public/blocks": (_authz.ADMIN, ""),
+})
 _authz.LEVELS_TABLE.update(_levels_p11)
 _authz._MATCHERS.clear()                    # the matchers cache the table; a new row must invalidate it

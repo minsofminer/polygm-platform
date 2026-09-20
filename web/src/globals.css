@@ -1348,3 +1348,211 @@ body {
 .pgm-referrals__rows tr[data-state="refused"] th {
   color: var(--pgm-alert-watch);
 }
+
+/* ---------------------------------------------------------------------------------------------------------
+ * The public pages (P11 D6): /trader/<handle>, /market/<slug>, /leaderboard/<board>.
+ *
+ * These three routes are the only surfaces in the product that a stranger reads, and the second audience is a
+ * crawler, so the styles here follow two rules the app's screens do not need:
+ *
+ *   * **Text first.** No frosted panel, no gradient, nothing that is a picture of information: the odds, the
+ *     sample size and the qualifiers are selectable text with a contrast ratio the audit can measure, because a
+ *     reader who cannot select a number cannot check it.
+ *   * **The sharing affordance is not styled away.** The card is a bordered block with its footnote at reading
+ *     size, not fine print: it is the part that gets screenshotted, and it has to survive the crop.
+ *
+ * Colours, spacing and dimensions come from brand/tokens.css like every other rule in this file (the P08 c5
+ * scan forbids a literal anywhere in the shipped tree).
+ * --------------------------------------------------------------------------------------------------------- */
+.pgm-public {
+  max-width: var(--pgm-shell-max-width);
+  margin-inline: auto;
+  padding: var(--pgm-pad-active-screen);
+  display: grid;
+  gap: var(--pgm-space-8);
+}
+
+.pgm-public__crumbs ol {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--pgm-space-2);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: var(--pgm-font-compact);
+  color: var(--pgm-text-secondary);
+}
+
+.pgm-public__crumbs li + li::before {
+  content: "/";
+  padding-inline-end: var(--pgm-space-2);
+  color: var(--pgm-text-muted);
+}
+
+.pgm-public__head h1 {
+  /* No font-size: the design system has no display-size token, and every heading in the app inherits the
+     document's. Inventing a size here would be the one place a heading is a different size for no reason. */
+  margin: 0 0 var(--pgm-space-2);
+}
+
+.pgm-public__lede,
+.pgm-public__note,
+.pgm-public__stamp,
+.pgm-public__muted {
+  color: var(--pgm-text-secondary);
+  font-size: var(--pgm-font-compact);
+}
+
+.pgm-public__numbers dl,
+.pgm-public__rules dl,
+.pgm-public__standing table,
+.pgm-public__board {
+  width: 100%;
+}
+
+.pgm-public__numbers dl {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(var(--pgm-rail-left), 1fr));
+  gap: var(--pgm-space-4);
+  margin: 0;
+}
+
+.pgm-public__numbers dt {
+  font-size: var(--pgm-font-dense);
+  color: var(--pgm-text-muted);
+}
+
+.pgm-public__numbers dd {
+  margin: 0;
+  font-size: var(--pgm-font-active);
+  color: var(--pgm-text-primary);
+}
+
+.pgm-public__numbers dd.is-bad,
+.pgm-public__board .is-bad {
+  color: var(--pgm-result-loss);
+}
+
+.pgm-public__gated {
+  color: var(--pgm-alert-high);
+}
+
+.pgm-public__rules {
+  border: var(--pgm-border-w-hair) solid var(--pgm-border-default);
+  border-radius: var(--pgm-radius-card);
+  padding: var(--pgm-pad-active-panel);
+}
+
+.pgm-public__rules dt {
+  font-size: var(--pgm-font-dense);
+  color: var(--pgm-text-muted);
+}
+
+.pgm-public__rules dd {
+  margin: 0 0 var(--pgm-space-3);
+  color: var(--pgm-text-primary);
+}
+
+.pgm-public__findings,
+.pgm-public__rownotes,
+.pgm-public__notes ul,
+.pgm-public__outcomes ul,
+.pgm-public__foot {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.pgm-public__findings li,
+.pgm-public__rownotes li,
+.pgm-public__notes li {
+  color: var(--pgm-alert-watch);
+  font-size: var(--pgm-font-compact);
+}
+
+.pgm-public__board th,
+.pgm-public__standing th {
+  text-align: start;
+  font-size: var(--pgm-font-dense);
+  color: var(--pgm-text-muted);
+  border-block-end: var(--pgm-border-w-hair) solid var(--pgm-border-default);
+}
+
+.pgm-public__board td,
+.pgm-public__standing td {
+  border-block-end: var(--pgm-border-w-hair) solid var(--pgm-border-default);
+  padding-block: var(--pgm-space-2);
+  vertical-align: top;
+}
+
+.pgm-public__badge {
+  font-variant-numeric: tabular-nums;
+  color: var(--pgm-brand-primary-text);
+}
+
+.pgm-public__outcomes li {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--pgm-space-4);
+  padding-block: var(--pgm-space-2);
+  border-block-end: var(--pgm-border-w-hair) solid var(--pgm-border-default);
+}
+
+.pgm-public__outcomes li[data-winner="true"] span:first-child {
+  color: var(--pgm-result-profit);
+}
+
+.pgm-share {
+  border: var(--pgm-border-w-strong) solid var(--pgm-border-strong);
+  border-radius: var(--pgm-radius-card);
+  padding: var(--pgm-pad-active-panel);
+  display: grid;
+  gap: var(--pgm-space-3);
+}
+
+.pgm-share__brand {
+  font-size: var(--pgm-font-dense);
+  color: var(--pgm-brand-primary-text);
+}
+
+.pgm-share__title {
+  margin: 0;
+  font-size: var(--pgm-font-active);
+}
+
+.pgm-share__subtitle,
+.pgm-share__foot li,
+.pgm-share__foot-brand {
+  color: var(--pgm-text-secondary);
+  font-size: var(--pgm-font-compact);
+}
+
+.pgm-share__lines {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--pgm-space-6);
+  margin: 0;
+}
+
+.pgm-share__lines dt {
+  font-size: var(--pgm-font-dense);
+  color: var(--pgm-text-muted);
+}
+
+.pgm-share__lines dd {
+  margin: 0;
+  font-size: var(--pgm-font-active);
+  font-variant-numeric: tabular-nums;
+}
+
+.pgm-share__foot-brand {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--pgm-space-4);
+  overflow-wrap: anywhere;
+}
+
+.pgm-public__state {
+  display: grid;
+  gap: var(--pgm-space-2);
+}

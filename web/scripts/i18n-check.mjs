@@ -30,6 +30,15 @@ const USED_KEY = /(?:^|[^\w$.])t\(\s*"([^"]+)"\s*[,)]/g;
 const ANY_CALL = /(?:^|[^\w$.])t\(\s*([^)"\s][^)]*)[)]/g;
 const KEY_SHAPE = /^[a-z][a-zA-Z0-9]*(?:\.[a-z][a-zA-Z0-9-]+){2,3}(?:#[a-z][a-zA-Z0-9-]+)?$/;
 
+/**
+ * A route-family dictionary: the prefix it owns, the file that declares it, and the module a component must
+ * import for that file to be in its route's graph. Adding a family is one line here plus the two files.
+ */
+const FAMILIES = [
+  { prefix: "terminal", file: "src/i18n/en.terminal.ts", module: "@/i18n/terminal" },
+  { prefix: "public", file: "src/i18n/en.public.ts", module: "@/i18n/public" },
+];
+
 function* walk(dir, skip = []) {
   for (const e of readdirSync(dir)) {
     if (skip.includes(e) || e.endsWith(".test.tsx") || e.endsWith(".test.ts")) continue;
@@ -86,13 +95,27 @@ export function checkTree(root) {
   if (!existsSync(dictPath)) return { fatal: "src/i18n/en.ts missing" };
   const dictText = readFileSync(dictPath, "utf8");
   const declared = new Set([...dictText.matchAll(/^\s{2}"([^"]+)":/gm)].map((m) => m[1]));
-  // The route-family dictionary is part of the same key space: a key may live in either file, and a duplicate
-  // across the two is a failure because `lookup()` would only ever reach one of them.
-  const familyPath = path.join(root, "src/i18n/en.terminal.ts");
-  const familyText = existsSync(familyPath) ? readFileSync(familyPath, "utf8") : "";
-  const family = new Set([...familyText.matchAll(/^\s{2}"([^"]+)":/gm)].map((m) => m[1]));
-  for (const k of family) declared.add(k);
-  const duplicated = [...family].filter((k) => new Set([...dictText.matchAll(/^\s{2}"([^"]+)":/gm)].map((m) => m[1])).has(k));
+  // The route-family dictionaries are part of the same key space: a key may live in any file, and a duplicate
+  // across two of them is a failure because `lookup()` would only ever reach one of them.
+  //
+  // Why a LIST rather than the single `terminal` family this check shipped with: P11's D6 adds three public
+  // routes (`/trader/<handle>`, `/market/<slug>`, `/leaderboard/<board>`) whose copy is read by crawlers and by
+  // people who never open the app, and whose first load is therefore the one place a 319-key terminal
+  // dictionary must not ride along. A third family is the same mechanism with one more member, whereas putting
+  // `public.*` keys in `en.ts` would put marketing copy in every signed-in document forever.
+  const families = FAMILIES.map((f) => ({
+    ...f,
+    keys: new Set([
+      ...(existsSync(path.join(root, f.file)) ? readFileSync(path.join(root, f.file), "utf8") : "")
+        .matchAll(/^\s{2}"([^"]+)":/gm),
+    ].map((m) => m[1])),
+  }));
+  const inBase = new Set([...dictText.matchAll(/^\s{2}"([^"]+)":/gm)].map((m) => m[1]));
+  const duplicated = [];
+  for (const f of families) {
+    for (const k of f.keys) declared.add(k);
+    for (const k of f.keys) if (inBase.has(k)) duplicated.push(k);
+  }
   const used = new Map();
   const dynamic = [];
   const misplaced = [];
@@ -101,12 +124,13 @@ export function checkTree(root) {
     if (!existsSync(abs)) continue;
     for (const file of walk(abs, ["i18n"])) {
       const text = stripComments(readFileSync(file, "utf8"));
-      const registersFamily = /from\s+"@\/i18n\/terminal"/.test(text);
       for (const m of text.matchAll(USED_KEY)) {
         if (!used.has(m[1])) used.set(m[1], path.relative(root, file));
-        if (m[1].startsWith("terminal.") && !registersFamily) {
+        for (const f of families) {
+          if (!m[1].startsWith(f.prefix + ".")) continue;
+          if (new RegExp('from\\s+"' + f.module.replace("/", "\\/") + '"').test(text)) continue;
           misplaced.push(`${path.relative(root, file)} asks for "${m[1]}" and imports t from "@/i18n/t", ` +
-            `so the terminal dictionary is not in this route's graph — it would render the key itself`);
+            `so the ${f.prefix} dictionary is not in this route's graph — it would render the key itself`);
         }
       }
       for (const m of text.matchAll(ANY_CALL)) {
@@ -132,7 +156,7 @@ function report(result) {
   for (const k of result.missing) console.error(`i18n-check: ${result.used.get(k)} asks for "${k}" and en.ts has no such key`);
   for (const d of result.dynamic) console.error(`i18n-check: dynamic key, unchecked by definition — ${d}`);
   for (const m of result.misplaced ?? []) console.error(`i18n-check: ${m}`);
-  for (const k of result.duplicated ?? []) console.error(`i18n-check: "${k}" is declared in both en.ts and en.terminal.ts; only one can win the lookup`);
+  for (const k of result.duplicated ?? []) console.error(`i18n-check: "${k}" is declared in en.ts and in a route-family file; only one can win the lookup`);
   for (const k of result.unused) console.warn(`i18n-check (advisory): "${k}" is declared and unused`);
   const misplaced = result.misplaced?.length ?? 0;
   const duplicated = result.duplicated?.length ?? 0;
@@ -166,6 +190,14 @@ function selfTest() {
       '  return <p>{t("terminal.tape.planted")}</p>;\n' +
       "}\n",
     );
+    writeFileSync(path.join(dir, "src/i18n/en.public.ts"), 'export const enPublic = {\n  "public.page.planted": "here",\n};\n');
+    writeFileSync(
+      path.join(dir, "src/ui/PlantedPublic.tsx"),
+      'import { t } from "@/i18n/t";\n' +
+      'export function PlantedPublic() {\n' +
+      '  return <p>{t("public.page.planted")}</p>;\n' +
+      "}\n",
+    );
     writeFileSync(
       path.join(dir, "src/ui/Planted.tsx"),
       'import { t } from "@/i18n/t";\n' +
@@ -180,10 +212,13 @@ function selfTest() {
     // A comment-only key must not appear as used, and a comment's example of a dynamic call must not be
     // reported as one. Both are the "checker reads too much" failure, which P08 met already in §2.8.
     const clean = !out.used?.has("widget.plain.inComment") && (out.dynamic?.length ?? 0) === 0;
-    const caughtFamily = (out.misplaced?.length ?? 0) === 1;
-    const ok = caughtMissing && clean && caughtFamily;
+    // Both families, not just the first: the rule is a list now, and a loop that silently skipped its second
+    // member would look exactly like a pass.
+    const caughtFamily = (out.misplaced?.length ?? 0) === 2;
+    const caughtPublicFamily = (out.misplaced ?? []).some((m) => m.includes("public.page.planted"));
+    const ok = caughtMissing && clean && caughtFamily && caughtPublicFamily;
     console.log(ok
-      ? "i18n-check --self-test: ok (planted plain + interpolated keys caught; a terminal key outside its route family caught; prose in comments ignored)"
+      ? "i18n-check --self-test: ok (planted plain + interpolated keys caught; a terminal key AND a public key outside their route families caught; prose in comments ignored)"
       : `i18n-check --self-test: FAIL — missing=${JSON.stringify(out.missing ?? out.fatal)} usedComment=${out.used?.has("widget.plain.inComment")} dynamic=${JSON.stringify(out.dynamic)} misplaced=${JSON.stringify(out.misplaced)}`);
     return ok ? 0 : 1;
   } finally {

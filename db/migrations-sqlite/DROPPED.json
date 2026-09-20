@@ -97,6 +97,9 @@
     "password_credentials",
     "position_lots",
     "position_snapshots",
+    "public_page_blocks",
+    "public_page_budget",
+    "public_page_hits",
     "rate_counters",
     "reconcile_actions",
     "reconcile_cursors",
@@ -301,7 +304,19 @@
     },
     "0016_referrals.sql": {
       "dropped": [
-        "PG-only statement: CREATE TRIGGER append_only_referral_accruals"
+        "PG-only statement: CREATE TRIGGER append_only_referral_accruals",
+        "PG-only statement: DO $$"
+      ],
+      "check_clauses_reordered": []
+    },
+    "0017_public_pages.sql": {
+      "dropped": [],
+      "check_clauses_reordered": []
+    },
+    "0018_append_only_grants.sql": {
+      "dropped": [
+        "PG-only statement: CREATE TRIGGER append_only_leaderboard_exclusions",
+        "PG-only statement: DO $$"
       ],
       "check_clauses_reordered": []
     }

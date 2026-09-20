@@ -1565,6 +1565,147 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/public/trader/{handle}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * A trader's shared page — the row, its qualifiers, and nothing account-shaped
+         * @description Every trader who shares their page is doing our marketing, so the page is the marketing: the rank with the
+         *     board's own population, the sample it was decided on, the drawdown, and the two notes that qualify the
+         *     number (the provisional window and the worst drawdown). All nine answers travel — the five main boards and
+         *     the four category boards (`§2.12`) — because a specialist at rank 2 in Sports with no overall standing is
+         *     exactly the person who shares this link.
+         *
+         *     Two rules are structural rather than stylistic. **No address ever appears in the payload**: the row is the
+         *     leaderboard's own pseudonymised row, so there is no code path on this endpoint that could print one. And a
+         *     handle that is not listed does not resolve at all — the 404 is identical to the one for a name nobody has
+         *     ever typed, so this route cannot be used to ask whether a handle is taken.
+         *
+         *     `robots` is server-decided: a wallet inside its first seven days, or one below the gate, is `noindex,
+         *     follow` — the page works for the person who was sent the link and is not offered to a crawler.
+         */
+        get: operations["getPublicTrader"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/public/market/{slug}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * A market's shareable page — the question, the odds, and how old the odds are
+         * @description The page a news story links to. The odds are the same `market_activity.last_price_micro` the terminal
+         *     prints, and the freshness travels in three places — `odds.ageMs`, `odds.ageText` and the card's footnote —
+         *     because a crawlable odds page is the one surface where a price is quoted as current by somebody who never
+         *     opened the app. `quoteNote` states whether the market is still taking orders: a closed market's price is
+         *     the last traded price and not a quote, and saying so beside the number is the difference between data and
+         *     a misleading screenshot.
+         *
+         *     `resolutionCriteria` is served verbatim, as plain text, exactly as the terminal serves it: it is the one
+         *     string an outsider writes, and it is sanitised where it is rendered rather than here.
+         */
+        get: operations["getPublicMarket"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/public/leaderboard/{board}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * A board as a page, with its formula, its gate and every row's sample size
+         * @description The same rows the in-app board ranks, cut to something a crawler reads in one request. The methodology
+         *     that makes the ranking defensible travels with it — `formula`, `gate`, `tieBreaks`, the exclusion count,
+         *     the blown-up count — because a public ranking without its rules is the thing this phase exists to
+         *     replace, and because explaining why rank 47 with fewer resolved markets sits above rank 12 must not
+         *     require reading our source.
+         *
+         *     Each row carries `settledMarkets` (the sample the win rate was decided on, null-honest under the gate),
+         *     `maxDrawdownMicro` and its printed form, `labels`, and the row's own `rankBadge`. Nothing is dropped for
+         *     being ugly: a blown-up wallet keeps its negative score on the page and is counted in `blewUpCount`.
+         */
+        get: operations["getPublicLeaderboard"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/public/sitemap": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * What a crawler should walk, with the caps served beside the URLs
+         * @description Handles ordered by rank on the default board (the pages people share), the boards, and the markets ordered
+         *     by 24h volume (the pages a news story links). The caps come from `public_page_budget` rather than from a
+         *     constant, and they are served in `caps` with `truncated` per list — a sitemap that silently truncates is a
+         *     sitemap whose coverage nobody can measure.
+         *
+         *     This is the smallest budget of the five kinds, because it is the one route whose honest use is bulk.
+         */
+        get: operations["getPublicSitemap"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/public/blocks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The live blocks, newest first, each with the reason it exists
+         * @description A block list is a lever with a support cost, so it is readable: "is this address blocked?" is answered by
+         *     a query rather than by reading a rate limiter's logs. What is listed is a digest, never an address.
+         */
+        get: operations["getPublicBlocks"];
+        put?: never;
+        /**
+         * Block an address from the public pages for a stated time and a stated reason (idempotent per key)
+         * @description The address is digested on the way in with the referral salt and never stored, so what lands is an `i_…`
+         *     subject and the operator cannot be asked to reverse it. Both the reason and the expiry are required: a
+         *     block without either is indistinguishable from a bug from the outside. The scope is `all` or one page kind,
+         *     and a week is the longest block — the difference between abuse protection and a grudge with a database row.
+         */
+        post: operations["postPublicBlock"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -2203,11 +2344,217 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
+        /** @description The badge a row is shared with: the rank, the population it is a rank OF, and the print form. */
+        PublicRankBadge: {
+            rank: number;
+            rankedTotal: number;
+            text: string;
+        };
+        /**
+         * @description One board's answer for one wallet. `category` is empty except on the four category boards, which is why
+         *     "every board" is nine entries and not six.
+         */
+        PublicStanding: {
+            /** @enum {string} */
+            board: "risk_adjusted" | "win_rate" | "volume" | "rising" | "category" | "copied";
+            label?: string | null;
+            category?: string;
+            /** @enum {string} */
+            state: "ranked" | "unranked" | "unknown";
+            rank?: number | null;
+            rankedTotal?: number | null;
+            rankBadge?: {
+                [key: string]: unknown;
+            } | null;
+            /** @description the board page this entry is a row of */
+            url: string;
+        };
+        /**
+         * @description The share card, as data: three lines, a headline and a footnote the image pipeline renders verbatim. The
+         *     provisional label and the drawdown are forced into the footnote by the builder rather than left to the
+         *     caller, because the card is the artifact that gets screenshotted without the page around it.
+         */
+        PublicCard: {
+            /** @enum {string} */
+            kind: "trader" | "market" | "leaderboard";
+            title: string;
+            subtitle: string;
+            lines: {
+                label: string;
+                value: string;
+            }[];
+            footnote: string[];
+            brand: string;
+            footer: string;
+            /** Format: uri */
+            url: string;
+            /** @description trader cards only: whether a rank is printed, i.e. whether the qualifiers are mandatory */
+            ranked?: boolean;
+            /** @description trader cards only: the record is younger than the rankable window, so the card owes its reader that sentence */
+            provisional?: boolean;
+        };
+        PublicTraderPage: {
+            handle: string;
+            /** @description the leaderboard's pseudonym; never an address */
+            anon: string;
+            /** Format: uri */
+            url: string;
+            /** @enum {string} */
+            robots: "index, follow" | "noindex, follow";
+            standing: components["schemas"]["PublicStanding"][];
+            headline: {
+                board: string;
+                window: string;
+                rank: number;
+                rankedTotal: number;
+                settledMarkets: number;
+                winRateBps?: number | null;
+                realisedMicro: number;
+                realised: string;
+                maxDrawdownMicro: number;
+                maxDrawdown: string;
+                state: string;
+                ageDays: number;
+            };
+            /** @description the qualifiers, in the same sentences the private self-rank uses */
+            notes: string[];
+            card: components["schemas"]["PublicCard"];
+            cardKey: string;
+            /** @description schema.org graph: a breadcrumb and a ProfilePage; every claim in it is a value the payload also carries */
+            structuredData: {
+                [key: string]: unknown;
+            }[];
+            sampleGate?: number;
+            links: {
+                [key: string]: string;
+            };
+            note?: string;
+        };
+        PublicMarketPage: {
+            marketId: string;
+            slug: string;
+            /** Format: uri */
+            url: string;
+            robots: string;
+            question: string;
+            eventTitle?: string;
+            eventSlug?: string;
+            category?: string;
+            acceptingOrders: boolean;
+            endDate?: number | null;
+            minimumTickSize: string;
+            minimumOrderSize: string;
+            feeType?: string;
+            outcomes: {
+                outcome: string;
+                winner?: boolean | null;
+            }[];
+            /** @description verbatim upstream text; rendered as plain text */
+            resolutionCriteria?: string;
+            odds: {
+                lastPriceMicro?: number | null;
+                lastPrice: string | null;
+                volume24hMicro: number;
+                volume24h: string;
+                volume7d?: string;
+                liquidity: string;
+                openInterest: string;
+                ageMs: number;
+                ageText: string;
+                quotedFrom: string;
+            };
+            quoteNote: string;
+            card: components["schemas"]["PublicCard"];
+            cardKey: string;
+            structuredData: {
+                [key: string]: unknown;
+            }[];
+            links: {
+                [key: string]: string;
+            };
+        };
+        PublicLeaderboardPage: {
+            board: string;
+            label?: string;
+            /** Format: uri */
+            url: string;
+            /** @enum {string} */
+            robots: "index, follow" | "noindex, follow";
+            window: string;
+            category?: string;
+            formula: string;
+            gate: string;
+            tieBreaks: string;
+            cadenceMs?: number;
+            rowCount: number;
+            rankedTotal: number;
+            excludedTotal?: number;
+            blewUpCount?: number;
+            provisionalCount?: number;
+            rows: {
+                [key: string]: unknown;
+            }[];
+            notes?: string[];
+            note?: string;
+            card: components["schemas"]["PublicCard"];
+            cardKey: string;
+            structuredData: {
+                [key: string]: unknown;
+            }[];
+            links: {
+                [key: string]: string;
+            };
+        };
+        PublicSitemap: {
+            count: number;
+            generatedAtMs?: number;
+            caps: {
+                handles: number;
+                markets: number;
+            };
+            truncated: {
+                handles: boolean;
+                markets: boolean;
+            };
+            urls: {
+                /** Format: uri */
+                url: string;
+                changefreq: string;
+                priority: string;
+            }[];
+            robots: string;
+            note?: string;
+        };
+        PublicBlock: {
+            /** @description a digest; the address is not stored */
+            subject: string;
+            /** @enum {string} */
+            scope: "all" | "trader" | "market" | "leaderboard" | "sitemap" | "og";
+            untilMs: number;
+            hours: number;
+            /** @description true when this replaced an earlier block on the same subject */
+            extended: boolean;
+            note: string;
+        };
+        PublicBlockList: {
+            blocks: {
+                subject: string;
+                scope: string;
+                reason: string;
+                /** @enum {string} */
+                kind: "manual" | "auto";
+                untilMs: number;
+                createdMs: number;
+                createdBy: string;
+            }[];
+            liveCount: number;
+            asOfMs?: number;
+        };
         Error: {
             /** @description no `detail` field, ever: that is where a Python message would leak. Logs carry the code and the request id instead. */
             error: {
                 /** @enum {string} */
-                code: "RISK_HALT" | "MARKET_NOT_ACCEPTING" | "NO_ORDER_BOOK" | "STALE_QUOTE" | "BAD_SIDE" | "UNKNOWN_TICK" | "OFF_TICK" | "BAD_MARKET_META" | "BELOW_MIN_SIZE" | "ZERO_SIZE" | "BAD_AMOUNT" | "OVER_ORDER_CAP" | "PRICE_FAR_FROM_MID" | "TOO_MANY_OPEN" | "DAILY_CAP" | "IDEM_CONFLICT" | "IDEM_IN_PROGRESS" | "IDEM_KEY_REQUIRED" | "RISK_UNAVAILABLE" | "SIGNER_UNAVAILABLE" | "BAD_REASON" | "NOT_FOUND" | "REFUSED" | "HALTED" | "RULE_CAP" | "DRY_RUN_REQUIRED" | "PLAN_REQUIRED" | "VALIDATION" | "INTERNAL" | "UNAUTHENTICATED" | "SESSION_STALE" | "SESSION_REVOKED" | "SESSION_MISMATCH" | "ADMIN_REQUIRED" | "LOGIN_FAILED" | "ACCOUNT_LOCKED" | "TOTP_REQUIRED" | "TOTP_INVALID" | "TOTP_LOCKED" | "ADDRESS_COOLDOWN" | "ADDRESS_LIMIT" | "REMOVE_DURING_COOLDOWN" | "NO_SUCH_RESOURCE" | "REFRESH_UNKNOWN" | "REFRESH_REUSED" | "REFRESH_EXPIRED" | "TELEGRAM_REPLAY" | "TELEGRAM_INVALID" | "SECURITY_ENV_MISSING" | "KEYSTORE_TAMPER" | "BREAK_GLASS_DENIED" | "AUTHZ_UNDECLARED" | "BAD_FIELD" | "QUOTA_EXCEEDED" | "RADAR_SCOPE" | "HANDLE_TAKEN" | "CODE_TAKEN" | "CODE_INVALID" | "ALREADY_REFERRED" | "SELF_REFERRAL";
+                code: "RISK_HALT" | "MARKET_NOT_ACCEPTING" | "NO_ORDER_BOOK" | "STALE_QUOTE" | "BAD_SIDE" | "UNKNOWN_TICK" | "OFF_TICK" | "BAD_MARKET_META" | "BELOW_MIN_SIZE" | "ZERO_SIZE" | "BAD_AMOUNT" | "OVER_ORDER_CAP" | "PRICE_FAR_FROM_MID" | "TOO_MANY_OPEN" | "DAILY_CAP" | "IDEM_CONFLICT" | "IDEM_IN_PROGRESS" | "IDEM_KEY_REQUIRED" | "RISK_UNAVAILABLE" | "SIGNER_UNAVAILABLE" | "BAD_REASON" | "NOT_FOUND" | "REFUSED" | "HALTED" | "RULE_CAP" | "DRY_RUN_REQUIRED" | "PLAN_REQUIRED" | "VALIDATION" | "INTERNAL" | "UNAUTHENTICATED" | "SESSION_STALE" | "SESSION_REVOKED" | "SESSION_MISMATCH" | "ADMIN_REQUIRED" | "LOGIN_FAILED" | "ACCOUNT_LOCKED" | "TOTP_REQUIRED" | "TOTP_INVALID" | "TOTP_LOCKED" | "ADDRESS_COOLDOWN" | "ADDRESS_LIMIT" | "REMOVE_DURING_COOLDOWN" | "NO_SUCH_RESOURCE" | "REFRESH_UNKNOWN" | "REFRESH_REUSED" | "REFRESH_EXPIRED" | "TELEGRAM_REPLAY" | "TELEGRAM_INVALID" | "SECURITY_ENV_MISSING" | "KEYSTORE_TAMPER" | "BREAK_GLASS_DENIED" | "AUTHZ_UNDECLARED" | "BAD_FIELD" | "QUOTA_EXCEEDED" | "RADAR_SCOPE" | "HANDLE_TAKEN" | "CODE_TAKEN" | "CODE_INVALID" | "ALREADY_REFERRED" | "SELF_REFERRAL" | "RATE_LIMITED";
                 /** @description user-safe by construction */
                 message: string;
                 retryable: boolean;
@@ -6450,6 +6797,186 @@ export interface operations {
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
             422: components["responses"]["Denied"];
+            500: components["responses"]["Internal"];
+            503: components["responses"]["Denied"];
+        };
+    };
+    getPublicTrader: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description lower-cased and validated before the lookup; a malformed handle is a 422, not a 404 */
+                handle: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description the public row, its nine standings, its card and its structured data */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Stamped"] & components["schemas"]["PublicTraderPage"];
+                };
+            };
+            404: components["responses"]["NotFound"];
+            422: components["responses"]["Validation"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+        };
+    };
+    getPublicMarket: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description the market, its odds with their age, its resolution criteria, its card */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Stamped"] & components["schemas"]["PublicMarketPage"];
+                };
+            };
+            404: components["responses"]["NotFound"];
+            422: components["responses"]["Validation"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+        };
+    };
+    getPublicLeaderboard: {
+        parameters: {
+            query?: {
+                /** @description empty means the board's own default window; a window the board does not read is a 422 */
+                window?: "" | "24h" | "7d" | "30d" | "90d" | "all";
+                /** @description only the category board reads this; anything else is a 422 */
+                category?: string;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                board: "risk_adjusted" | "win_rate" | "volume" | "rising" | "category" | "copied";
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description the board, its rules, and a page of rows */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Stamped"] & components["schemas"]["PublicLeaderboardPage"];
+                };
+            };
+            404: components["responses"]["NotFound"];
+            422: components["responses"]["Validation"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+        };
+    };
+    getPublicSitemap: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description the URLs, the caps that produced them, and whether either list was cut */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Stamped"] & components["schemas"]["PublicSitemap"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+        };
+    };
+    getPublicBlocks: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description absent or empty means 503 SIGNER_UNAVAILABLE rather than a 401 */
+                "X-Admin-Token"?: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description the live blocks */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Stamped"] & components["schemas"]["PublicBlockList"];
+                };
+            };
+            403: components["responses"]["Denied"];
+            500: components["responses"]["Internal"];
+            503: components["responses"]["Denied"];
+        };
+    };
+    postPublicBlock: {
+        parameters: {
+            query?: never;
+            header?: {
+                /**
+                 * @description 8-128 chars of [A-Za-z0-9_-]. Required on every mutating endpoint; the 400 for its absence is part
+                 *     of the contract so a client cannot "just try without it" once and conclude it is optional.
+                 */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                /** @description absent or empty means 503 SIGNER_UNAVAILABLE rather than a 401 */
+                "X-Admin-Token"?: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @description digested, never stored */
+                    address: string;
+                    reason: string;
+                    hours: number;
+                    /**
+                     * @default all
+                     * @enum {string}
+                     */
+                    scope?: "all" | "trader" | "market" | "leaderboard" | "sitemap" | "og";
+                    createdBy?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description the block as stored — the digest, the scope and the expiry */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Stamped"] & components["schemas"]["PublicBlock"];
+                };
+            };
+            403: components["responses"]["Denied"];
+            422: components["responses"]["Validation"];
             500: components["responses"]["Internal"];
             503: components["responses"]["Denied"];
         };

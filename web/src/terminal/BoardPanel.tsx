@@ -25,6 +25,7 @@ import { StaleIndicator } from "@/num/StaleIndicator";
 import { Button } from "@/ui/Button";
 import { useNow } from "./useTerminal";
 import { bpsText } from "./copy";
+import { microToCents } from "@/money/cents";
 import {
   badgeText,
   comparisonVerdict,
@@ -292,7 +293,13 @@ export function BoardPanel({ focus = "" }: { focus?: string }) {
                 <td>{followStateText(row)}</td>
                 {followCells(row).map((cell) => (
                   <td key={cell.label} className={cell.bad ? "is-bad" : ""}>
-                    <Number value={cell.label === "realised PnL" ? (row.realisedMicro ?? 0) : (row.maxDrawdownMicro ?? 0)} kind="money" />
+                    {/* `microToCents`, the ONE conversion (D6 found this line passing micro to a cents prop, so
+                        every followed wallet's realised PnL and drawdown printed 10,000x too large: a red number
+                        that is wrong by four orders of magnitude is worse than no number). */}
+                    <Number
+                      kind="money"
+                      value={microToCents(cell.label === "realised PnL" ? (row.realisedMicro ?? 0) : (row.maxDrawdownMicro ?? 0))}
+                    />
                     <small className="pgm-board__why"> {cell.value}</small>
                   </td>
                 ))}

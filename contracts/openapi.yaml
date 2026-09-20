@@ -3433,6 +3433,241 @@ paths:
         "500": {$ref: "#/components/responses/Internal"}
 
 
+  /v1/public/trader/{handle}:
+    get:
+      tags: [public]
+      operationId: getPublicTrader
+      x-auth: public
+      x-rate-class: public-page
+      x-cache: public-long
+      summary: A trader's shared page — the row, its qualifiers, and nothing account-shaped
+      description: |-
+        Every trader who shares their page is doing our marketing, so the page is the marketing: the rank with the
+        board's own population, the sample it was decided on, the drawdown, and the two notes that qualify the
+        number (the provisional window and the worst drawdown). All nine answers travel — the five main boards and
+        the four category boards (`§2.12`) — because a specialist at rank 2 in Sports with no overall standing is
+        exactly the person who shares this link.
+
+        Two rules are structural rather than stylistic. **No address ever appears in the payload**: the row is the
+        leaderboard's own pseudonymised row, so there is no code path on this endpoint that could print one. And a
+        handle that is not listed does not resolve at all — the 404 is identical to the one for a name nobody has
+        ever typed, so this route cannot be used to ask whether a handle is taken.
+
+        `robots` is server-decided: a wallet inside its first seven days, or one below the gate, is `noindex,
+        follow` — the page works for the person who was sent the link and is not offered to a crawler.
+      parameters:
+        - name: handle
+          in: path
+          required: true
+          schema: {type: string, pattern: "^[a-z0-9][a-z0-9_]{2,23}$"}
+          description: lower-cased and validated before the lookup; a malformed handle is a 422, not a 404
+      responses:
+        "200":
+          description: the public row, its nine standings, its card and its structured data
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Stamped"
+                  - $ref: "#/components/schemas/PublicTraderPage"
+        "404": {$ref: "#/components/responses/NotFound"}
+        "422": {$ref: "#/components/responses/Validation"}
+        "429": {$ref: "#/components/responses/RateLimited"}
+        "500": {$ref: "#/components/responses/Internal"}
+
+  /v1/public/market/{slug}:
+    get:
+      tags: [public]
+      operationId: getPublicMarket
+      x-auth: public
+      x-rate-class: public-page
+      x-cache: public-short
+      summary: A market's shareable page — the question, the odds, and how old the odds are
+      description: |-
+        The page a news story links to. The odds are the same `market_activity.last_price_micro` the terminal
+        prints, and the freshness travels in three places — `odds.ageMs`, `odds.ageText` and the card's footnote —
+        because a crawlable odds page is the one surface where a price is quoted as current by somebody who never
+        opened the app. `quoteNote` states whether the market is still taking orders: a closed market's price is
+        the last traded price and not a quote, and saying so beside the number is the difference between data and
+        a misleading screenshot.
+
+        `resolutionCriteria` is served verbatim, as plain text, exactly as the terminal serves it: it is the one
+        string an outsider writes, and it is sanitised where it is rendered rather than here.
+      parameters:
+        - name: slug
+          in: path
+          required: true
+          schema: {type: string, pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"}
+      responses:
+        "200":
+          description: the market, its odds with their age, its resolution criteria, its card
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Stamped"
+                  - $ref: "#/components/schemas/PublicMarketPage"
+        "404": {$ref: "#/components/responses/NotFound"}
+        "422": {$ref: "#/components/responses/Validation"}
+        "429": {$ref: "#/components/responses/RateLimited"}
+        "500": {$ref: "#/components/responses/Internal"}
+
+  /v1/public/leaderboard/{board}:
+    get:
+      tags: [public]
+      operationId: getPublicLeaderboard
+      x-auth: public
+      x-rate-class: public-page
+      x-cache: public-medium
+      summary: A board as a page, with its formula, its gate and every row's sample size
+      description: |-
+        The same rows the in-app board ranks, cut to something a crawler reads in one request. The methodology
+        that makes the ranking defensible travels with it — `formula`, `gate`, `tieBreaks`, the exclusion count,
+        the blown-up count — because a public ranking without its rules is the thing this phase exists to
+        replace, and because explaining why rank 47 with fewer resolved markets sits above rank 12 must not
+        require reading our source.
+
+        Each row carries `settledMarkets` (the sample the win rate was decided on, null-honest under the gate),
+        `maxDrawdownMicro` and its printed form, `labels`, and the row's own `rankBadge`. Nothing is dropped for
+        being ugly: a blown-up wallet keeps its negative score on the page and is counted in `blewUpCount`.
+      parameters:
+        - name: board
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [risk_adjusted, win_rate, volume, rising, category, copied]
+        - name: window
+          in: query
+          schema: {type: string, enum: ["", 24h, 7d, 30d, 90d, all], default: ""}
+          description: empty means the board's own default window; a window the board does not read is a 422
+        - name: category
+          in: query
+          schema: {type: string, maxLength: 32}
+          description: only the category board reads this; anything else is a 422
+        - name: limit
+          in: query
+          schema: {type: integer, minimum: 1, maximum: 100, default: 25}
+      responses:
+        "200":
+          description: the board, its rules, and a page of rows
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Stamped"
+                  - $ref: "#/components/schemas/PublicLeaderboardPage"
+        "404": {$ref: "#/components/responses/NotFound"}
+        "422": {$ref: "#/components/responses/Validation"}
+        "429": {$ref: "#/components/responses/RateLimited"}
+        "500": {$ref: "#/components/responses/Internal"}
+
+  /v1/public/sitemap:
+    get:
+      tags: [public]
+      operationId: getPublicSitemap
+      x-auth: public
+      x-rate-class: public-page
+      x-cache: public-long
+      summary: What a crawler should walk, with the caps served beside the URLs
+      description: |-
+        Handles ordered by rank on the default board (the pages people share), the boards, and the markets ordered
+        by 24h volume (the pages a news story links). The caps come from `public_page_budget` rather than from a
+        constant, and they are served in `caps` with `truncated` per list — a sitemap that silently truncates is a
+        sitemap whose coverage nobody can measure.
+
+        This is the smallest budget of the five kinds, because it is the one route whose honest use is bulk.
+      responses:
+        "200":
+          description: the URLs, the caps that produced them, and whether either list was cut
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Stamped"
+                  - $ref: "#/components/schemas/PublicSitemap"
+        "429": {$ref: "#/components/responses/RateLimited"}
+        "500": {$ref: "#/components/responses/Internal"}
+
+  /v1/public/blocks:
+    get:
+      tags: [public]
+      operationId: getPublicBlocks
+      x-auth: admin
+      x-rate-class: admin
+      x-cache: no-store
+      summary: The live blocks, newest first, each with the reason it exists
+      description: |-
+        A block list is a lever with a support cost, so it is readable: "is this address blocked?" is answered by
+        a query rather than by reading a rate limiter's logs. What is listed is a digest, never an address.
+      parameters:
+        - name: X-Admin-Token
+          in: header
+          required: false
+          schema: {type: string}
+          description: absent or empty means 503 SIGNER_UNAVAILABLE rather than a 401
+      responses:
+        "200":
+          description: the live blocks
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Stamped"
+                  - $ref: "#/components/schemas/PublicBlockList"
+        "403": {$ref: "#/components/responses/Denied"}
+        "503": {$ref: "#/components/responses/Denied"}
+        "500": {$ref: "#/components/responses/Internal"}
+    post:
+      tags: [public]
+      operationId: postPublicBlock
+      x-auth: admin
+      x-rate-class: admin
+      x-cache: no-store
+      summary: Block an address from the public pages for a stated time and a stated reason (idempotent per key)
+      description: |-
+        The address is digested on the way in with the referral salt and never stored, so what lands is an `i_…`
+        subject and the operator cannot be asked to reverse it. Both the reason and the expiry are required: a
+        block without either is indistinguishable from a bug from the outside. The scope is `all` or one page kind,
+        and a week is the longest block — the difference between abuse protection and a grudge with a database row.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - name: X-Admin-Token
+          in: header
+          required: false
+          schema: {type: string}
+          description: absent or empty means 503 SIGNER_UNAVAILABLE rather than a 401
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [address, reason, hours]
+              properties:
+                address: {type: string, minLength: 3, maxLength: 120, description: "digested, never stored"}
+                reason: {type: string, minLength: 8, maxLength: 400}
+                hours: {type: integer, minimum: 1, maximum: 168}
+                scope:
+                  type: string
+                  enum: [all, trader, market, leaderboard, sitemap, og]
+                  default: all
+                createdBy: {type: string, maxLength: 120}
+      responses:
+        "200":
+          description: the block as stored — the digest, the scope and the expiry
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Stamped"
+                  - $ref: "#/components/schemas/PublicBlock"
+        "403": {$ref: "#/components/responses/Denied"}
+        "422": {$ref: "#/components/responses/Validation"}
+        "503": {$ref: "#/components/responses/Denied"}
+        "500": {$ref: "#/components/responses/Internal"}
+
+
 components:
   headers:
     xRequestId:
@@ -4346,6 +4581,249 @@ components:
             pollMs: {type: integer, minimum: 250}
             note: {type: string}
         costNote: {type: string}
+    PublicRankBadge:
+      type: object
+      description: "The badge a row is shared with: the rank, the population it is a rank OF, and the print form."
+      required: [rank, rankedTotal, text]
+      properties:
+        rank: {type: integer, minimum: 1}
+        rankedTotal: {type: integer, minimum: 1}
+        text: {type: string, pattern: "^#\\d+$"}
+
+    PublicStanding:
+      type: object
+      description: |-
+        One board's answer for one wallet. `category` is empty except on the four category boards, which is why
+        "every board" is nine entries and not six.
+      required: [board, state, url]
+      properties:
+        board: {type: string, enum: [risk_adjusted, win_rate, volume, rising, category, copied]}
+        label: {type: string, nullable: true}
+        category: {type: string}
+        state: {type: string, enum: [ranked, unranked, unknown]}
+        rank: {type: integer, nullable: true, minimum: 1}
+        rankedTotal: {type: integer, nullable: true, minimum: 0}
+        rankBadge: {type: object, nullable: true, additionalProperties: true}
+        url: {type: string, description: "the board page this entry is a row of"}
+
+    PublicCard:
+      type: object
+      description: |-
+        The share card, as data: three lines, a headline and a footnote the image pipeline renders verbatim. The
+        provisional label and the drawdown are forced into the footnote by the builder rather than left to the
+        caller, because the card is the artifact that gets screenshotted without the page around it.
+      required: [kind, title, subtitle, lines, footnote, brand, footer, url]
+      properties:
+        kind: {type: string, enum: [trader, market, leaderboard]}
+        title: {type: string, maxLength: 120}
+        subtitle: {type: string, maxLength: 200}
+        lines:
+          type: array
+          maxItems: 3
+          items:
+            type: object
+            required: [label, value]
+            properties:
+              label: {type: string}
+              value: {type: string}
+        footnote:
+          type: array
+          maxItems: 2
+          items: {type: string}
+        brand: {type: string}
+        footer: {type: string}
+        url: {type: string, format: uri}
+        ranked: {type: boolean, description: "trader cards only: whether a rank is printed, i.e. whether the qualifiers are mandatory"}
+        provisional: {type: boolean, description: "trader cards only: the record is younger than the rankable window, so the card owes its reader that sentence"}
+
+    PublicTraderPage:
+      type: object
+      required: [handle, anon, url, robots, standing, headline, notes, card, cardKey, structuredData, links,
+                 asOf, staleAfter]
+      properties:
+        handle: {type: string, pattern: "^[a-z0-9][a-z0-9_]{2,23}$"}
+        anon: {type: string, description: "the leaderboard's pseudonym; never an address"}
+        url: {type: string, format: uri}
+        robots: {type: string, enum: ["index, follow", "noindex, follow"]}
+        standing:
+          type: array
+          minItems: 9
+          maxItems: 9
+          items: {$ref: "#/components/schemas/PublicStanding"}
+        headline:
+          type: object
+          required: [board, window, rank, rankedTotal, settledMarkets, state, ageDays, realised, realisedMicro,
+                     maxDrawdown, maxDrawdownMicro]
+          properties:
+            board: {type: string}
+            window: {type: string}
+            rank: {type: integer, minimum: 1}
+            rankedTotal: {type: integer, minimum: 1}
+            settledMarkets: {type: integer, minimum: 0}
+            winRateBps: {type: integer, nullable: true}
+            realisedMicro: {type: integer}
+            realised: {type: string}
+            maxDrawdownMicro: {type: integer}
+            maxDrawdown: {type: string}
+            state: {type: string}
+            ageDays: {type: integer, minimum: 0}
+        notes:
+          type: array
+          items: {type: string}
+          description: "the qualifiers, in the same sentences the private self-rank uses"
+        card: {$ref: "#/components/schemas/PublicCard"}
+        cardKey: {type: string}
+        structuredData:
+          type: array
+          items: {type: object, additionalProperties: true}
+          description: "schema.org graph: a breadcrumb and a ProfilePage; every claim in it is a value the payload also carries"
+        sampleGate: {type: integer}
+        links: {type: object, additionalProperties: {type: string}}
+        note: {type: string}
+
+    PublicMarketPage:
+      type: object
+      required: [marketId, slug, url, robots, question, acceptingOrders, outcomes, odds, quoteNote, card, cardKey,
+                 structuredData, minimumTickSize, minimumOrderSize, links, asOf, staleAfter]
+      properties:
+        marketId: {type: string}
+        slug: {type: string}
+        url: {type: string, format: uri}
+        robots: {type: string}
+        question: {type: string}
+        eventTitle: {type: string}
+        eventSlug: {type: string}
+        category: {type: string}
+        acceptingOrders: {type: boolean}
+        endDate: {type: integer, nullable: true}
+        minimumTickSize: {type: string}
+        minimumOrderSize: {type: string}
+        feeType: {type: string}
+        outcomes:
+          type: array
+          items:
+            type: object
+            required: [outcome]
+            properties:
+              outcome: {type: string}
+              winner: {type: boolean, nullable: true}
+        resolutionCriteria: {type: string, description: "verbatim upstream text; rendered as plain text"}
+        odds:
+          type: object
+          required: [ageMs, ageText, quotedFrom, lastPrice, volume24hMicro, volume24h, liquidity, openInterest]
+          properties:
+            lastPriceMicro: {type: integer, nullable: true}
+            lastPrice: {type: string, nullable: true}
+            volume24hMicro: {type: integer}
+            volume24h: {type: string}
+            volume7d: {type: string}
+            liquidity: {type: string}
+            openInterest: {type: string}
+            ageMs: {type: integer, minimum: 0}
+            ageText: {type: string}
+            quotedFrom: {type: string}
+        quoteNote: {type: string}
+        card: {$ref: "#/components/schemas/PublicCard"}
+        cardKey: {type: string}
+        structuredData: {type: array, items: {type: object, additionalProperties: true}}
+        links: {type: object, additionalProperties: {type: string}}
+
+    PublicLeaderboardPage:
+      type: object
+      required: [board, url, robots, window, formula, gate, tieBreaks, rows, rowCount, rankedTotal, card,
+                 cardKey, structuredData, links, asOf, staleAfter]
+      properties:
+        board: {type: string}
+        label: {type: string}
+        url: {type: string, format: uri}
+        robots: {type: string, enum: ["index, follow", "noindex, follow"]}
+        window: {type: string}
+        category: {type: string}
+        formula: {type: string}
+        gate: {type: string}
+        tieBreaks: {type: string}
+        cadenceMs: {type: integer}
+        rowCount: {type: integer, minimum: 0}
+        rankedTotal: {type: integer, minimum: 0}
+        excludedTotal: {type: integer, minimum: 0}
+        blewUpCount: {type: integer, minimum: 0}
+        provisionalCount: {type: integer, minimum: 0}
+        rows:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+            required: [rank, rankBadge, anon, settledMarkets, state, handle, maxDrawdownMicro, drawdown,
+                 insufficientSample, sampleNote, labels]
+        notes: {type: array, items: {type: string}}
+        note: {type: string}
+        card: {$ref: "#/components/schemas/PublicCard"}
+        cardKey: {type: string}
+        structuredData: {type: array, items: {type: object, additionalProperties: true}}
+        links: {type: object, additionalProperties: {type: string}}
+
+    PublicSitemap:
+      type: object
+      required: [count, caps, truncated, urls, robots]
+      properties:
+        count: {type: integer, minimum: 0}
+        generatedAtMs: {type: integer}
+        caps:
+          type: object
+          required: [handles, markets]
+          properties:
+            handles: {type: integer, minimum: 0}
+            markets: {type: integer, minimum: 0}
+        truncated:
+          type: object
+          required: [handles, markets]
+          properties:
+            handles: {type: boolean}
+            markets: {type: boolean}
+        urls:
+          type: array
+          items:
+            type: object
+            required: [url, changefreq, priority]
+            properties:
+              url: {type: string, format: uri}
+              changefreq: {type: string}
+              priority: {type: string}
+        robots: {type: string}
+        note: {type: string}
+
+    PublicBlock:
+      type: object
+      required: [subject, scope, untilMs, hours, extended, note]
+      properties:
+        subject: {type: string, pattern: "^i_[0-9a-f]{8,}$", description: "a digest; the address is not stored"}
+        scope: {type: string, enum: [all, trader, market, leaderboard, sitemap, og]}
+        untilMs: {type: integer}
+        hours: {type: integer, minimum: 1, maximum: 168}
+        extended: {type: boolean, description: "true when this replaced an earlier block on the same subject"}
+        note: {type: string}
+
+    PublicBlockList:
+      type: object
+      required: [blocks, liveCount]
+      properties:
+        blocks:
+          type: array
+          items:
+            type: object
+            required: [subject, scope, reason, kind, untilMs, createdMs, createdBy]
+            properties:
+              subject: {type: string, pattern: "^i_[0-9a-f]{8,}$"}
+              scope: {type: string}
+              reason: {type: string}
+              kind: {type: string, enum: [manual, auto]}
+              untilMs: {type: integer}
+              createdMs: {type: integer}
+              createdBy: {type: string}
+        liveCount: {type: integer, minimum: 0}
+        asOfMs: {type: integer}
+
+
     Error:
       type: object
       required: [error]
@@ -4366,7 +4844,7 @@ components:
                      PRICE_FAR_FROM_MID, TOO_MANY_OPEN, DAILY_CAP, IDEM_CONFLICT, IDEM_IN_PROGRESS,
                      IDEM_KEY_REQUIRED, RISK_UNAVAILABLE, SIGNER_UNAVAILABLE, BAD_REASON, NOT_FOUND, REFUSED,
                      HALTED, RULE_CAP, DRY_RUN_REQUIRED, PLAN_REQUIRED,
-                     VALIDATION, INTERNAL, UNAUTHENTICATED, SESSION_STALE, SESSION_REVOKED, SESSION_MISMATCH, ADMIN_REQUIRED, LOGIN_FAILED, ACCOUNT_LOCKED, TOTP_REQUIRED, TOTP_INVALID, TOTP_LOCKED, ADDRESS_COOLDOWN, ADDRESS_LIMIT, REMOVE_DURING_COOLDOWN, NO_SUCH_RESOURCE, REFRESH_UNKNOWN, REFRESH_REUSED, REFRESH_EXPIRED, TELEGRAM_REPLAY, TELEGRAM_INVALID, SECURITY_ENV_MISSING, KEYSTORE_TAMPER, BREAK_GLASS_DENIED, AUTHZ_UNDECLARED, BAD_FIELD, QUOTA_EXCEEDED, RADAR_SCOPE, HANDLE_TAKEN, CODE_TAKEN, CODE_INVALID, ALREADY_REFERRED, SELF_REFERRAL]
+                     VALIDATION, INTERNAL, UNAUTHENTICATED, SESSION_STALE, SESSION_REVOKED, SESSION_MISMATCH, ADMIN_REQUIRED, LOGIN_FAILED, ACCOUNT_LOCKED, TOTP_REQUIRED, TOTP_INVALID, TOTP_LOCKED, ADDRESS_COOLDOWN, ADDRESS_LIMIT, REMOVE_DURING_COOLDOWN, NO_SUCH_RESOURCE, REFRESH_UNKNOWN, REFRESH_REUSED, REFRESH_EXPIRED, TELEGRAM_REPLAY, TELEGRAM_INVALID, SECURITY_ENV_MISSING, KEYSTORE_TAMPER, BREAK_GLASS_DENIED, AUTHZ_UNDECLARED, BAD_FIELD, QUOTA_EXCEEDED, RADAR_SCOPE, HANDLE_TAKEN, CODE_TAKEN, CODE_INVALID, ALREADY_REFERRED, SELF_REFERRAL, RATE_LIMITED]
             message: {type: string, description: "user-safe by construction"}
             retryable: {type: boolean}
             requestId: {type: string}

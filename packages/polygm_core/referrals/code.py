@@ -91,7 +91,7 @@ def make_token(seed: str = "") -> str:
     return TOKEN_PREFIX + "".join(reversed(out))
 
 
-def link_for(token: str, base: str = "https://polygm.app") -> str:
+def link_for(token: str, base: str = "https://openout.app") -> str:
     """The shareable link. One place builds it, so the OG page (D6) and the dashboard cannot disagree."""
     t = str(token or "")
     if not t.startswith(TOKEN_PREFIX):
@@ -99,7 +99,7 @@ def link_for(token: str, base: str = "https://polygm.app") -> str:
     return "%s/r/%s" % (str(base).rstrip("/"), t)
 
 
-def code_link(code: str, base: str = "https://polygm.app") -> str:
+def code_link(code: str, base: str = "https://openout.app") -> str:
     return "%s/r/c/%s" % (str(base).rstrip("/"), normalise(code))
 
 

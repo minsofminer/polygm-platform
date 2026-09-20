@@ -240,6 +240,23 @@ describe("the rating panel", () => {
     expect(screen.getByText("#12")).toBeTruthy();
   });
 
+  it("prints a followed wallet's money at the row's own scale, not 10,000x it", async () => {
+    // The row carries BOTH: `realisedMicro` (the wire unit) and `realised` (the server's printed dollars).
+    // Passing micro to a cents prop rendered $11,800 as $118,000,000.00 and nothing failed, because the only
+    // assertion anybody had written was about the label. So this asserts the two agree, which is the property
+    // that matters: the client's number and the server's number are the same number.
+    stub();
+    render(<BoardPanel focus="w_a945dde868" />);
+    const realised = await screen.findByText("the twelfth");
+    const table = realised.closest("table");
+    expect(table).not.toBeNull();
+    // Digits only, so the assertion does not depend on the design system's thin-space grouping: the cell must
+    // print the row's 11800 and must NOT print the micro value's own digits (11800000000).
+    const digits = (table!.textContent ?? "").replace(/[^0-9]/g, "");
+    expect(digits).toContain("11800");
+    expect(digits).not.toContain("11800000000");
+  });
+
   it("renders the standing with its board size, its percentile and the gap in the board's own field", async () => {
     stub();
     render(<BoardPanel focus="w_a945dde868" />);
@@ -300,7 +317,11 @@ describe("the rating panel", () => {
     render(<BoardPanel focus="w_a945dde868" />);
     const button = await screen.findByRole("button", { name: /Compare selected/ });
     expect(button.hasAttribute("disabled")).toBe(true);
-    const boxes = screen.getAllByRole("checkbox");
+    // `findAllByRole`, not `getAllByRole`: the rows arrive with the follows read, and asking for them
+    // synchronously is a race with a mock that resolves a tick later — it failed about two runs in three once
+    // the suite grew to 48 files and the box got busy, which is the shape of a flake that later reads as "the
+    // test is unreliable" rather than "the test is wrong". The comparison below already awaited.
+    const boxes = await screen.findAllByRole("checkbox");
     expect(boxes.length).toBe(2);
     boxes.forEach((box) => (box as HTMLInputElement).click());
     await waitFor(() => expect(button.hasAttribute("disabled")).toBe(false));

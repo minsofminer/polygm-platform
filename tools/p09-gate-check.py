@@ -52,7 +52,7 @@ P09_FILES = ("src/lib/depth.ts", "src/lib/ladders.ts", "src/lib/upstream.ts", "s
              "src/screens/OrderBook.tsx", "src/screens/PriceChart.tsx", "src/screens/EventTable.tsx",
              "src/screens/MarketCard.tsx", "src/screens/MarketRail.tsx", "src/screens/MarketsClient.tsx",
              "src/screens/MarketView.tsx", "src/screens/EventView.tsx",
-             "app/markets/page.tsx", "app/market/[market_id]/page.tsx", "app/event/[event_id]/page.tsx")
+             "app/markets/page.tsx", "app/market/[market]/page.tsx", "app/event/[event_id]/page.tsx")
 
 
 def sh(argv, cwd: Path = ROOT, timeout: int = 900) -> tuple[int, str]:
@@ -95,7 +95,7 @@ def surface_findings(root: Path = WEB) -> list:
             f.append("%s does not exist" % rel)
     wiring = {
         "app/markets/page.tsx": "MarketsClient",
-        "app/market/[market_id]/page.tsx": "MarketView",
+        "app/market/[market]/page.tsx": "MarketView",
         "app/event/[event_id]/page.tsx": "EventView",
     }
     for page, screen in wiring.items():
