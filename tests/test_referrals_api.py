@@ -123,7 +123,19 @@ class ReferralBase(unittest.TestCase):
         # Never before the signup: 0016 CHECKs `qualify_ms = 0 OR qualify_ms >= signed_up_ms`, and an order that
         # predates the account that placed it is not a scenario worth testing — it is a bug in the fixture.
         self.assertIsNotNone(row, "the referee must be attributed before they can qualify")
-        at = max(self.app._now_ms() - days_ago * DAY, row[0] + 1000)
+        at = self.app._now_ms() - days_ago * DAY
+        if at < row[0] + 1000:
+            # The attribution was written a moment ago — `apply` stamps `signed_up_ms = now` — so "a day ago" is not
+            # available yet, and 0016 refuses a qualifying order that predates the account that placed it. Backdate
+            # the SIGNUP rather than clamping the order to *now*, which is what this line used to do: a clamp turns
+            # "days ago" into "just now" silently, and a caller that then adds an offset (one test adds an hour)
+            # lands past midnight UTC on a day that has not happened yet, so the accrual run refuses it. That made
+            # this file fail for exactly one hour of every day, on a fixture bug rather than a product one.
+            signed_up = at - DAY
+            self.db.execute("UPDATE referral_attributions SET signed_up_ms=? WHERE referee=?", (signed_up, referee))
+            self.db.commit()
+            row = (signed_up, row[1])
+        at = max(at, row[0] + 1000)
         # The qualifying order goes in; the STATE stays as the route left it. A referee under review who places a
         # matched order is the exact case the review exists for, so flipping them to `qualified` here would test
         # the fixture instead of the rule.

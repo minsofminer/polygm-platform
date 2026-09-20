@@ -80,6 +80,27 @@ called `_tg_order_from_card`, renamed because it stopped being Telegram's the mo
 conversion, one risk gate, one ledger, three surfaces, and the same numbers from each: 50 USDC on a 0.62 ask is
 80,645,161 micro-shares whether the confirm came from a chat tap, the Mini App, or the terminal.
 
+## The Mini App URL in a plain browser
+
+A deep link is the product's front door, and it gets opened in the wrong building constantly: a channel post is read in
+a desktop client, a link is pasted into a chat with a friend, somebody's Telegram opens it in the system browser. In all
+three there is no `initData`, so there is no session — and the first version of the screen answered that by refusing to
+show the market at all. The Mini App's own URL, the one registered with BotFather, looked broken outside Telegram.
+
+The card is now read-only rather than absent: the question, both asks, the age of the quote and the book all render, and
+the confirm slot is replaced by the one route that can place an order. The interesting part is *why the reads were
+failing*, and it was not the screen. The web app's proxy acquires a session before every upstream call — that is how the
+bearer token stays out of the browser — and it did so for reads the API's own contract serves to nobody in particular.
+Two rows of the route ledger are now declared `anonymous: true` (`/v1/public/market/{slug}`, `x-auth: public`, and
+`/v1/markets/{id}/book`, `x-auth: none`) and matched against the ledger's template by `src/auth/anonymous.ts`, so a
+public read cannot be session-gated by accident. It is a template match and never a prefix, because
+`/v1/public/blocks` shares the prefix and is `x-auth: admin` — the shortcut would have opened the one route that
+mattered. The CSRF guard still runs first, and the terminal's own reads stay behind the layout that redirects a
+signed-out visitor to sign-in.
+
+Verified on the deployed alias with no cookies and no `Origin`: the market page and the book answer 200 with their
+freshness stamps intact, while `/v1/public/blocks`, `/v1/markets/0xM1/fills` and `/v1/orders` all still answer 401.
+
 ## What a person can do today
 
 From the bot: `/start`, `/market`, 20 commands with inline keyboards, a natural-language fallback that answers with a

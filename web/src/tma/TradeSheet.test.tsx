@@ -10,7 +10,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { TradeSheet } from "./TradeSheet";
-import type { MarketView } from "./trade";
+import { READ_ONLY_SENTENCE, type MarketView } from "./trade";
 
 const MARKET: MarketView = {
   slug: "fed-cut-sept",
@@ -133,5 +133,38 @@ describe("TradeSheet", () => {
     bridge();
     render(<TradeSheet market={{ ...MARKET, yesAsk: "—", noAsk: "—" }} place={vi.fn()} />);
     expect(screen.getByRole("alert").textContent).toContain("No quotes");
+  });
+});
+
+describe("read-only", () => {
+  it("renders the market and offers the bot instead of a confirm it cannot honour", async () => {
+    const { buzzes, calls } = bridge();
+    const place = vi.fn();
+    render(<TradeSheet market={MARKET} place={place} readOnly />);
+
+    // The market is still legible — prices, the age next to them, the side buttons — because a link that arrives
+    // read-only is a market somebody shared, not an error.
+    expect(screen.getByText(MARKET.question)).toBeTruthy();
+    expect(screen.getByText(/as of 4 seconds ago/)).toBeTruthy();
+    fireEvent.click(screen.getByText(`Buy YES ${MARKET.yesAsk}`));
+    // A size chip is what takes the sheet to its confirm slot — where the difference has to show.
+    fireEvent.click(screen.getByRole("button", { name: "$50" }));
+
+    await waitFor(() => expect(screen.getByText(READ_ONLY_SENTENCE)).toBeTruthy());
+    expect(screen.getByText("Open the bot")).toBeTruthy();
+    expect(screen.queryByText(/^Confirm \$/)).toBeNull();
+
+    // Nothing was sent, nothing was minted, and nothing buzzed: a view that cannot place an order must not pretend
+    // to try — a haptic here would be the product's most expensive lie.
+    expect(place).not.toHaveBeenCalled();
+    expect(buzzes).toEqual([]);
+    expect(calls).toEqual([]);
+  });
+
+  it("still binds the MainButton when a session exists", async () => {
+    const { calls } = bridge();
+    render(<TradeSheet market={MARKET} place={vi.fn()} />);
+    fireEvent.click(screen.getByText(`Buy YES ${MARKET.yesAsk}`));
+    await waitFor(() => expect(calls.length).toBeGreaterThan(0));
   });
 });

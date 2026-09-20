@@ -8,8 +8,8 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   amountFindings, blockers, chooseSize, close, confirmCopy, confirmKey, feeMicro, fromMicro, initial,
-  maxLossMicro, normaliseAmount, open, plainRefusal, primaryAction, priceFromText, refused, screenFor, sharesFor,
-  SIZES, submitted, toMicro, validAmount, type MarketView,
+  maxLossMicro, normaliseAmount, open, plainRefusal, primaryAction, priceFromText, READ_ONLY_SENTENCE, refused,
+  screenFor, sharesFor, SIZES, submitted, toMicro, validAmount, type MarketView,
 } from "./trade";
 
 const MARKET: MarketView = {
@@ -171,6 +171,16 @@ describe("refusals and deep links", () => {
     }
     expect(plainRefusal("SOMETHING_NEW", "the venue said no")).toBe("the venue said no");
     expect(plainRefusal("SOMETHING_NEW")).toContain("Nothing was placed");
+  });
+
+  it("answers a browser with the way to act, not with a wall", () => {
+    // The one state with no session and no password to type: there is nothing to sign in *with*, so a sentence that
+    // says "sign in" would be the only thing this screen could say wrong twice. It names the market (live) and the
+    // route to a trade (the bot), and it never shows the reader a code.
+    expect(READ_ONLY_SENTENCE).toContain("Open the bot");
+    expect(READ_ONLY_SENTENCE).not.toMatch(/[A-Z_]{4,}/);
+    expect(plainRefusal("UNAUTHENTICATED")).toContain("read-only");
+    expect(plainRefusal("UNAUTHENTICATED")).toContain("Open the bot");
   });
 
   it("turns a market deep link into the slug to load", () => {

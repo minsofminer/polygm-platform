@@ -18,7 +18,7 @@ import { silentReauth } from "@/telegram/reauth";
 import { parseStartapp, startappTarget } from "@/telegram/startapp";
 import { TradeSheet, type OrderFn } from "@/tma/TradeSheet";
 import { loadMarketForSheet, type TmaGet, type TmaRead } from "@/tma/market";
-import type { MarketView } from "@/tma/trade";
+import { READ_ONLY_SENTENCE, type MarketView } from "@/tma/trade";
 
 type Ready = { state: "loading" } | { state: "ready"; view: MarketView } | { state: "refused"; why: string };
 
@@ -97,21 +97,24 @@ export function TmaScreen() {
       </section>
     );
   }
-  if (session === "no") {
-    return (
-      <section className="pgm-tma-card">
-        <h1>{ready.view.question}</h1>
-        <p role="alert">
-          Telegram could not confirm this session, so nothing can be placed from here. Open the bot and tap Trade
-          again — if it keeps happening, check that you came from the bot itself rather than a copied link.
-        </p>
-        <p><a href="https://t.me/polygm_bot">Open the bot</a></p>
-      </section>
-    );
-  }
+  // A market is public; a *trade* is not. So the card renders either way and only the placing of an order is guarded,
+  // which is the right shape for three readers at once: the customer who tapped the link inside Telegram (session
+  // present, nothing extra on screen), the one who opened the same link in a plain browser (sees the real prices and
+  // is told where to go to act on them), and the one whose session expired on the way (the confirm slot says so in a
+  // sentence). Blocking the whole screen without a session was the first version, and it made this URL — the one
+  // registered with BotFather — look broken in a browser, which is the failure the phase exists to prevent.
+  //
+  // `checking` counts as read-only too: the sheet must not offer a confirm during the window where the session is
+  // still being minted, and the banner waits for the answer so nobody sees "read-only" flash past inside Telegram.
+  const readOnly = session !== "ok";
   return (
     <main>
-      <TradeSheet market={ready.view} place={place} />
+      {session === "no" ? (
+        <p className="pgm-tma-card" role="status">
+          {READ_ONLY_SENTENCE} <a href="https://t.me/polygm_bot">Open the bot</a>
+        </p>
+      ) : null}
+      <TradeSheet market={ready.view} place={place} readOnly={readOnly} />
     </main>
   );
 }

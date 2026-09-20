@@ -20,6 +20,18 @@ export type RouteDecl = {
   /** The launch-list item that owns closing this gap. */
   owner: string;
   note?: string;
+  /**
+   * `true` means the API's own contract serves this read to nobody in particular (`x-auth: public` or `none`), so
+   * the proxy must not require a session for it.
+   *
+   * Why the flag exists: the proxy keeps the bearer token out of the browser, and it does that by acquiring a
+   * session before every upstream call. For a genuinely public read that turns a working link into a 401 — a market
+   * link opened in a plain browser has no `initData` and never will, so "sign in to see this" is a bug in the deep
+   * link, not a security boundary. The two reads below are the ones a read-only card needs, and only those:
+   * `/v1/public/blocks` sits under the same prefix and is `x-auth: admin`, so the obvious shortcut would have opened
+   * the one route that mattered.
+   */
+  anonymous?: true;
 };
 
 export const ROUTES = {
@@ -47,7 +59,10 @@ export const ROUTES = {
   totpVerify: { method: "POST", path: "/v1/auth/totp/verify", built: true, whileMissing: "refuses", owner: "P07" },
   markets: { method: "GET", path: "/v1/markets", built: true, whileMissing: "refuses", owner: "P05" },
   market: { method: "GET", path: "/v1/markets/{market_id}", built: true, whileMissing: "refuses", owner: "P05" },
-  book: { method: "GET", path: "/v1/markets/{market_id}/book", built: true, whileMissing: "refuses", owner: "P05" },
+  // `anonymous` on the book: the contract says `x-auth: none` for it, and the Mini App's read-only card cannot
+  // price a market without it. The terminal screens that also read it live under `app/(app)/`, whose layout
+  // redirects a signed-out visitor to /sign-in — the page gate, not this hop, is what protects them.
+  book: { method: "GET", path: "/v1/markets/{market_id}/book", built: true, whileMissing: "refuses", owner: "P05", anonymous: true },
   fills: { method: "GET", path: "/v1/markets/{market_id}/fills", built: true, whileMissing: "refuses", owner: "P05" },
   tape: { method: "GET", path: "/v1/tape", built: true, whileMissing: "refuses", owner: "P05" },
   // ---- P09's three read surfaces. Each is `built: true` because the gate's c1 asserts a built route is in
@@ -173,6 +188,9 @@ export const ROUTES = {
     built: true,
     whileMissing: "refuses",
     owner: "P11",
+    // `x-auth: public` in the contract, and the read that resolves a deep link's slug. A link that only works for
+    // somebody who already has a session is a link that fails for the person a shared alert was sent to.
+    anonymous: true,
   },
   publicBoardPage: {
     method: "GET",

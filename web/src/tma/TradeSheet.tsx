@@ -23,7 +23,7 @@ import { tma, showMainButton } from "@/telegram/bridge";
 import { CLASS, DUR, SEQUENCE } from "@/tma/motion";
 import { haptic } from "@/tma/haptics";
 import {
-  amountFindings, blockers, chooseSize, close, confirmCopy, confirmKey, initial, open, plainRefusal,
+  amountFindings, blockers, chooseSize, close, confirmCopy, confirmKey, initial, open, plainRefusal, READ_ONLY_SENTENCE,
   primaryAction, refused, SIZES, sharesFor, submitted, type MarketView, type SheetState, type Side,
 } from "@/tma/trade";
 
@@ -40,9 +40,16 @@ export type TradeSheetProps = {
   place: OrderFn;
   /** The clipboard-free way to get the address into the customer's hands is the Mini App's own copy button. */
   onNeedDeposit?: () => void;
+  /**
+   * No session, so nothing can be placed. The sheet still renders — the prices, the book's age and the size chips are
+   * public information, and a market link should not arrive as an error page — but the confirm is replaced by the one
+   * route that can place an order. A "Buy YES" button that always refuses is worse than no button: it costs a tap to
+   * learn nothing.
+   */
+  readOnly?: boolean;
 };
 
-export function TradeSheet({ market, place, onNeedDeposit }: TradeSheetProps) {
+export function TradeSheet({ market, place, onNeedDeposit, readOnly = false }: TradeSheetProps) {
   const [state, setState] = useState<SheetState>(() => initial("yes"));
   const [input, setInput] = useState("50");
   const [tick, setTick] = useState(0);          // bumps a CSS class so re-renders can re-run an animation
@@ -82,7 +89,12 @@ export function TradeSheet({ market, place, onNeedDeposit }: TradeSheetProps) {
   useEffect(() => {
     // `primaryAction` answers `null` while an order is in flight, which is why there is no "submitting" case here:
     // the MainButton is hidden rather than showing a label the user could tap twice.
-    if (!primary) return;
+    //
+    // Read-only leaves it unbound for the same reason the confirm slot below changes: Telegram's button is the loudest
+    // thing on the screen, and "Buy YES $50" on a view that cannot place an order is a promise the screen cannot
+    // keep. It stays hidden rather than switching to an "Open the bot" label, because the sheet carries that link
+    // where the decision is made.
+    if (!primary || readOnly) return;
     const release = showMainButton(primary.label, () => {
       if (primary.kind === "open") {
         setState((s) => (s.step === "closed" ? open(s, s.side) : chooseSize(s, input)));
@@ -173,13 +185,22 @@ export function TradeSheet({ market, place, onNeedDeposit }: TradeSheetProps) {
 
           {state.step === "confirm" ? (
             <div>
-              <p aria-live="polite">{confirmCopy({ ...state, amountUsdc: input }, market)}</p>
-              {/* The secondary affordance: the MainButton confirms, this row just makes the same decision tappable
-                  inside the sheet for anyone who does not look at the bottom bar. */}
-              <button type="button" onClick={() => void onConfirm(crypto.randomUUID().replace(/-/g, "").slice(0, 16))}>
-                Confirm ${input}
-              </button>
-              <button type="button" onClick={() => setState((s) => close(s))}>Cancel</button>
+              <p aria-live="polite">
+                {readOnly ? READ_ONLY_SENTENCE : confirmCopy({ ...state, amountUsdc: input }, market)}
+              </p>
+              {readOnly ? (
+                // The action, not a dead button: the customer arrived by a link, so the link back is the way out.
+                <a className="pgm-tma-open-bot" href="https://t.me/polygm_bot">Open the bot</a>
+              ) : (
+                <>
+                  {/* The secondary affordance: the MainButton confirms, this row just makes the same decision tappable
+                      inside the sheet for anyone who does not look at the bottom bar. */}
+                  <button type="button" onClick={() => void onConfirm(crypto.randomUUID().replace(/-/g, "").slice(0, 16))}>
+                    Confirm ${input}
+                  </button>
+                  <button type="button" onClick={() => setState((s) => close(s))}>Cancel</button>
+                </>
+              )}
             </div>
           ) : null}
 

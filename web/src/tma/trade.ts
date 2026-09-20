@@ -175,6 +175,17 @@ export function primaryAction(state: SheetState): PrimaryAction {
 }
 
 /**
+ * The read-only state, in one sentence, so the screen and the refusal cannot disagree.
+ *
+ * A deep link opened in a plain browser has no Telegram `initData`, so there is no session and nothing can be
+ * placed — and "sign in" is not an offer this product can make, because there is no password to sign in with. The
+ * sentence therefore names the only route to a trade instead of describing a failure: the market is public, and a
+ * visitor who followed a shared alert should be able to read it and then go act on it.
+ */
+export const READ_ONLY_SENTENCE =
+  "Read-only: the market is live, but a trade can only be placed from Telegram. Open the bot and tap Trade.";
+
+/**
  * The refusal, in words, for a code the API returned.
  *
  * The same table exists in Python (`app._tg_plain_refusal`) for the chat, and the duplication is deliberate on both
@@ -212,7 +223,7 @@ export function plainRefusal(code: string, detail?: string): string {
     IDEM_IN_PROGRESS: "That order is already on its way — no second one was sent.",
     IDEM_KEY_REQUIRED: "That order arrived without a way to tell a retry from a new order, so I did not send it.",
     RATE_LIMITED: "That is more requests than can be sent for you at once. Give it a second.",
-    UNAUTHENTICATED: "Your session has expired. Reopen the Mini App from the bot and try again.",
+    UNAUTHENTICATED: "Nothing was placed: this view is read-only. Open the bot and tap Trade to place an order.",
     REFUSED: "The venue refused the order. Nothing was placed.",
   };
   return table[code] ?? detail ?? `That did not go through (${code}). Nothing was placed.`;

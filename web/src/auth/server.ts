@@ -21,6 +21,9 @@ import { accessExpired, AT_COOKIE, joinAccess, RT_COOKIE, refreshOnce, splitAcce
 // The guard itself is a pure function in its own module (src/auth/server.csrf.ts) so it can be tested
 // without a request, and so this file has exactly one copy of the rule.
 import { csrfOk } from "./server.csrf";
+// The anonymous-read predicate is a pure function in its own module for the same reason the guard is: it is
+// arithmetic on a path and the route ledger, and it is worth a test that needs no request.
+import { isAnonymousRead } from "./anonymous";
 
 const API_ORIGIN = process.env.PGM_API_ORIGIN ?? "http://127.0.0.1:8000";
 const ALLOWED_ORIGINS: string[] = (process.env.PGM_ALLOWED_ORIGINS ?? "").split(",").map((s) => s.trim()).filter(Boolean);
@@ -85,6 +88,18 @@ export async function proxy(path: string, init: { method: string; body?: unknown
   });
   if (!guard.allowed) {
     return { status: 403, body: envelope("CSRF_ORIGIN", "this request did not come from the page that owns the session"), contentType: "application/json" };
+  }
+  // A read the contract serves to the public must not need a session: an anonymous visitor with a market link gets
+  // the market, not a sign-in wall (see the `anonymous` flag's comment in src/api/routes.ts). The CSRF guard above
+  // still ran — being public does not mean being a mutation — and the hop still hides the upstream origin and any
+  // bearer token, so this is a narrower call, not an unguarded one.
+  if (isAnonymousRead(init.method, path)) {
+    return callUpstream(path, {
+      method: init.method,
+      ...(init.body !== undefined ? { body: init.body } : {}),
+      token: null,
+      ...(init.headers ? { headers: init.headers } : {}),
+    });
   }
   const store = await jar();
   const at = splitAccess(store.get(AT_COOKIE));
