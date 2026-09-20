@@ -133,7 +133,10 @@ export function MarketView({
             staleMs={bookStaleMs}
             source="rest"
           />
-          <TradeTicket />
+          {/* The ticket needs a market *slug*, which is what the server-priced route resolves against. It
+              used to take an id and default to the string "demo" — a ticket that could post a market nobody
+              has. */}
+          <TradeTicket slug={market.slug} />
           {picked ? (
             <p className="pgm-fine" role="status" data-testid="picked">
               {t("markets.ticket.picked", { price: picked.price, side: picked.side })}

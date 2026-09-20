@@ -8176,9 +8176,9 @@ _levels_p12 = {
     # The Mini App's order route is a USER route: the webview equivalent of the ticket. Its identity is the session
     # the signed `initData` minted, never the request body — there is no chat id to forge.
     "POST /v1/telegram/order": (_authz.USER, ""),
-    # The Mini App's order route is a USER route: it is the webview equivalent of the ticket, and the identity comes
-    # from the session the signed `initData` minted, never from the request body.
-    "POST /v1/telegram/order": (_authz.USER, ""),
+    # The web ticket's route. A USER row for the same reason: the identity is the session, and a budget is not a
+    # credential — the amount and the market in the body are the user's *question*, never their authorisation.
+    "POST /v1/orders/amount": (_authz.USER, ""),
 }
 
 _authz.LEVELS_TABLE.update(_levels_p11)
@@ -8526,8 +8526,12 @@ def _tg_when(ts_ms: int) -> str:
     return time.strftime("%d %b %H:%M UTC", time.gmtime(int(ts_ms) / 1000.0))
 
 
-def _tg_order_from_card(uid: str, payload: dict, key: str) -> dict:
-    """Turn a confirm tap into an order through the SAME path `POST /v1/orders` uses.
+def _order_from_card(uid: str, payload: dict, key: str) -> dict:
+    """Turn an *amount-denominated* order card into an order through the SAME path `POST /v1/orders` uses.
+
+    Two surfaces call this and they are the reason it was extracted: the Telegram confirm tap and the web ticket.
+    A webview (and a browser) knows a market and a budget; the order path wants a token and a size in shares. That
+    conversion lives here once, so "what an order is" cannot differ between the chat, the Mini App and the site.
 
     The mapping is the part worth reading: the card carries a *market and an amount in USDC*, while the order path
     wants a market, an outcome token, a limit price and a size in shares. The conversion is integer arithmetic
@@ -8687,7 +8691,7 @@ async def telegram_webhook(request: Request,
     _tg_save(decision.session) if decision.session is not None else _tg_clear_session(update.chat_id)
     outcome_note = decision.note
     if decision.action.kind == "place_order" and account_id:
-        res = _tg_order_from_card(account_id, decision.action.payload, decision.action.key)
+        res = _order_from_card(account_id, decision.action.payload, decision.action.key)
         outcome_note = ("placed %s" % res.get("intent_id", "")) if res.get("ok") else ("refused %s"
                                                                                        % res.get("code", ""))
         if res.get("ok"):
@@ -8864,6 +8868,65 @@ TELEGRAM_ORDER_RESPONSES = {
 }
 
 
+# Derived from CODES exactly as ORDER_RESPONSES is, rather than aliased to the Telegram table: the contract checker
+# evaluates these tables from the source's AST, so an alias would read as "no statuses at all" and the route would pass
+# a check it never took.
+ORDER_AMOUNT_RESPONSES = {
+    202: {"description": "queued for the executor through the same risk gate as the chat and the terminal"},
+    **{status: {"description": msg} for msg, status, _retry in CODES.values()},
+}
+
+
+@app.post("/v1/orders/amount", status_code=202, responses=ORDER_AMOUNT_RESPONSES,
+          openapi_extra=_body_schema(("slug", "side", "amountUsdc"), {
+              "slug": {"type": "string", "minLength": 3, "maxLength": 128},
+              "side": {"type": "string", "enum": ["yes", "no"]},
+              "amountUsdc": {"type": "string", "pattern": "^[0-9]{1,9}(\\.[0-9]{1,2})?$"}}))
+def place_order_by_amount(request: Request, body: dict = Body(...),
+                          idempotency_key: str | None = Header(default=None, alias="Idempotency-Key")):
+    """The web ticket's order: a market, an outcome and a budget — priced by the server, at this instant.
+
+    P06's `POST /v1/orders` takes what the *venue* takes: an outcome token, a limit price and a size in shares. The
+    browser ticket sent something else — `{market_id, side, amount_cents}` — and the contract answered 422 for every
+    trade the site ever attempted. That is not a renamed-field bug. It is two surfaces disagreeing about what an order
+    is: the ticket is a person typing a dollar amount, and a browser that names a token id can name the wrong one,
+    while a browser that names a price is quoting the past. So the browser gets the same treatment the webview got,
+    and both call `_order_from_card`: one conversion, one risk gate, one ledger.
+
+    The only difference from `/v1/telegram/order` is identity. This one is authorised by the site's own bearer
+    session, so a browser tab and a webview place the same order through the same path.
+    """
+    rid = request.state.request_id
+    uid, _row, deny = _principal(request)
+    if deny is not None:
+        return deny
+    if not uid:
+        return err("UNAUTHENTICATED", rid)
+    bad = _check_body(body, ("slug", "side", "amountUsdc"), rid)
+    if bad is not None:
+        return bad
+    slug = str(body["slug"]).strip()
+    side = str(body["side"]).strip().lower()
+    if len(slug) < 3 or len(slug) > 128:
+        return err("VALIDATION", rid, where=["slug"])
+    if side not in ("yes", "no"):
+        return err("VALIDATION", rid, where=["side"])
+    bad_key = _idem_shape(idempotency_key)
+    if bad_key is not None:
+        return bad_key
+    res = _order_from_card(str(uid), {"slug": slug, "side": side, "amount": str(body["amountUsdc"])},
+                           str(idempotency_key))
+    if not res.get("ok"):
+        code = str(res.get("code") or "INTERNAL")
+        return err(code if code in CODES else "INTERNAL", rid, detail=str(res.get("detail") or "")[:160])
+    return _stamped({"cacheKey": None, "intentId": str(res["intent_id"]), "state": "queued",
+                     "outcome": str(res.get("outcome") or side.upper()),
+                     "priceMicro": str(res["price_micro"]), "sharesMicro": str(res["shares_micro"]),
+                     "notionalMicro": str(res.get("notional_micro") or 0),
+                     "note": "queued for the executor; the fill arrives as a notification"},
+                    ttl_ms=0, stale_ms=0)
+
+
 @app.post("/v1/telegram/order", status_code=202, responses=TELEGRAM_ORDER_RESPONSES,
            openapi_extra=_body_schema(("slug", "side", "amountUsdc"), {
                "slug": {"type": "string", "minLength": 3, "maxLength": 128},
@@ -8877,7 +8940,7 @@ def telegram_order(request: Request, body: dict = Body(...),
     outcome token and a price; a webview opened from a deep link has none of those, and a client that can name a
     token can name the wrong one while a client that can name a price is quoting the past. So the webview says
     *what it is looking at* and the server resolves the rest — the same resolution the chat's confirm tap does
-    (`_tg_order_from_card`), which is the point: **one order path, one risk gate, two surfaces.** If the chat and
+    (`_order_from_card`), which is the point: **one order path, one risk gate, two surfaces.** If the chat and
     the Mini App ever disagree about what an order is, they disagree here, in one function, on the diff.
 
     Authenticated as a session rather than as a bot: a webview user is a user. The identity is the Telegram account
@@ -8902,7 +8965,7 @@ def telegram_order(request: Request, body: dict = Body(...),
     bad_key = _idem_shape(idempotency_key)
     if bad_key is not None:
         return bad_key
-    res = _tg_order_from_card(str(uid), {"slug": slug, "side": side, "amount": str(body["amountUsdc"])},
+    res = _order_from_card(str(uid), {"slug": slug, "side": side, "amount": str(body["amountUsdc"])},
                               str(idempotency_key))
     if not res.get("ok"):
         # Straight out of CODES, exactly as `POST /v1/orders` answers: an ordinary "no such market" is a 404 with
@@ -9340,58 +9403,7 @@ def _tg_broadcast_candidates() -> list:
 
 # Derived from CODES exactly as ORDER_RESPONSES is, so the statuses this route can answer cannot drift from the
 # vocabulary it answers in: a code added to CODES with a new status is a status this table gains for free.
-TELEGRAM_ORDER_RESPONSES = {
-    202: {"description": "queued for the executor, through the same risk gate as the web"},
-    **{status: {"description": msg} for msg, status, _retry in CODES.values()},
-}
 
-
-@app.post("/v1/telegram/order", status_code=202, responses=TELEGRAM_ORDER_RESPONSES,
-           openapi_extra=_body_schema(("slug", "side", "amountUsdc"), {
-               "slug": {"type": "string", "minLength": 3, "maxLength": 128},
-               "side": {"type": "string", "enum": ["yes", "no"]},
-               "amountUsdc": {"type": "string", "pattern": "^[0-9]{1,9}(\\.[0-9]{1,2})?$"}}))
-def telegram_order(request: Request, body: dict = Body(...),
-                   idempotency_key: str | None = Header(default=None, alias="Idempotency-Key")):
-    """Place an order from the Mini App — the *same* path the bot's confirm tap takes.
-
-    This route exists so the Mini App does not have to know a CLOB token id or a price: it sends the market it is
-    looking at, the side and an amount, and the server resolves the token, re-reads the best ask **at this instant**
-    and calls the one order path (`_order_core`: validation, risk gate, idempotency store, ledger row). A client that
-    sent a price would be sending yesterday's price; a client that sent a token id would be a client that could send
-    the wrong one.
-
-    Authenticated as a *session* (the bearer from `POST /v1/telegram/session`), not as a webhook: a webview user is a
-    user, and their identity is the account the Telegram payload resolved to — never a `chat_id` in the body.
-    """
-    rid = request.state.request_id
-    uid, _srow, deny = _principal(request)
-    if deny is not None:
-        return deny
-    if not uid:
-        return err("UNAUTHENTICATED", rid)
-    bad = _check_body(body, ("slug", "side", "amountUsdc"), rid, allowed=("slug", "side", "amountUsdc"))
-    if bad is not None:
-        return bad
-    shaped = _idem_shape(idempotency_key)
-    if shaped is not None:
-        return shaped
-    side = str(body["side"]).lower()
-    res = _tg_order_from_card(str(uid), {"slug": str(body["slug"]), "side": side,
-                                         "amount": str(body["amountUsdc"])}, str(idempotency_key or ""))
-    if not res.get("ok"):
-        # One code, one status, straight out of CODES — the same table every other route answers from, so the Mini
-        # App's error handling is the web app's error handling. The first version of this branch mapped codes to
-        # hand-chosen statuses and wrapped `err()` in a second `JSONResponse`, which produced a 500 whose body was a
-        # *serialised response object*: the route was never exercised, and a route that is never exercised is a route
-        # whose bug ships.
-        code = str(res.get("code") or "")
-        return err(code if code in CODES else "INTERNAL", rid, detail=str(res.get("detail") or "")[:160])
-    return JSONResponse(_stamped({"cacheKey": None, "intentId": res["intent_id"], "state": "queued",
-                                  "sharesMicro": str(res["shares_micro"]), "priceMicro": str(res["price_micro"]),
-                                  "notionalMicro": str(res["notional_micro"]),
-                                  "note": "queued for executor; the fill will arrive as a message in the chat "
-                                          "and a notification here"}, ttl_ms=0, stale_ms=0), status_code=202)
 
 
 @app.get("/v1/telegram/ops", responses=TELEGRAM_OPS_RESPONSES)

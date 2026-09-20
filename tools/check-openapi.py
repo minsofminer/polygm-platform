@@ -57,7 +57,9 @@ TABLE_FOR_PATH = {
     ("POST", "/v1/telegram/drain"): "TELEGRAM_DRAIN_RESPONSES",
     ("POST", "/v1/telegram/kill"): "TELEGRAM_KILL_RESPONSES",
     ("POST", "/v1/telegram/order"): "TELEGRAM_ORDER_RESPONSES",
-    ("POST", "/v1/telegram/order"): "TELEGRAM_ORDER_RESPONSES",
+    # P12 · the web ticket's route. Same derived table shape as the other order routes, so adding a code to CODES
+    # adds its status here too — and the checker's AST walk reads a real comprehension, not an alias.
+    ("POST", "/v1/orders/amount"): "ORDER_AMOUNT_RESPONSES",
     ("POST", "/v1/telegram/broadcast"): "TELEGRAM_BROADCAST_RESPONSES",
     "/v1/telegram/ops": "TELEGRAM_OPS_RESPONSES",
     "/v1/telegram/metrics": "TELEGRAM_METRICS_RESPONSES",

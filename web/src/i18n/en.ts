@@ -219,6 +219,9 @@ export const en = {
   "wallet.deposit.network.base": "Base · USDC",
   "wallet.deposit.confirmationsMinutes": "{minutes} min",
   "trade.ticket.sizeLabel": "Size (USD)",
+  // Shown when the ticket has no market to price against — the terminal before a market is chosen, and any
+  // surface that renders the ticket outside a market. It used to be a silent `"demo"` market id.
+  "trade.ticket.noMarket": "Pick a market first — the ticket sends your amount to the market you are looking at.",
   "wallet.withdraw.amountLabel": "Amount (USD)",
   "shell.palette.goTo": "Go to {label}",
   "common.error.route.title": "This page stopped rendering",

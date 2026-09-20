@@ -3019,6 +3019,71 @@ paths:
         "422": {$ref: "#/components/responses/Validation"}
         "503": {$ref: "#/components/responses/Denied"}
         "500": {$ref: "#/components/responses/Internal"}
+  /v1/orders/amount:
+    post:
+      tags: [orders]
+      summary: Place an order from a budget — the web ticket's route
+      description: |-
+        The ticket on the site is a person typing a dollar amount, and this is the route that takes it. P06's
+        `POST /v1/orders` names what the *venue* names — an outcome token, a limit price, a size in shares — which a
+        browser cannot honestly supply: a token id it guessed is the wrong market's token, and a price it read a few
+        seconds ago is the past. So the caller sends a slug, a side and an amount, and the server resolves the token,
+        re-reads the best ask at this instant and calls `_order_from_card`, the same conversion the Telegram confirm
+        tap uses. One conversion, one risk gate, one ledger — three surfaces.
+
+        Until P12 the ticket posted `{market_id, side, amount_cents}` here, which was a 422 on every trade the site
+        attempted; the route exists so that the two shapes cannot drift again without a contract change.
+      operationId: postOrdersAmount
+      x-auth: user
+      x-rate-class: order
+      x-cache: no-store
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema: {type: string, minLength: 8, maxLength: 128}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [slug, side, amountUsdc]
+              properties:
+                slug: {type: string, minLength: 3, maxLength: 128}
+                side: {type: string, enum: [yes, no]}
+                amountUsdc: {type: string, pattern: "^[0-9]{1,9}(\\.[0-9]{1,2})?$"}
+      responses:
+        "202":
+          description: queued for the executor
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Stamped"
+                  - type: object
+                    properties:
+                      intentId: {type: string}
+                      state: {type: string}
+                      outcome: {type: string}
+                      sharesMicro: {type: string}
+                      priceMicro: {type: string}
+                      notionalMicro: {type: string}
+                      note: {type: string}
+                    required: [intentId, state]
+        # The statuses the route answers come from CODES, exactly as the other two order routes: a client that already
+        # handles a refused web trade handles a refused ticket, because it is the same vocabulary.
+        "400": {$ref: "#/components/responses/Validation"}
+        "402": {$ref: "#/components/responses/Denied"}
+        "401": {$ref: "#/components/responses/Denied"}
+        "403": {$ref: "#/components/responses/Denied"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/Validation"}
+        "429": {$ref: "#/components/responses/RateLimited"}
+        "500": {$ref: "#/components/responses/Internal"}
+        "503": {$ref: "#/components/responses/Denied"}
   /v1/telegram/order:
     post:
       tags: [telegram]

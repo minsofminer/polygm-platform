@@ -352,9 +352,13 @@ export const ROUTES = {
     owner: "P09",
   },
   createOrder: { method: "POST", path: "/v1/orders", built: true, whileMissing: "refuses", owner: "P06" },
-  // P12 · the Mini App's order route. A separate key from `createOrder` on purpose: the web ticket names a token and
-  // a price, the webview names a slug and an amount and lets the server price it. Two client shapes, one server
-  // order path — and the ledger records which client asked.
+  // P12 · the ticket's route: a slug, a side and a budget. The server resolves the outcome token, re-reads the best
+  // ask and prices the order — which is the only honest way for a ticket to trade, and the reason the ticket no
+  // longer posts `{market_id, amount_cents}` to `/v1/orders` (a 422 on every attempt, from P08 to P12).
+  orderByAmount: { method: "POST", path: "/v1/orders/amount", built: true, whileMissing: "refuses", owner: "P12" },
+  // The same server-priced order for the Mini App. A separate key from `orderByAmount` because the paths differ —
+  // one is authorised by the site's session, the other by the session a signed `initData` minted — while both land
+  // on the same conversion and the same risk gate.
   telegramOrder: { method: "POST", path: "/v1/telegram/order", built: true, whileMissing: "refuses", owner: "P12" },
   intent: { method: "GET", path: "/v1/orders/intents/{intent_id}", built: true, whileMissing: "refuses", owner: "P06" },
   addressList: {

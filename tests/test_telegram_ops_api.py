@@ -462,6 +462,89 @@ class TestMiniAppOrderRoute(OpsBase):
         self.assertEqual("VALIDATION", r.json()["error"]["code"])
 
 
+class TestWebTicketOrderRoute(OpsBase):
+    """`POST /v1/orders/amount` — the web ticket's order, and the bug this class exists for.
+
+    Until P12 the browser ticket posted `{market_id, side, amount_cents}` to `/v1/orders`, which requires
+    `{marketId, tokenId, side, price, size}`. Every trade the site ever attempted was a 422. The fix is not a renamed
+    field: a browser cannot honestly name a CLOB token id, and a price it read some seconds ago is not the price it
+    will get. So the web gets the same server-priced route the webview has, and both call one conversion.
+
+    This class stands alone rather than subclassing the Mini App's tests. Inheriting them was cheap and wrong: those
+    assertions were written for the Telegram route's own fixtures (`outcome`, per-side keys), and running them against
+    a second route made failures that were artefacts of the inheritance — a reused idempotency key across two tests
+    answers 409, which reads exactly like a bug in the route under test.
+    """
+    app_name = "api-tg-ops-web-order"
+
+    def post(self, body, *, key):
+        headers = self.auth()
+        headers["Idempotency-Key"] = key
+        return self.client.post("/v1/orders/amount", json=body, headers=headers)
+
+    def test_the_web_ticket_shape_is_accepted_and_prices_like_the_webviews(self):
+        mid, _cond, _tok = self.seed_market()
+        r = self.post({"slug": "p12-fed-cut-sept", "side": "yes", "amountUsdc": "50"}, key="web-ok-000000000001")
+        self.assertEqual(202, r.status_code, r.text)
+        body = r.json()
+        # 50 USDC at a 0.62 ask: the same integer the Mini App's route and the chat's confirm tap produce, because it
+        # is the same function. If these ever differ, the surfaces have stopped quoting the same book.
+        self.assertEqual("80645161", body["sharesMicro"], body)
+        self.assertEqual("620000", body["priceMicro"], body)
+        self.assertEqual("Yes", body["outcome"])
+        rows = self.db.execute("SELECT market_id, side FROM order_intents").fetchall()
+        self.assertEqual(1, len(rows), "one confirm is one order")
+        self.assertEqual(mid, str(rows[0][0]))
+
+    def test_the_old_broken_payload_is_refused_by_the_contract_not_absorbed(self):
+        # The exact body the ticket used to send. A route that guessed at `amount_cents` would be a route that can
+        # place an order nobody asked for, so this must stay a 422 naming the fields.
+        self.seed_market()
+        r = self.client.post("/v1/orders/amount",
+                             json={"market_id": "p12-fed-cut-sept", "side": "BUY", "amount_cents": 5000},
+                             headers={**self.auth(), "Idempotency-Key": "web-old-shape-000001"})
+        self.assertEqual(422, r.status_code, r.text)
+        self.assertEqual(0, int(self.db.execute("SELECT COUNT(*) FROM order_intents").fetchone()[0]))
+
+    def test_a_browser_with_no_session_gets_no_order(self):
+        self.seed_market()
+        r = self.client.post("/v1/orders/amount", json={"slug": "p12-fed-cut-sept", "side": "yes",
+                                                        "amountUsdc": "25"},
+                             headers={"Idempotency-Key": "web-anon-0000000001"})
+        self.assertEqual(401, r.status_code, r.text)
+        self.assertEqual(0, int(self.db.execute("SELECT COUNT(*) FROM order_intents").fetchone()[0]))
+
+    def test_a_missing_key_is_refused_before_anything_is_priced(self):
+        self.seed_market()
+        r = self.client.post("/v1/orders/amount", json={"slug": "p12-fed-cut-sept", "side": "yes",
+                                                        "amountUsdc": "25"}, headers=self.auth())
+        self.assertEqual(400, r.status_code, r.text)
+        self.assertEqual(0, int(self.db.execute("SELECT COUNT(*) FROM order_intents").fetchone()[0]))
+
+    def test_the_same_key_twice_is_one_order_and_a_different_body_is_a_conflict(self):
+        self.seed_market()
+        first = self.post({"slug": "p12-fed-cut-sept", "side": "yes", "amountUsdc": "20"}, key="web-dedup-00000001")
+        self.assertEqual(202, first.status_code, first.text)
+        again = self.post({"slug": "p12-fed-cut-sept", "side": "yes", "amountUsdc": "20"}, key="web-dedup-00000001")
+        self.assertEqual(202, again.status_code, again.text)
+        self.assertEqual(first.json()["intentId"], again.json()["intentId"], "a retry is the same order")
+        other = self.post({"slug": "p12-fed-cut-sept", "side": "no", "amountUsdc": "20"}, key="web-dedup-00000001")
+        self.assertEqual(409, other.status_code, other.text)
+        self.assertEqual("IDEM_CONFLICT", other.json()["error"]["code"])
+        self.assertEqual(1, int(self.db.execute("SELECT COUNT(*) FROM order_intents").fetchone()[0]))
+
+    def test_a_slug_we_do_not_have_is_a_registered_404(self):
+        self.seed_market()
+        r = self.post({"slug": "p12-no-such-market", "side": "yes", "amountUsdc": "25"}, key="web-404-00000000001")
+        self.assertEqual(404, r.status_code, r.text)
+        self.assertEqual("NOT_FOUND", r.json()["error"]["code"])
+
+    def test_a_side_the_market_does_not_have_is_a_422(self):
+        self.seed_market()
+        r = self.post({"slug": "p12-fed-cut-sept", "side": "maybe", "amountUsdc": "25"}, key="web-side-00000000001")
+        self.assertEqual(422, r.status_code, r.text)
+
+
 class TestRefusalVocabulary(OpsBase):
     """Every code the product can show a user must be a code the API can actually emit.
 
@@ -473,7 +556,7 @@ class TestRefusalVocabulary(OpsBase):
     app_name = "api-tg-ops-vocab"
 
     def test_the_cards_unknown_market_uses_the_registered_code(self):
-        res = self.app._tg_order_from_card("u-nobody", {"slug": "does-not-exist", "side": "yes", "amount": "50"},
+        res = self.app._order_from_card("u-nobody", {"slug": "does-not-exist", "side": "yes", "amount": "50"},
                                            "tma-vocab-0001")
         self.assertFalse(res["ok"])
         self.assertIn(res["code"], self.app.CODES, res)

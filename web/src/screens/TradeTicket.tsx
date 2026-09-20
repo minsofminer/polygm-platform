@@ -20,7 +20,15 @@ import { announce } from "@/ui/Dialog";
  *      client collapse into one intent;
  *   4. haptics fire on the confirmation only (webview) — nowhere else in the app.
  */
-export function TradeTicket({ marketId = "demo" }: { marketId?: string }) {
+
+/** Cents (an integer) as the wire's decimal string: `1000` → `"10.00"`. */
+function usdcFromCents(value: number): string {
+  const whole = Math.trunc(value / 100);
+  const part = Math.abs(value % 100);
+  return `${whole}.${String(part).padStart(2, "0")}`;
+}
+
+export function TradeTicket({ slug }: { slug?: string }) {
   const canTrade = useConnection((s) => s.canTrade());
   const whyNot = useConnection((s) => s.whyNot());
   const [amount, setAmount] = useState("10.00");
@@ -29,15 +37,25 @@ export function TradeTicket({ marketId = "demo" }: { marketId?: string }) {
   const [refusal, setRefusal] = useState<string | null>(null);
   const [intent, setIntent] = useState<string | null>(null);
 
-  const key = newIdempotencyKey(`order:${marketId}:${side}:${amount}`);
+  const key = newIdempotencyKey(`order:${slug ?? ""}:${side}:${amount}`);
 
   const send = async () => {
     if (!canTrade) {
       announce(whyNot ?? t("shell.connection.tradingDisabled", { reason: "disconnected" }));
       return;
     }
+    if (!slug) {
+      // A ticket with no market is not a ticket. It used to default to the string `"demo"` and post that as a market
+      // id, so the only thing standing between a placeholder and an order was the venue's own 404 — a check that
+      // belongs on this side of the wire.
+      setRefusal(t("trade.ticket.noMarket"));
+      return;
+    }
     let cents;
     try {
+      // Parsed by the money module and then re-emitted as a decimal string from the integer, so the value that goes
+      // on the wire is the value the parser accepted: no `parseFloat` on the way out, and `"10.0"` and `"10.00"`
+      // become the same amount instead of two different strings with the same meaning.
       cents = centsFromDecimal(amount);
     } catch (cause) {
       setRefusal(cause instanceof Error ? cause.message : String(cause));
@@ -45,15 +63,21 @@ export function TradeTicket({ marketId = "demo" }: { marketId?: string }) {
     }
     setBusy(true);
     setRefusal(null);
+    // `orderByAmount`, not `createOrder`: this route takes what a person actually types — a market, a side and a
+    // budget — and re-reads the price server-side. The old body (`{market_id, side, amount_cents}` against
+    // `/v1/orders`) needed a token id and a limit price the browser does not have and should not invent.
     const out = await request<{ intentId?: string; status?: string }>({
-      key: "createOrder",
-      body: { market_id: marketId, side, amount_cents: cents },
+      key: "orderByAmount",
+      body: { slug, side: side === "BUY" ? "yes" : "no", amountUsdc: usdcFromCents(cents) },
       idempotencyKey: key,
     });
     setBusy(false);
     if (!out.ok) {
+      // The toast carries the code (an operator can read it, and support can ask for it); what the *user* reads here
+      // is the sentence the API wrote. The line used to render `CODE: message`, which put a machine token in front of
+      // the one thing the person needed — the same rule `_tg_plain_refusal` enforces on the chat side.
       pushRefusal(out.error.code, out.error.message, out.error.requestId);
-      setRefusal(`${out.error.code}: ${out.error.message}`);
+      setRefusal(out.error.message);
       return;
     }
     if (usesMainButton("trade-confirm")) hapticConfirm();

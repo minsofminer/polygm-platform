@@ -272,7 +272,10 @@ export function TerminalScreen({
               {t("terminal.market.loading")}
             </p>
           )}
-          <TradeTicket marketId={marketId} />
+          {/* Same slug the panel above is reading: the ticket prices against the book the user is looking at,
+              not against an id it happens to remember. Empty until a market is chosen, which the ticket renders
+              as "pick a market" rather than as an order. */}
+          <TradeTicket slug={market.detail?.slug} />
         </div>
       }
     />
