@@ -112,3 +112,7 @@ CREATE TRIGGER append_only_referral_accruals_delete BEFORE DELETE ON referral_ac
 CREATE TRIGGER append_only_telegram_broadcasts_update BEFORE UPDATE ON telegram_broadcasts BEGIN SELECT RAISE(ABORT,'append-only table: telegram_broadcasts is not updatable'); END;
 
 CREATE TRIGGER append_only_telegram_broadcasts_delete BEFORE DELETE ON telegram_broadcasts BEGIN SELECT RAISE(ABORT,'append-only table: telegram_broadcasts is not deletable'); END;
+
+CREATE TRIGGER append_only_telegram_kill_state_update BEFORE UPDATE ON telegram_kill_state BEGIN SELECT RAISE(ABORT,'append-only table: telegram_kill_state is not updatable'); END;
+
+CREATE TRIGGER append_only_telegram_kill_state_delete BEFORE DELETE ON telegram_kill_state BEGIN SELECT RAISE(ABORT,'append-only table: telegram_kill_state is not deletable'); END;

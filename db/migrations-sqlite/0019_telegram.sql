@@ -79,3 +79,14 @@ CREATE TABLE IF NOT EXISTS telegram_broadcasts (
     CHECK (quality BETWEEN 0 AND 100)
 );
 CREATE INDEX IF NOT EXISTS telegram_broadcasts_cadence_ix ON telegram_broadcasts (channel, fired_ms);
+CREATE TABLE IF NOT EXISTS telegram_kill_state (
+    id          INTEGER PRIMARY KEY,
+    engaged     INTEGER NOT NULL,
+    scope       TEXT NOT NULL DEFAULT 'all',
+    reason      TEXT NOT NULL DEFAULT '',
+    changed_by  TEXT NOT NULL DEFAULT '',
+    at_ms       INTEGER NOT NULL,
+    CHECK (scope IN ('all','channel','personal')),
+    CHECK (NOT engaged OR length(reason) >= 8)
+);
+CREATE INDEX IF NOT EXISTS telegram_kill_ix ON telegram_kill_state (at_ms, id);

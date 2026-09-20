@@ -118,6 +118,23 @@ CREATE TABLE IF NOT EXISTS telegram_broadcasts (
 );
 CREATE INDEX IF NOT EXISTS telegram_broadcasts_cadence_ix ON telegram_broadcasts (channel, fired_ms DESC);
 
+CREATE TABLE IF NOT EXISTS telegram_kill_state (
+    -- Separate from P06's trading kill switch on purpose. They stop different things, and conflating them is how an
+    -- operator who wants to stop *messages* ends up stopping *trades*: the trading switch halts orders and leaves
+    -- the outbox alone (a user must still be told what happened to their money); this one pauses delivery and
+    -- leaves trading alone. Both are append-only logs of "who did what, when, and why", which is the only form of a
+    -- switch anyone can reconstruct after the fact.
+    id          BIGSERIAL PRIMARY KEY,
+    engaged     BOOLEAN NOT NULL,
+    scope       TEXT NOT NULL DEFAULT 'all',
+    reason      TEXT NOT NULL DEFAULT '',
+    changed_by  TEXT NOT NULL DEFAULT '',
+    at_ms       BIGINT NOT NULL,
+    CHECK (scope IN ('all','channel','personal')),
+    CHECK (NOT engaged OR length(reason) >= 8)      -- an unexplained kill switch reads as an outage
+);
+CREATE INDEX IF NOT EXISTS telegram_kill_ix ON telegram_kill_state (at_ms DESC, id DESC);
+
 -- The one append-only table in this migration, and it is declared in `tools/build-sqlite-migrations.py`'s
 -- portable list for the reason that list exists: a broadcast record is evidence of what we told thousands of
 -- people. Both halves of the promise live here — the trigger, and the grant — because 0005's `DO` block cannot
@@ -133,7 +150,7 @@ BEGIN
         RAISE NOTICE 'role polygm_app is absent (dev/test database): skipping the append-only grants';
         RETURN;
     END IF;
-    FOREACH t IN ARRAY ARRAY['telegram_broadcasts'] LOOP
+    FOREACH t IN ARRAY ARRAY['telegram_broadcasts', 'telegram_kill_state'] LOOP
         IF to_regclass(t) IS NOT NULL THEN
             EXECUTE format('REVOKE UPDATE, DELETE, TRUNCATE ON %I FROM PUBLIC', t);
             EXECUTE format('REVOKE UPDATE, DELETE, TRUNCATE ON %I FROM polygm_app', t);

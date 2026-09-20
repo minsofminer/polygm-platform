@@ -55,6 +55,10 @@ TABLE_FOR_PATH = {
     ("POST", "/v1/telegram/session"): "TELEGRAM_SESSION_RESPONSES",
     "/v1/telegram/commands": "TELEGRAM_COMMANDS_RESPONSES",
     ("POST", "/v1/telegram/drain"): "TELEGRAM_DRAIN_RESPONSES",
+    ("POST", "/v1/telegram/kill"): "TELEGRAM_KILL_RESPONSES",
+    ("POST", "/v1/telegram/order"): "TELEGRAM_ORDER_RESPONSES",
+    ("POST", "/v1/telegram/broadcast"): "TELEGRAM_BROADCAST_RESPONSES",
+    "/v1/telegram/ops": "TELEGRAM_OPS_RESPONSES",
     "/v1/telegram/metrics": "TELEGRAM_METRICS_RESPONSES",
     ("GET", "/v1/alerts"): "ALERT_LIST_RESPONSES",
     # Two methods on one path: the table is keyed by (verb, path) here because the two serve
@@ -200,19 +204,52 @@ def app_tables() -> dict[str, set[int]]:
     """
     tree = ast.parse(APP.read_text())
     consts: dict[str, object] = {}
+    literal_dicts: dict[str, ast.Dict] = {}
     for node in tree.body:
         if isinstance(node, ast.Assign) and isinstance(node.value, ast.Dict):
+            literal_dicts[node.targets[0].id] = node.value
             try:
                 consts[node.targets[0].id] = ast.literal_eval(node.value)
             except (ValueError, TypeError):
                 continue
     internal = consts.get("_INTERNAL", {}) or {}
-    for name, val in list(consts.items()):
-        # app.py merges _INTERNAL into every non-order table in a loop; reflect that here rather than reading
-        # only the literal, or the comparison would report a difference the code does not have.
-        if name.endswith("_RESPONSES") and name != "ORDER_RESPONSES" and isinstance(val, dict):
-            consts[name] = {**val, **internal}
     codes = consts.get("CODES") or {}
+
+    def from_codes(node: ast.Dict) -> set | None:
+        """Evaluate a table written as `{202: {...}, **{status: {...} for … in CODES.values()}}`.
+
+        The general form of what used to be a special case for ORDER_RESPONSES: when the Mini App's order route
+        gained a table derived the same way, the special case would have read it as "no statuses at all" and
+        reported a difference the code does not have. Evaluating the comprehension against the *literal* CODES
+        keeps the check honest — it re-derives the statuses from the vocabulary rather than trusting a comment,
+        and it works for any route that decides to inherit the whole error vocabulary.
+        """
+        out: dict = {}
+        derived = False
+        for key, value in zip(node.keys, node.values):
+            if key is not None:
+                try:
+                    out[ast.literal_eval(key)] = ast.literal_eval(value)
+                except (ValueError, TypeError):
+                    return None
+                continue
+            derived = True
+            if not codes:
+                return None
+            scope = {"CODES": codes, "set": set, "dict": dict}
+            try:
+                out.update(eval(compile(ast.Expression(value), "<table>", "eval"), scope, {}))   # noqa: S307
+            except Exception:
+                return None
+        return set(out) if derived else None
+
+    for name, node in literal_dicts.items():
+        if name.endswith("_RESPONSES") and isinstance(consts.get(name), dict) and name != "ORDER_RESPONSES":
+            # app.py merges _INTERNAL into every non-order table in a loop; reflect that here rather than reading
+            # only the literal, or the comparison would report a difference the code does not have.
+            consts[name] = {**consts[name], **internal}
+        if name.endswith("_RESPONSES") and from_codes(node):
+            consts[name] = from_codes(node)
     derived = {202: {}}
     derived.update({status: {} for _m, status, _r in codes.values()})   # type: ignore[union-attr]
     derived.update(internal)

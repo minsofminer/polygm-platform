@@ -3019,6 +3019,241 @@ paths:
         "422": {$ref: "#/components/responses/Validation"}
         "503": {$ref: "#/components/responses/Denied"}
         "500": {$ref: "#/components/responses/Internal"}
+  /v1/telegram/order:
+    post:
+      tags: [telegram]
+      summary: Place an order from the Mini App — the same path the bot's confirm tap takes
+      description: |-
+        A webview user is a user, so this route takes a *session* (the bearer `POST /v1/telegram/session` minted from
+        the signed `initData`) and never a `chat_id` in the body. What makes it different from the web ticket is what
+        it does NOT accept: no token id and no price. The client sends the market it is looking at, the side and an
+        amount; the server resolves the outcome token, re-reads the best ask at this instant, and calls the one order
+        path — validation, risk gate, idempotency store, ledger row. A client-sent price is yesterday's price, and a
+        client that can name the token can name the wrong one.
+      operationId: postTelegramOrder
+      x-auth: user
+      x-rate-class: order
+      x-cache: no-store
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema: {type: string, minLength: 8, maxLength: 128}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [slug, side, amountUsdc]
+              properties:
+                slug: {type: string, minLength: 3, maxLength: 128}
+                side: {type: string, enum: [yes, no]}
+                amountUsdc: {type: string, pattern: "^[0-9]{1,9}(\\.[0-9]{1,2})?$"}
+      responses:
+        "202":
+          description: queued for the executor
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Stamped"
+                  - type: object
+                    properties:
+                      intentId: {type: string}
+                      state: {type: string}
+                      sharesMicro: {type: string}
+                      priceMicro: {type: string}
+                      notionalMicro: {type: string}
+                      note: {type: string}
+                    required: [intentId, state]
+        # The same statuses POST /v1/orders declares, because the route answers from the same CODES table: one
+        # vocabulary of refusals for both surfaces, and a client that handles the web ticket already handles this —
+        # 402 included, which is `PLAN_REQUIRED` and arrives the day a paid feature can refuse from the order path.
+        "400": {$ref: "#/components/responses/Validation"}
+        "402": {$ref: "#/components/responses/Denied"}
+        "401": {$ref: "#/components/responses/Denied"}
+        "403": {$ref: "#/components/responses/Denied"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/Validation"}
+        "429": {$ref: "#/components/responses/RateLimited"}
+        "500": {$ref: "#/components/responses/Internal"}
+        "503": {$ref: "#/components/responses/Denied"}
+  /v1/telegram/kill:
+    post:
+      tags: [telegram]
+      summary: Stop the bot sending — without stopping trading
+      description: |-
+        A switch separate from P06's trading kill switch, and the separation is the design: the trading switch halts
+        orders and leaves the outbox alone, because a user whose order was halted still has to be told what happened
+        to their money; this one pauses *delivery* and leaves trading alone. Scope decides what it holds back —
+        `channel` stops the megaphone, `personal` stops one-to-one messages, `all` stops both — and jobs stay queued
+        rather than being dropped, so a paused switch loses nothing it can deliver later.
+
+        Every engagement carries a reason of at least eight characters and a name, and the rows are append-only: an
+        unexplained kill switch is indistinguishable from an outage, and "was that us?" is the first question in the
+        incident channel.
+      operationId: postTelegramKill
+      x-auth: admin
+      x-rate-class: operator
+      x-cache: no-store
+      x-idempotency-exempt: >-
+        the newest row is the state, so repeating the same engagement is a no-op by construction — and a switch
+        that needed a key to flip would be a switch that fails during an incident
+      parameters:
+        - name: X-Admin-Token
+          in: header
+          required: true
+          schema: {type: string, minLength: 8, maxLength: 256}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [engaged, reason]
+              properties:
+                engaged: {type: boolean}
+                scope: {type: string, enum: [all, channel, personal], default: all}
+                reason: {type: string, minLength: 8, maxLength: 400}
+      responses:
+        "200":
+          description: the new state
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Stamped"
+                  - type: object
+                    properties:
+                      engaged: {type: boolean}
+                      scope: {type: string}
+                      reason: {type: string}
+                      by: {type: string}
+                      atMs: {type: integer}
+                      note: {type: string}
+                    required: [engaged, scope]
+        "403": {$ref: "#/components/responses/Denied"}
+        "422": {$ref: "#/components/responses/Validation"}
+        "503": {$ref: "#/components/responses/Denied"}
+        "500": {$ref: "#/components/responses/Internal"}
+  /v1/telegram/broadcast:
+    post:
+      tags: [telegram]
+      summary: Compose the channel's next messages — and, by default, send none of them
+      description: |-
+        A channel message goes to thousands of phones and cannot be edited out of them, so the default here is a dry
+        run: the exact bytes that would go out, with what a sender would check (length, escaping, buttons, a deep
+        link). A real send re-checks P07's broadcast gate per market, honours the cadence caps read from
+        `telegram_broadcasts`, and queues the result — the drain is still the only thing that talks to Telegram.
+
+        The stage is expressed as *kinds and categories with a limit*, not as a percentage of subscribers: "the first
+        ten large fills in economics" is a rollout a human can reason about before pressing send, and a random tenth
+        of the audience is not.
+      operationId: postTelegramBroadcast
+      x-auth: admin
+      x-rate-class: operator
+      x-cache: no-store
+      x-idempotency-exempt: >-
+        the tool is a compose-and-queue operation whose cadence caps and broadcast-gate rows make a repeat a
+        no-op in effect; a keyed repeat would instead re-send, which is the failure it exists to avoid
+      parameters:
+        - name: X-Admin-Token
+          in: header
+          required: true
+          schema: {type: string, minLength: 8, maxLength: 256}
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                dryRun: {type: boolean, default: true}
+                stage: {type: object, additionalProperties: true}
+      responses:
+        "200":
+          description: a preview, or what was queued and what the gates held back
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Stamped"
+                  - type: object
+                    properties:
+                      dryRun: {type: boolean}
+                      staged: {type: integer}
+                      held: {type: integer}
+                      sent: {type: array, items: {type: string}}
+                      skipped:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            slug: {type: string}
+                            why: {type: string}
+                      preview: {type: object, additionalProperties: true}
+                      note: {type: string}
+                    required: [dryRun]
+        "403": {$ref: "#/components/responses/Denied"}
+        "422": {$ref: "#/components/responses/Validation"}
+        "503": {$ref: "#/components/responses/Denied"}
+        "500": {$ref: "#/components/responses/Internal"}
+  /v1/telegram/ops:
+    get:
+      tags: [telegram]
+      summary: The operator's one page — switch state, queue depth, and the recovery plan
+      description: |-
+        What an on-call needs at 2am without opening three tools: whether the bot is paused and why, how deep the
+        outbox is, whether any update is stuck mid-handler, what the channel last said, the username decision with
+        its reasoning, and the three recovery plans (a restricted bot, a banned channel, an impersonation report)
+        with the hedge each one relies on. Served from the same package the runbook reads, so there is one answer
+        rather than two that drift.
+      operationId: getTelegramOps
+      x-auth: admin
+      x-rate-class: operator
+      parameters:
+        - name: X-Admin-Token
+          in: header
+          required: true
+          schema: {type: string, minLength: 8, maxLength: 256}
+      responses:
+        "200":
+          description: the operator's view
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Stamped"
+                  - type: object
+                    properties:
+                      kill:
+                        type: object
+                        properties:
+                          engaged: {type: boolean}
+                          scope: {type: string}
+                          reason: {type: string}
+                          by: {type: string}
+                          atMs: {type: integer}
+                      queueDepth: {type: integer}
+                      stuckClaims: {type: integer}
+                      botConfigured: {type: boolean}
+                      lastBroadcasts:
+                        type: array
+                        items: {type: object, additionalProperties: true}
+                      username: {type: object, additionalProperties: true}
+                      recovery:
+                        type: array
+                        items: {type: object, additionalProperties: true}
+                      findings: {type: array, items: {type: string}}
+                    required: [kill, queueDepth, botConfigured]
+        "403": {$ref: "#/components/responses/Denied"}
+        "503": {$ref: "#/components/responses/Denied"}
+        "500": {$ref: "#/components/responses/Internal"}
   /v1/leaderboard/methodology:
     get:
       tags: [leaderboard]

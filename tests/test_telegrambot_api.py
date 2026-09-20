@@ -259,8 +259,10 @@ class TestStartAndTheTradePath(TelegramBase):
             payload={"slug": "p12-fed-cut-sept", "side": "yes", "amount": "50", "action_id": "act-89-p12-yes-4"}))
         self.post_update(self.callback("confirm:yes:act-89-p12-yes-4", update_id=2006))
         text = "\n".join(j["text"] for j in self.outbox())
-        self.assertIn("NO_LIQUIDITY", text)
-        self.assertIn("offer", text, "the card must say what is wrong in words a person can act on")
+        # `NO_ORDER_BOOK` is the registered code for a side with no levels, and the *sentence* is what the user gets:
+        # the code rides along in the message so support can search it, and the words are what the person reads.
+        self.assertIn("NO_ORDER_BOOK", text)
+        self.assertIn("order book", text, "the card must say what is wrong in words a person can act on")
 
     def test_stop_cancels_pending_orders_and_pauses_rules_without_selling(self):
         uid = self.account()
@@ -437,10 +439,15 @@ class TestSurfaces(TelegramBase):
         self.assertEqual(503, self.client.get("/v1/telegram/metrics").status_code)
 
     def test_every_risk_code_has_a_sentence(self):
-        codes = ("RISK_HALT", "RISK_NOTIONAL", "RISK_DAILY", "RISK_OPEN_ORDERS", "RISK_MIN_SIZE",
-                 "RISK_STALE_BOOK", "RISK_TICK", "RISK_PRICE_BAND", "NO_LIQUIDITY", "MARKET_NOT_FOUND",
-                 "BAD_AMOUNT", "IDEM_CONFLICT", "IDEM_IN_PROGRESS")
-        for code in codes:
+        # Walked from the table itself, not from a list written here. The list this replaced named thirteen codes and
+        # seven of them did not exist in `CODES` — so the test proved the *fallback* worked, thirteen times over,
+        # while every refusal a user would really meet went unexplained. `TestRefusalVocabulary` in
+        # `test_telegram_ops_api.py` now checks the keys are registered codes; this checks they read like sentences.
+        import inspect
+        import re as _re
+        keys = _re.findall(r'^\s{8}"([A-Z_]{4,})":', inspect.getsource(self.app._tg_plain_refusal), _re.M)
+        self.assertGreater(len(keys), 15)
+        for code in keys:
             text = self.app._tg_plain_refusal(code)
             self.assertGreater(len(text), 30, code)
             self.assertNotIn(code, text, "%s must be explained in words, not repeated back" % code)

@@ -27,7 +27,8 @@
     "wallet_pseudonyms",
     "leaderboard_exclusions",
     "referral_accruals",
-    "telegram_broadcasts"
+    "telegram_broadcasts",
+    "telegram_kill_state"
   ],
   "tables": [
     "address_allowlist",
@@ -125,6 +126,7 @@
     "tape_trades",
     "telegram_broadcasts",
     "telegram_commands",
+    "telegram_kill_state",
     "telegram_nonces",
     "telegram_outbox",
     "telegram_sessions",

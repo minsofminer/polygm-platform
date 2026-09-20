@@ -43,8 +43,11 @@ from polygm_core.referrals import terms as _rt
 from polygm_core import gaming as _gm_gaming
 from polygm_core import public_pages as _pp
 from polygm_core.risk.gate import Intent, Limits, MarketState, evaluate, norm_tick
+from polygm_core.security import abuse as _tgb_abuse
 from polygm_core.risk.idempotency import Idem
+from polygm_core.telegrambot import channel as _tgb_channel
 from polygm_core.telegrambot import client as _tg_client
+from polygm_core.telegrambot import ops as _tgb_ops
 from polygm_core.telegrambot import menu as _tgb_menu
 from polygm_core.telegrambot import outbox as _tgb_outbox
 from polygm_core.telegrambot import render as _tgb_render
@@ -2286,7 +2289,10 @@ def _order_core(uid: str, body: dict, idempotency_key: str, rid: str):
     resolved", and a future surface that forgets to resolve one gets an error instead of an order with no owner.
     """
     if not uid:
-        return err("NO_USER_CONTEXT", rid)
+        # `UNAUTHENTICATED` rather than a `NO_USER_CONTEXT` of our own: this function's contract is "the id is already
+        # resolved", and a caller that skipped that step has an *unauthenticated* request, which is a registered code
+        # with a registered status. An unregistered name here would answer 400 "request failed", which is a lie.
+        return err("UNAUTHENTICATED", rid, detail="no user context")
     if not idempotency_key or not _IDEM_RE.match(idempotency_key):
         return err("IDEM_KEY_REQUIRED", rid)
     bad = _check_body(body, ORDER_REQUIRED, rid)
@@ -8162,6 +8168,14 @@ _levels_p12 = {
     # message every chat it knows, and a user who can read the funnel can read the product's growth numbers.
     "POST /v1/telegram/drain": (_authz.ADMIN, ""),
     "GET /v1/telegram/metrics": (_authz.ADMIN, ""),
+    # D8's operator surface. The kill switch is ADMIN and takes no user credential at all: it is infrastructure,
+    # and a switch a user can reach is a switch an attacker can flip during an incident.
+    "POST /v1/telegram/kill": (_authz.ADMIN, ""),
+    "POST /v1/telegram/broadcast": (_authz.ADMIN, ""),
+    "GET /v1/telegram/ops": (_authz.ADMIN, ""),
+    # The Mini App's order route is a USER route: it is the webview equivalent of the ticket, and the identity comes
+    # from the session the signed `initData` minted, never from the request body.
+    "POST /v1/telegram/order": (_authz.USER, ""),
 }
 
 _authz.LEVELS_TABLE.update(_levels_p11)
@@ -8519,17 +8533,24 @@ def _tg_order_from_card(uid: str, payload: dict, key: str) -> dict:
     the answer is the book.
     """
     slug = str(payload.get("slug") or "")
-    side = "BUY" if str(payload.get("side") or "").lower() == "yes" else "BUY"
+    # Always a BUY: the side picks the *outcome token*, and there is no selling NO in a market you never held. The
+    # line used to read `"BUY" if yes else "BUY"` — a branch where one arm explains the other away.
+    side = "BUY"
     row = _db.execute("SELECT m.id, m.slug, t.token_id, t.outcome FROM markets m JOIN tokens t ON t.market_id = m.id"
                       " WHERE m.slug=? AND t.outcome_index = ? LIMIT 1",
                       (slug, 0 if str(payload.get("side") or "").lower() == "yes" else 1)).fetchone()
     if row is None:
-        return {"ok": False, "code": "MARKET_NOT_FOUND", "detail": "that market is not one of ours"}
+        # `NOT_FOUND` rather than `MARKET_NOT_FOUND`: the second reads better and does not exist in CODES, so a
+        # client handling the registered vocabulary has no branch for it. Both tables below were written against the
+        # nicer name, which is exactly how an unregistered code reaches a user's phone.
+        return {"ok": False, "code": "NOT_FOUND", "detail": "that market is not one of ours"}
     market_id, _slug, token_id, outcome = str(row[0]), str(row[1]), str(row[2]), str(row[3])
     ask = _db.execute("SELECT price_micro FROM book_levels WHERE market_id=? AND side='ask' ORDER BY price_micro"
                       " LIMIT 1", (market_id,)).fetchone()
     if ask is None:
-        return {"ok": False, "code": "NO_LIQUIDITY", "detail": "there is no offer on that side right now"}
+        # `NO_ORDER_BOOK` is the registered code for "this side has no levels to trade against". `NO_LIQUIDITY` was
+        # another name that read well and appears in no vocabulary.
+        return {"ok": False, "code": "NO_ORDER_BOOK", "detail": "there is no offer on that side right now"}
     price_micro = int(ask[0])
     try:
         usdc_micro = parse_usdc(str(payload.get("amount") or "0"))
@@ -8540,7 +8561,10 @@ def _tg_order_from_card(uid: str, payload: dict, key: str) -> dict:
         return {"ok": False, "code": "BAD_AMOUNT", "detail": "that amount is too small to buy one share"}
     body = {"marketId": market_id, "tokenId": token_id, "side": side,
             "price": _micro_str(price_micro), "size": _micro_str(shares_micro)}
-    resp = _order_core(uid=uid, body=body, idempotency_key=str(key)[:64], rid="tg-%s" % str(key)[:24])
+    # The key goes in whole or not at all. `_order_core` validates it against the client contract's own pattern and
+    # refuses anything malformed; truncating a long key here would let two distinct orders share one idempotency
+    # record, which is the single failure the key exists to prevent.
+    resp = _order_core(uid=uid, body=body, idempotency_key=str(key), rid="tg-%s" % str(key)[:24])
     try:
         payload_out = json.loads(resp.body.decode("utf-8"))
     except Exception:                                        # a non-JSON body here would be a bug in the core
@@ -8561,6 +8585,22 @@ def _micro_str(micro: int, *, scale: int = 6) -> str:
     micro = int(micro or 0)
     whole, frac = divmod(abs(micro), 10 ** scale)
     return "%s%d.%0*d" % ("-" if micro < 0 else "", whole, scale, frac)
+
+
+def _tg_shares(micro: int) -> str:
+    """`1_290_000_000` micro-shares → `"1,290"`, `80_645_161` → `"80.65"`, `500_000` → `"0.5"`.
+
+    A share count on a phone is a *reading*, not a measurement: `_micro_str` gives the money path its exact string
+    (and stays as it is, because that string is parsed back), while this one gives the reader the number they would
+    say out loud. Trailing zeros go, the grouping separator stays, and the fraction is capped at two places — a
+    channel post reading "50000.000000 shares" is six decimals of noise in the one line the alert exists for.
+    """
+    micro = int(micro or 0)
+    whole, frac = divmod(abs(micro), 1_000_000)
+    grouped = "{:,}".format(whole)
+    frac2 = frac // 10_000                      # two decimal places, truncated: never rounded up into a lie
+    body = grouped if frac2 == 0 else "%s.%02d" % (grouped, frac2)
+    return ("-" if micro < 0 else "") + body
 
 
 def _tg_stop_all(uid: str, *, reason: str) -> dict:
@@ -8692,26 +8732,60 @@ async def telegram_webhook(request: Request,
 
 
 def _tg_plain_refusal(code: str, detail: str = "") -> str:
-    """Machine code → the sentence a person can act on. The table is the *product*: a rejection nobody understands
-    is a support ticket, and the kit's D4 asks for plain language precisely because the gate's codes are not.
+    """Machine code → the sentence a person can act on.
 
-    Anything not in the table falls back to the gate's own message, which is better than a generic apology — and the
-    fallback is deliberately visible in the card rather than swallowed.
+    The table is the *product*: a rejection nobody understands is a support ticket, and D4 asks for plain language
+    precisely because the gate's codes are not. So the keys here are not a style choice — they are the codes
+    `CODES` can actually return, and getting that wrong produces a table that looks like coverage and behaves like
+    a fallback.
+
+    **It was wrong.** The first version of this table was keyed on `RISK_*` names (`RISK_NOTIONAL`, `RISK_DAILY`,
+    `RISK_MIN_SIZE`, `RISK_STALE_BOOK`, `RISK_TICK`, `RISK_OPEN_ORDERS`, `RISK_PRICE_BAND`) — plausible names, none
+    of them in `CODES`. Every real refusal the venue's gate produces (`DAILY_CAP`, `OFF_TICK`, `BELOW_MIN_SIZE`,
+    `STALE_QUOTE`, `OVER_ORDER_CAP`, …) missed the table and fell through to the fallback sentence, which means the
+    phase's headline feature — "fill and rejection notifications in plain language" — was, in the product, one
+    sentence about a code. `tests/test_telegram_ops_api.py::TestRefusalVocabulary` now asserts every key is a
+    registered code, so the table cannot drift from the vocabulary again, and the same test compares this table's
+    keys with the Mini App's copy of it.
+
+    The fallback stays: a code we have not met yet must still say *something* true, and the code itself is better
+    than an apology.
     """
     table = {
+        # --- pauses and platform state ---------------------------------------------------------------
         "RISK_HALT": "Trading is paused right now — the platform's kill switch is engaged. Nothing you did caused it.",
-        "RISK_NOTIONAL": "That order is larger than the per-order limit on your account.",
-        "RISK_DAILY": "That would take you past your own daily limit. It resets at midnight UTC.",
-        "RISK_OPEN_ORDERS": "You have too many open orders. Cancel one or wait for a fill.",
-        "RISK_MIN_SIZE": "That is below the smallest order this market accepts.",
-        "RISK_STALE_BOOK": "The order book is stale, so I will not price an order from it. Try again in a moment.",
-        "RISK_TICK": "The price does not sit on this market's tick size.",
-        "RISK_PRICE_BAND": "That price is too far from the last trade for the venue to accept it.",
-        "NO_LIQUIDITY": "There is no offer on that side of the book at the moment.",
-        "MARKET_NOT_FOUND": "I could not find that market — it may have closed.",
+        "HALTED": ("Your account is stopped for the day: your own daily-loss limit was hit. It can be lifted from "
+                   "the app once you have read what happened."),
+        "RISK_UNAVAILABLE": ("The risk check could not run, so I will not send an order through it. Nothing was "
+                             "placed — try again in a moment."),
+        "SIGNER_UNAVAILABLE": "Signing is unavailable right now, so nothing can be placed. Try again shortly.",
+        # --- the market itself -----------------------------------------------------------------------
+        "MARKET_NOT_ACCEPTING": "That market is not taking orders at the moment. Nothing was placed.",
+        "NOT_FOUND": "I could not find that market — it may have closed.",
+        "NO_ORDER_BOOK": "That market has no order book, so there is nothing to trade against.",
+        "BAD_MARKET_META": ("I could not read that market's limits, and I will not guess them. Nothing was placed."),
+        "STALE_QUOTE": ("The order book is stale, so I will not price an order from it. Nothing was placed — try "
+                        "again in a moment."),
+        # --- the order, as asked ---------------------------------------------------------------------
+        "BAD_SIDE": "That side is not one this market trades.",
         "BAD_AMOUNT": "That amount cannot be turned into a whole number of shares at this price.",
+        "ZERO_SIZE": "That works out to no shares at all, so there was nothing to place.",
+        "BELOW_MIN_SIZE": "That is below the smallest order this market accepts.",
+        "OVER_ORDER_CAP": "That order is larger than the per-order limit on your account.",
+        "DAILY_CAP": "That would take you past your own daily limit. It resets at midnight UTC.",
+        "TOO_MANY_OPEN": "You have too many open orders. Cancel one or wait for a fill.",
+        "PRICE_FAR_FROM_MID": ("That price is too far from the market's current price for the venue to accept it. "
+                               "Nothing was placed."),
+        "OFF_TICK": "The price does not sit on this market's tick size.",
+        "UNKNOWN_TICK": ("I could not read that market's tick size, so I will not guess where a price belongs. "
+                         "Nothing was placed."),
+        # --- replay and identity ---------------------------------------------------------------------
         "IDEM_CONFLICT": "That tap was for a different order than the one I already have on file, so I stopped.",
         "IDEM_IN_PROGRESS": "That order is already on its way — I have not sent a second one.",
+        "IDEM_KEY_REQUIRED": "That order arrived without a way to tell a retry from a new order, so I did not send it.",
+        "RATE_LIMITED": "That is more requests than I can send for you at once. Give it a second.",
+        "UNAUTHENTICATED": "Sign in again from the bot and I will pick this up where it stopped.",
+        "REFUSED": "The venue refused the order. Nothing was placed.",
     }
     if code in table:
         return table[code]
@@ -8793,11 +8867,16 @@ def telegram_drain(request: Request, body: dict = Body(default={}),
     ok, deny = _admin(request)
     if not ok:
         return deny
+    kill = _tg_kill()
     bot = _tg_bot()
     at = _now_ms()
     rows = _db.execute("SELECT id, chat_id, chat_type, priority, method, text, keyboard_json, edit_message_id,"
                       " attempts, created_ms, due_ms FROM telegram_outbox WHERE state='queued' AND due_ms <= ?"
                       " ORDER BY priority, due_ms, id LIMIT 500", (at,)).fetchall()
+    # The kill switch filters the *plan*, not the queue: jobs stay queued (a paused switch must not lose a fill
+    # notification), and `telegram_broadcasts` still records what was composed. Scope decides what is held back.
+    if kill.engaged:
+        rows = [r for r in rows if not _tgb_ops.blocks(kill, "channel" if str(r[2]) == "channel" else "personal")]
     jobs = [_tgb_outbox.Job(job_id=int(r[0]), chat_id=str(r[1]), chat_type=str(r[2]), priority=int(r[3]),
                             text=str(r[5]), keyboard=json.loads(r[6]) if r[6] else None, edit_message_id=int(r[7]),
                             attempts=int(r[8]), created_ms=int(r[9]), due_ms=int(r[10])) for r in rows]
@@ -8830,7 +8909,9 @@ def telegram_drain(request: Request, body: dict = Body(default={}),
             failed.append({"id": job.job_id, "status": res.status, "retry": retry})
     _db.commit()
     return _stamped({"sent": sent, "failed": failed, "planned": len(chosen), "nextInMs": wait_ms,
-                     "botConfigured": bot is not None}, ttl_ms=0, stale_ms=0)
+                     "botConfigured": bot is not None,
+                     "held_by_kill": kill.engaged and {"engaged": True, "scope": kill.scope,
+                                                       "reason": kill.reason} or None}, ttl_ms=0, stale_ms=0)
 
 
 _tg_bucket_state = _tgb_outbox.Buckets()
@@ -8921,3 +9002,360 @@ def _tg_notify_fill(user_id: str, *, market: str, side: str, size_text: str, pri
     plan = _tgb_render.fill_card(market=market, side=side, size_text=size_text, price_text=price_text,
                                  fee_text=fee_text, position_text=position_text, price_age_text=price_age_text)
     return _tg_enqueue(chat_id=chat, chat_type="private", plan=plan, priority=_tgb_outbox.P_FILL, note="fill")
+
+
+# --------------------------------------------------------------------------------------- P12 · D5/D8: the channel and the switch
+#: The status sets for the three operator routes, declared beside them and compared against the contract by
+#: `check-openapi`, because a route that starts answering 409 without documenting it is a contract lie.
+TELEGRAM_KILL_RESPONSES = {200: {"description": "the new state, recorded"},
+                           403: {"description": "admin token missing or wrong"},
+                           422: {"description": "scope unknown, or a reason too short to explain it"},
+                           503: {"description": "no admin token configured on this pod"},
+                           500: {"description": "unexpected failure inside the service"}}
+TELEGRAM_BROADCAST_RESPONSES = {200: {"description": "what went out, or exactly what would have"},
+                                403: {"description": "admin token missing or wrong"},
+                                422: {"description": "malformed stage"},
+                                503: {"description": "no admin token configured on this pod"},
+                                500: {"description": "unexpected failure inside the service"}}
+TELEGRAM_OPS_RESPONSES = {200: {"description": "the operator's view"},
+                          403: {"description": "admin token missing or wrong"},
+                          503: {"description": "no admin token configured on this pod"},
+                          500: {"description": "unexpected failure inside the service"}}
+
+
+def _tg_kill() -> _tgb_ops.KillState:
+    """The live state: the newest row, or a disengaged default. Newest-row rather than an upserted single row,
+    because the *history* of a switch is the evidence of who decided what, and a single row would keep only the
+    last answer to a question people will ask about Tuesday."""
+    row = _db.execute("SELECT engaged, scope, reason, changed_by, at_ms FROM telegram_kill_state"
+                      " ORDER BY at_ms DESC, id DESC LIMIT 1").fetchone()
+    if row is None:
+        return _tgb_ops.KillState()
+    return _tgb_ops.KillState(engaged=bool(row[0]), scope=str(row[1]), reason=str(row[2]), by=str(row[3]),
+                              at_ms=int(row[4]))
+
+
+@app.post("/v1/telegram/kill", status_code=200, responses=TELEGRAM_KILL_RESPONSES,
+           openapi_extra=_body_schema(("engaged", "reason"), {"engaged": {"type": "boolean"},
+                                                              "scope": {"type": "string",
+                                                                        "enum": ["all", "channel", "personal"]},
+                                                              "reason": {"type": "string", "minLength": 8,
+                                                                         "maxLength": 400}}))
+def telegram_kill(request: Request, body: dict = Body(...),
+                  x_admin: str | None = Header(default=None, alias="X-Admin-Token")):
+    """Stop the bot sending, without stopping trading.
+
+    The separation is the point and it is worth restating where the code is: P06's switch halts *orders* and leaves
+    the outbox alone, because a user whose order was halted still has to be told what happened to their money; this
+    one pauses *delivery* and leaves trading alone. An operator reaching for the wrong one of these is how a
+    marketing pause becomes an incident.
+    """
+    ok, deny = _admin(request)
+    if not ok:
+        return deny
+    rid = request.state.request_id
+    bad = _check_body(body, ("engaged", "reason"), rid, allowed=("engaged", "scope", "reason"))
+    if bad is not None:
+        return bad
+    engaged = bool(body.get("engaged"))
+    scope = str(body.get("scope") or "all")
+    reason = str(body.get("reason") or "")
+    problems = _tgb_ops.kill_findings(engaged, scope=scope, reason=reason, by="admin")
+    if problems:
+        return err("VALIDATION", rid, where=problems)
+    _db.execute("INSERT INTO telegram_kill_state (engaged, scope, reason, changed_by, at_ms) VALUES (?,?,?,?,?)",
+                (1 if engaged else 0, scope, reason[:400], "admin", _now_ms()))
+    _db.commit()
+    state = _tg_kill()
+    SEC.auth_event("", "telegram_kill", at=_now_ms(),
+                   detail={"engaged": engaged, "scope": scope, "reason": reason[:120]})
+    return _stamped({"engaged": state.engaged, "scope": state.scope, "reason": state.reason, "by": state.by,
+                     "atMs": state.at_ms,
+                     "note": "delivery is paused; orders, fills and the ledger are untouched" if engaged
+                             else "delivery resumed"}, ttl_ms=0, stale_ms=0)
+
+
+def _tg_broadcast_verdicts(composed: list, *, history: list, at: int, record: bool) -> list:
+    """P07's gate and D5's cadence, per composed message — for the rehearsal *and* for the send.
+
+    The first version of the route asked the gate only on the way out, which made the dry run half a preview: an
+    operator read the text, liked it, and pressed send, and *then* learned the market had been held for liquidity.
+    A rehearsal that cannot fail is not a rehearsal, so the same function answers both paths and the only difference
+    is `record`: a dry run records nothing (it is not an event), while a send writes the verdict into
+    `broadcast_gates` whether it went out or not.
+
+    `wouldSend` is the conjunction the send path uses: cadence allows it *and* the gate says `broadcast`.
+    """
+    out = []
+    for item in composed:
+        event = item["event"]
+        allowed, why = _tgb_channel.cadence_ok(history, at_ms=at, kind=str(event.get("kind")))
+        gate = _tgb_abuse.broadcast_gate(market_id=str(event.get("market_id") or ""),
+                                         liquidity_micro=int(event.get("liquidity_micro") or 0),
+                                         age_ms=int(event.get("age_ms") or 0),
+                                         resolution_trusted=bool(event.get("resolution_trusted")),
+                                         audience=int(event.get("audience") or 0), at_ms=at,
+                                         broadcasts_last_hour=len(history))
+        if record:
+            SEC.record_broadcast(market_id=str(event.get("market_id") or ""), verdict=str(gate["verdict"]),
+                                reasons=list(gate["reasons"]), audience=int(gate["audience"]), at=at)
+        out.append({"slug": item["slug"], "kind": str(event.get("kind")), "verdict": str(gate["verdict"]),
+                    "reasons": list(gate["reasons"]), "holds": list(gate["holds"]),
+                    "refusals": list(gate["refusals"]), "recheckMs": int(gate["recheck_ms"]),
+                    "audience": int(gate["audience"]), "audienceSource": str(event.get("audience_source") or ""),
+                    "cadenceAllowed": bool(allowed), "cadenceWhy": str(why or ""),
+                    "wouldSend": bool(allowed and gate["verdict"] == "broadcast")})
+    return out
+
+
+@app.post("/v1/telegram/broadcast", status_code=200, responses=TELEGRAM_BROADCAST_RESPONSES,
+           openapi_extra=_body_schema((), {"dryRun": {"type": "boolean"},
+                                           "stage": {"type": "object", "additionalProperties": True}}))
+def telegram_broadcast(request: Request, body: dict = Body(default={}),
+                       x_admin: str | None = Header(default=None, alias="X-Admin-Token")):
+    """Compose the channel's next messages — and, unless `dryRun` is false, send none of them.
+
+    Dry run is the default in the *code*, not just in the docs: the failure mode of a broadcast tool is somebody
+    pressing the wrong button at speed, and a tool whose default is "send to thousands of phones" has chosen which
+    mistake it prefers. A real send re-checks P07's broadcast gate per market, honours the cadence caps from
+    `telegram_broadcasts` (which is why that table is append-only), and carries the stage it used.
+    """
+    ok, deny = _admin(request)
+    if not ok:
+        return deny
+    rid = request.state.request_id
+    stage = body.get("stage") or {}
+    candidates = _tg_broadcast_candidates()
+    chosen, held = _tgb_ops.staged(candidates, stage=stage)
+    composed = []
+    for c in chosen:
+        event = c["event"]
+        plan = _tgb_channel.compose(event, bot_username=_tg_bot_username(), price_text=c["price_text"],
+                                    age_text=c["age_text"])
+        composed.append({"slug": event.get("slug", ""), "plan": plan, "event": event})
+    history = [{"kind": str(r[0]), "fired_ms": int(r[1])} for r in _db.execute(
+        "SELECT kind, fired_ms FROM telegram_broadcasts WHERE fired_ms > ?", (_now_ms() - 3_600_000,)).fetchall()]
+    if body.get("dryRun", True):
+        # The rehearsal answers the *whole* question: the exact bytes, and whether the gate would let them out.
+        preview = _tgb_ops.dry_run(composed)
+        verdicts = _tg_broadcast_verdicts(composed, history=history, at=_now_ms(), record=False)
+        return _stamped({"dryRun": True, "staged": len(composed), "held": len(held), "preview": preview,
+                         "verdicts": verdicts, "wouldSend": sum(1 for v in verdicts if v["wouldSend"]),
+                         "reach": _tg_reachable_audience(),
+                         "note": "nothing was sent and no verdict was recorded: pass dryRun: false to send exactly "
+                                 "what is above, and read `verdicts` first — a staged rollout that ignores a `hold` "
+                                 "is a message to thousands of phones about a market with no liquidity"},
+                        ttl_ms=0, stale_ms=0)
+    kill = _tg_kill()
+    if _tgb_ops.blocks(kill, "channel"):
+        return err("RISK_HALT", rid, detail="the Telegram kill switch is engaged for channel delivery")
+    sent, skipped = [], []
+    verdicts = _tg_broadcast_verdicts(composed, history=history, at=_now_ms(), record=True)
+    for item, verdict in zip(composed, verdicts):
+        if not verdict["wouldSend"]:
+            skipped.append({"slug": item["slug"], "why": verdict["cadenceWhy"] or ",".join(verdict["reasons"])})
+            continue
+        job = _tg_enqueue(chat_id=str(item["event"].get("channel_id") or ""), chat_type="channel",
+                          plan=item["plan"], priority=_tgb_outbox.P_ALERT_CHANNEL, note="broadcast")
+        _db.execute("INSERT INTO telegram_broadcasts (channel, kind, market_id, message_id, quality, fired_ms)"
+                    " VALUES (?,?,?,?,?,?)",
+                    (str(item["event"].get("channel_id") or ""), str(item["event"].get("kind")),
+                     str(item["event"].get("market_id") or ""), int(job), int(item["event"].get("quality") or 0),
+                     _now_ms()))
+        _db.commit()
+        history.append({"kind": str(item["event"].get("kind")), "fired_ms": _now_ms()})
+        sent.append(item["slug"])
+    return _stamped({"dryRun": False, "sent": sent, "skipped": skipped, "jobs": len(sent), "held": len(held),
+                     "note": "queued for the drain, which is the only thing that talks to Telegram"},
+                    ttl_ms=0, stale_ms=0)
+
+
+def _tg_channel_id() -> str:
+    """The configured public channel (`@name` or a numeric id), or "".
+
+    Empty is a real answer and the code treats it as one: a broadcast with nowhere to go is refused by the gate's
+    `no_audience` rather than sent to a chat id nobody configured.
+    """
+    return (os.environ.get("PGM_TELEGRAM_CHANNEL") or "").strip()
+
+
+def _tg_reachable_audience() -> dict:
+    """How many people we can actually reach, and where the number came from.
+
+    The one honest difficulty of this whole feature: **we do not know the channel's subscriber count.** Telegram knows
+    it (`getChatMemberCount`), the webhook does not receive it, and this service will not make a live Bot API call
+    from a request path (rule 2: no user request spends a shared budget). So the number recorded on a broadcast is the
+    reach *we* can point at, with its provenance attached, and the operator reads both:
+
+      * `chats30d` — distinct chats that have talked to this bot in the last 30 days, straight out of
+        `telegram_commands`. This is a floor, not a census, and it is the number that moves when onboarding works.
+      * `configured` — whether a public channel exists at all; a channel post is one send to an unknown N.
+
+    The gate only refuses on `<= 0`, which is the question it can actually answer: is there anyone at all. A first
+    release with 30 days of no traffic and no channel therefore *refuses to broadcast*, which is the correct and
+    quietest possible failure.
+    """
+    at = _now_ms()
+    row = _db.execute("SELECT COUNT(DISTINCT chat_id) FROM telegram_commands WHERE at_ms > ?",
+                      (at - 30 * 24 * 3_600_000,)).fetchone()
+    chats = int(row[0] or 0) if row else 0
+    channel = _tg_channel_id()
+    return {"chats30d": chats, "channel_configured": bool(channel), "channel_id": channel,
+            "audience": chats, "source": "distinct chats active in telegram_commands over 30d; channel reach uncounted"}
+
+
+def _tg_broadcast_candidates() -> list:
+    """The events worth considering right now, from the tape and the book — before any gate has judged them.
+
+    Deliberately generous (the filters are `channel.qualifies`, then P07's gate, then the cadence caps): a candidate
+    list that pre-filters is a list where a bug in the filter is invisible. Each row carries the *text* the message
+    will need, formatted here so the composer stays a formatting function.
+
+    **What the first version of this got wrong, because it is the kind of mistake that hides behind a passing test.**
+    It read `tape_trades` — the P04 fixture table — and named columns that table does not have (`ts_ms`, `size_micro`,
+    `notional_micro`, `outcome`), and it passed `liquidity_micro: 0, age_ms: 3600000, audience: 1,
+    resolution_trusted: True` as literals. The unit tests never touched the route, so nothing failed. In production
+    the query would have raised on the first call — a dry run included, which is the one mode an operator trusts to
+    be harmless — and had the columns existed, the literals would have fed the quality gate canned answers: a market
+    with $12 of liquidity and no resolution source would have been broadcast as if it had a million dollars behind it
+    and a trustworthy settlement. **The gate is only as honest as its inputs**, so the inputs now come from the
+    tables: liquidity from `market_stats`, market age from `markets.first_seen_ms`, the resolution source from
+    `market_meta`, and the audience from `_tg_reachable_audience()`.
+
+    The durable fill log is `tape_fills` (P05), not `tape_trades`: it is the deduplicated stream the rollups, the
+    whale percentile and the leaderboard already read, and it carries `usd_notional_micro` so the size test is the
+    venue's own arithmetic rather than ours.
+    """
+    at = _now_ms()
+    aud = _tg_reachable_audience()
+    out = []
+    fills = _db.execute(
+        "SELECT m.slug, m.question, m.id, f.outcome, f.side, f.price_micro, f.size_micro, f.usd_notional_micro,"
+        " f.ts_ms, COALESCE(mm.category, ''), COALESCE(ms.liquidity_micro, 0), COALESCE(m.first_seen_ms, 0),"
+        " COALESCE(mm.resolution_source, '')"
+        " FROM tape_fills f"
+        " JOIN markets m ON m.condition_id = f.condition_id"
+        " LEFT JOIN market_meta mm ON mm.market_id = m.id"
+        " LEFT JOIN market_stats ms ON ms.condition_id = f.condition_id"
+        # the venue clock for ordering (`tape_fills.ts_ms` is the venue's, per the migration's own note) and our
+        # clock for freshness — mixing them is how a four-hour-old trade reads as new.
+        " WHERE f.ingest_ms > ? AND f.usd_notional_micro >= ?"
+        " ORDER BY f.usd_notional_micro DESC LIMIT 5",
+        (at - 30 * 60_000, _tgb_channel.LARGE_FILL_MICRO)).fetchall()
+    age_floor = _tgb_abuse.MIN_MARKET_AGE_MS
+    for slug, question, mid, outcome, side, price, size, notional, ts, category, liquidity, first_seen, source in fills:
+        trusted = bool(str(source or "").strip())
+        out.append({
+            "kind": "large_fill", "slug": str(slug), "question": str(question), "market_id": str(mid),
+            "category": str(category), "notional_micro": int(notional),
+            "price_text": _tg_cents(int(price)), "age_text": _tg_ago(at - int(ts)),
+            "side": "yes" if str(outcome or "").lower().startswith("y") else "no",
+            # Shares, from `size_micro`, formatted by the same helper the rest of the bot uses: the alert says "120,000
+            # shares", and the dollar figure comes from `notional_micro`, which is the venue's number not ours.
+            "size_text": "%s shares" % _tg_shares(int(size or 0)),
+            "notional_text": "%s USDC" % _tg_shares(int(notional or 0)),
+            "event": {"kind": "large_fill", "slug": str(slug), "question": str(question),
+                      "category": str(category), "market_id": str(mid),
+                      "notional_micro": int(notional), "side": str(side),
+                      "price_text": _tg_cents(int(price)), "age_text": _tg_ago(at - int(ts)),
+                      "size_text": "%s shares" % _tg_shares(int(size or 0)),
+                      # --- what the gate reads, from the tables and not from a literal ---
+                      "liquidity_micro": int(liquidity),
+                      "age_ms": max(0, at - int(first_seen or 0)),
+                      "resolution_trusted": trusted,
+                      "audience": int(aud["audience"]),
+                      "channel_id": str(aud["channel_id"]),
+                      "quality": 0,
+                      "audience_source": str(aud["source"]),
+                      "age_floor_ms": age_floor},
+        })
+    return out
+
+
+# Derived from CODES exactly as ORDER_RESPONSES is, so the statuses this route can answer cannot drift from the
+# vocabulary it answers in: a code added to CODES with a new status is a status this table gains for free.
+TELEGRAM_ORDER_RESPONSES = {
+    202: {"description": "queued for the executor, through the same risk gate as the web"},
+    **{status: {"description": msg} for msg, status, _retry in CODES.values()},
+}
+
+
+@app.post("/v1/telegram/order", status_code=202, responses=TELEGRAM_ORDER_RESPONSES,
+           openapi_extra=_body_schema(("slug", "side", "amountUsdc"), {
+               "slug": {"type": "string", "minLength": 3, "maxLength": 128},
+               "side": {"type": "string", "enum": ["yes", "no"]},
+               "amountUsdc": {"type": "string", "pattern": "^[0-9]{1,9}(\\.[0-9]{1,2})?$"}}))
+def telegram_order(request: Request, body: dict = Body(...),
+                   idempotency_key: str | None = Header(default=None, alias="Idempotency-Key")):
+    """Place an order from the Mini App — the *same* path the bot's confirm tap takes.
+
+    This route exists so the Mini App does not have to know a CLOB token id or a price: it sends the market it is
+    looking at, the side and an amount, and the server resolves the token, re-reads the best ask **at this instant**
+    and calls the one order path (`_order_core`: validation, risk gate, idempotency store, ledger row). A client that
+    sent a price would be sending yesterday's price; a client that sent a token id would be a client that could send
+    the wrong one.
+
+    Authenticated as a *session* (the bearer from `POST /v1/telegram/session`), not as a webhook: a webview user is a
+    user, and their identity is the account the Telegram payload resolved to — never a `chat_id` in the body.
+    """
+    rid = request.state.request_id
+    uid, _srow, deny = _principal(request)
+    if deny is not None:
+        return deny
+    if not uid:
+        return err("UNAUTHENTICATED", rid)
+    bad = _check_body(body, ("slug", "side", "amountUsdc"), rid, allowed=("slug", "side", "amountUsdc"))
+    if bad is not None:
+        return bad
+    shaped = _idem_shape(idempotency_key)
+    if shaped is not None:
+        return shaped
+    side = str(body["side"]).lower()
+    res = _tg_order_from_card(str(uid), {"slug": str(body["slug"]), "side": side,
+                                         "amount": str(body["amountUsdc"])}, str(idempotency_key or ""))
+    if not res.get("ok"):
+        # One code, one status, straight out of CODES — the same table every other route answers from, so the Mini
+        # App's error handling is the web app's error handling. The first version of this branch mapped codes to
+        # hand-chosen statuses and wrapped `err()` in a second `JSONResponse`, which produced a 500 whose body was a
+        # *serialised response object*: the route was never exercised, and a route that is never exercised is a route
+        # whose bug ships.
+        code = str(res.get("code") or "")
+        return err(code if code in CODES else "INTERNAL", rid, detail=str(res.get("detail") or "")[:160])
+    return JSONResponse(_stamped({"cacheKey": None, "intentId": res["intent_id"], "state": "queued",
+                                  "sharesMicro": str(res["shares_micro"]), "priceMicro": str(res["price_micro"]),
+                                  "notionalMicro": str(res["notional_micro"]),
+                                  "note": "queued for executor; the fill will arrive as a message in the chat "
+                                          "and a notification here"}, ttl_ms=0, stale_ms=0), status_code=202)
+
+
+@app.get("/v1/telegram/ops", responses=TELEGRAM_OPS_RESPONSES)
+def telegram_ops(request: Request, x_admin: str | None = Header(default=None, alias="X-Admin-Token")):
+    """The operator's one page: switch state, queue depth, what the channel last said, and the recovery plan.
+
+    Served from the same package the runbook reads, so "what do we do if the bot is restricted" has one answer that
+    a test can assert rather than two that drift.
+    """
+    ok, deny = _admin(request)
+    if not ok:
+        return deny
+    kill = _tg_kill()
+    depth = _db.execute("SELECT COUNT(*) FROM telegram_outbox WHERE state='queued'").fetchone()
+    stuck = _db.execute("SELECT COUNT(*) FROM telegram_updates WHERE state='claimed' AND first_ms < ?",
+                        (_now_ms() - 300_000,)).fetchone()
+    last = _db.execute("SELECT kind, market_id, fired_ms FROM telegram_broadcasts ORDER BY fired_ms DESC LIMIT 5"
+                       ).fetchall()
+    state = {"kill": kill, "queue_depth": int(depth[0] or 0) if depth else 0,
+             "stuck_claims": int(stuck[0] or 0) if stuck else 0,
+             "bot_configured": _tg_bot() is not None,
+             "env": (os.environ.get("PGM_ENV") or "dev").strip()}
+    return _stamped({"cacheKey": "telegram:ops", "kill": {"engaged": kill.engaged, "scope": kill.scope,
+                                                          "reason": kill.reason, "by": kill.by,
+                                                          "atMs": kill.at_ms},
+                     "queueDepth": state["queue_depth"], "stuckClaims": state["stuck_claims"],
+                     "botConfigured": state["bot_configured"],
+                     "lastBroadcasts": [{"kind": str(r[0]), "marketId": str(r[1]), "firedMs": int(r[2])}
+                                        for r in last],
+                     "username": _tgb_ops.username_decision(),
+                     "recovery": list(_tgb_ops.recovery_steps()),
+                     "findings": _tgb_ops.ops_findings(state)},
+                    ttl_ms=0, stale_ms=0)
