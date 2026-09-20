@@ -7,9 +7,9 @@ Chromium download fails its host-requirements check), so the pixel half of the 6
 this file does not claim otherwise.
 
 frame budget for context: 16.7 ms at 60fps
-  mean work per second of load   1.633 ms  (budget 16.7 ms — one frame)
-  worst second                   3.078 ms
-  worst single batch release     0.110 ms  (must fit in one frame)
+  mean work per second of load   1.938 ms  (budget 16.7 ms — one frame)
+  worst second                   3.663 ms
+  worst single batch release     1.367 ms  (must fit in one frame)
   batch releases                 59 over 10 s = 5.9/s at 250 ms flush
   rows released per release      <= 400 in the buffer
   DOM rows for a 700px viewport  33 of 400 buffered (overscan 8, row 44px)

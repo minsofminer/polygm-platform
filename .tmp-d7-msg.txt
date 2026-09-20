@@ -1,0 +1,42 @@
+P11 · D7: the anti-gaming dashboard — a detector proposes, a human records, the board obeys
+
+D7 is the last deliverable of the phase and deliberately the smallest: one internal screen, two
+routes, four detectors, no new table. `leaderboard_exclusions` has been append-only since D1 and
+the boards have replayed its newest row per (wallet, board) since D2, so D7's job was to produce
+findings worth a human's attention and to turn a click into one more row.
+
+The engine (`packages/polygm_core/gaming/{rules,detect}.py`) is pure: four detectors returning
+findings that carry the shape measured, the numbers behind it, a `suggested` action (a word, never
+an act) and — as *data the API serves as a pair* — the rule and the innocent reading of the same
+shape, which is the product's "rule plus disclaimer" constraint made structural. Fast climbers:
+25+ places in seven days and either 3x the board's own median climb or its 99th percentile (the
+percentile alone was a dead rule — in a 41-wallet population the largest climb sits at 9756 bps,
+so a 9900-bps bar can never be reached). Correlated clusters: 8+ co-timed fills on the same token
+and side within 60s at 60% of the smaller tape, unioned transitively — and the bug the gate's own
+tape found, an overlap of 100.34% from counting the larger wallet's fills against the smaller
+wallet's count, is now impossible by construction. Synthetic chains: a referrer whose referees
+share a funding or device digest with EACH OTHER, which is invisible to D5's pairwise self-referral
+check. Builder anomalies: $25+ of attributed volume with a burst across five markets in ten minutes
+or half the orders never observing a fee, volume read from `builder_attribution_terms` rather than
+from the fee.
+
+The two routes (`GET /v1/admin/gaming`, `POST /v1/admin/gaming/decide`) are ADMIN, contracted, and
+the only P11 surface that returns a raw wallet at all — paired with the pseudonym, because the
+exclusion table is keyed by the wallet while every sentence written afterwards quotes the `w_…`.
+A decision is one append-only row with the action, the reason, the actor and the finding kind; the
+audit row carries the pseudonym. The screen (`/admin/gaming`, its own `admin.*` i18n family) shows
+both readings side by side, prints the evidence, and refuses to post a reason that cannot answer an
+appeal.
+
+Two more defects, both found by writing the test first: the route was UNSTAMPED (the client refuses
+a read without asOf/staleAfter, so the screen said "the tape was not read" on a 200 — now stamped
+with ttl_ms=0 and asOf from the newest snapshot the rule read), and the cluster finding's `size`
+field tripped the contract's own "prices and sizes are strings" rule (renamed walletCount /
+refereeCount rather than exempted). P08's c5 and the route-notes test fired on the new web code and
+were both right: four unit literals in the new CSS block, and two notes over the 160-character
+limit.
+
+Verified on this tree: backend 1055 tests OK (105.5s, no skips), check-openapi 549/0 (71 paths,
+112 schemas), P11 gate 30/30 with 20/20 scanners canaried, P08 16/16, P09 7/7, P10 15/15 (all four
+re-recorded), web 435 tests in 50 files, tsc clean, i18n ok across four route families, measure
+passing with the money module absent from the landing document, measure:tape inside the frame.

@@ -1706,6 +1706,53 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/admin/gaming": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The anti-gaming dashboard — fast climbers, correlated clusters, synthetic chains, builder anomalies
+         * @description The internal screen, and the only P11 read that returns a raw wallet at all: a decision is keyed by the
+         *     wallet the tape names, while every sentence written afterwards quotes the `w_…` a public page would show.
+         *     So each finding carries BOTH, behind an admin token. Every list is produced by a rule that is served with
+         *     it, paired with the innocent reading of the same shape — a finding is a question a human answers, and the
+         *     two texts are what make it answerable.
+         */
+        get: operations["getAdminGaming"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/gaming/decide": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Exclude a wallet from a board, flag it for review, or put it back (idempotent per key)
+         * @description One click, one append-only `leaderboard_exclusions` row with an actor, a reason and the kind of finding
+         *     that prompted it. `exclude` removes the wallet from the named board (`all` for every board); `flag`
+         *     records the question and changes no ranking; `include`/`clear` reverse either. The boards replay the
+         *     newest row per (wallet, board) at read time, so a wrong click costs one more click, not a record.
+         */
+        post: operations["postAdminGamingDecide"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -2535,6 +2582,103 @@ export interface components {
             /** @description true when this replaced an earlier block on the same subject */
             extended: boolean;
             note: string;
+        };
+        GamingRule: {
+            /** @description what was measured, at what threshold */
+            rule: string;
+            /** @description the other reading of the same shape: the product rule that every label carries a rule AND a disclaimer, made structural */
+            innocent: string;
+        };
+        GamingFinding: {
+            /** @enum {string} */
+            kind: "fast_climb" | "correlated_cluster" | "synthetic_chain" | "builder_anomaly";
+            severity: number;
+            /**
+             * @description a suggestion; this route never acts
+             * @enum {string}
+             */
+            suggested: "exclude" | "flag";
+            rule: string;
+            /** @description the numbers the finding was produced from */
+            evidence: string[];
+            /** @description the newest human decision about this wallet, when there is one: the screen shows it as reviewed rather than asking twice */
+            decided?: Record<string, never>;
+        };
+        GamingDashboard: {
+            atMs: number;
+            limit: number;
+            /** @description one entry per finding kind, each carrying the rule and its innocent reading */
+            rules: {
+                [key: string]: components["schemas"]["GamingRule"];
+            };
+            climbers: (components["schemas"]["GamingFinding"] & {
+                /** @description internal: the id the exclusion table is keyed by */
+                wallet?: string;
+                anon?: string;
+                board?: string;
+                fromRank?: number;
+                toRank?: number;
+                climb?: number;
+                settled?: number;
+                percentileBps?: number;
+                medianClimb?: number;
+            })[];
+            clusters: (components["schemas"]["GamingFinding"] & {
+                wallets?: string[];
+                anonWallets?: string[];
+                walletCount?: number;
+                pairs?: number;
+                worstOverlapBps?: number;
+                coTimed?: number;
+                windowMs?: number;
+            })[];
+            chains: (components["schemas"]["GamingFinding"] & {
+                referrer?: string;
+                anonReferrer?: string;
+                referees?: string[];
+                anonReferees?: string[];
+                refereeCount?: number;
+                edges?: Record<string, never>[];
+                fastReferees?: string[];
+                floorReferees?: string[];
+                /** @description a COUNT of collisions; the digests themselves are never served */
+                sharedFunding?: number;
+                sharedDevice?: number;
+                accrualMicro?: number;
+            })[];
+            builder: (components["schemas"]["GamingFinding"] & {
+                wallet?: string;
+                anon?: string;
+                userId?: string;
+                orders?: number;
+                markets?: number;
+                burstMarkets?: number;
+                volumeMicro?: number;
+                unpaidBps?: number;
+            })[];
+            counts: {
+                climbers: number;
+                clusters: number;
+                chains: number;
+                builder: number;
+                reviewed: number;
+            };
+            evidence: {
+                historyRows: number;
+                decisions: number;
+                newestSnapshotMs: number;
+                fills: number;
+            };
+        };
+        GamingDecision: {
+            wallet: string;
+            anon: string;
+            /** @enum {string} */
+            action: "exclude" | "flag" | "include" | "clear";
+            /** @description a board id, or 'all' */
+            board: string;
+            finding: string;
+            atMs: number;
         };
         PublicBlockList: {
             blocks: {
@@ -6976,6 +7120,87 @@ export interface operations {
                 };
             };
             403: components["responses"]["Denied"];
+            422: components["responses"]["Validation"];
+            500: components["responses"]["Internal"];
+            503: components["responses"]["Denied"];
+        };
+    };
+    getAdminGaming: {
+        parameters: {
+            query?: {
+                /** @description rows per list; the four lists are capped independently */
+                limit?: number;
+            };
+            header?: {
+                /** @description absent or empty means 503 SIGNER_UNAVAILABLE rather than a 401 */
+                "X-Admin-Token"?: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description the four lists, the rules behind them, and how old the evidence is */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Stamped"] & components["schemas"]["GamingDashboard"];
+                };
+            };
+            403: components["responses"]["Denied"];
+            422: components["responses"]["Validation"];
+            500: components["responses"]["Internal"];
+            503: components["responses"]["Denied"];
+        };
+    };
+    postAdminGamingDecide: {
+        parameters: {
+            query?: never;
+            header?: {
+                /**
+                 * @description 8-128 chars of [A-Za-z0-9_-]. Required on every mutating endpoint; the 400 for its absence is part
+                 *     of the contract so a client cannot "just try without it" once and conclude it is optional.
+                 */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                /** @description absent or empty means 503 SIGNER_UNAVAILABLE rather than a 401 */
+                "X-Admin-Token"?: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @description the id the tape and the exclusion table use */
+                    wallet: string;
+                    /** @enum {string} */
+                    action: "exclude" | "flag" | "include" | "clear";
+                    reason: string;
+                    /** @default all */
+                    board?: string;
+                    /**
+                     * @default
+                     * @enum {string}
+                     */
+                    finding?: "fast_climb" | "correlated_cluster" | "synthetic_chain" | "builder_anomaly" | "";
+                };
+            };
+        };
+        responses: {
+            /** @description the decision as recorded, including the pseudonym it will be quoted by */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Stamped"] & components["schemas"]["GamingDecision"];
+                };
+            };
+            400: components["responses"]["Validation"];
+            403: components["responses"]["Denied"];
+            409: components["responses"]["Conflict"];
             422: components["responses"]["Validation"];
             500: components["responses"]["Internal"];
             503: components["responses"]["Denied"];

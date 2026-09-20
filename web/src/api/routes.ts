@@ -419,6 +419,20 @@ export const ROUTES = {
     owner: "P08-L11",
   },
   invoices: { method: "GET", path: "/v1/billing/invoices", built: false, whileMissing: "refuses", owner: "P08-L12" },
+  adminGaming: {
+    method: "GET",
+    path: "/v1/admin/gaming",
+    built: true,
+    whileMissing: "refuses",
+    owner: "P11",
+  },
+  adminGamingDecide: {
+    method: "POST",
+    path: "/v1/admin/gaming/decide",
+    built: true,
+    whileMissing: "refuses",
+    owner: "P11",
+  },
   referrals: { method: "GET", path: "/v1/billing/referrals", built: false, whileMissing: "refuses", owner: "P08-L12" },
   apiKeys: { method: "GET", path: "/v1/account/api-keys", built: false, whileMissing: "refuses", owner: "P08-L13" },
   notificationPrefs: {

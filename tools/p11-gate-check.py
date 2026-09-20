@@ -2079,6 +2079,267 @@ def c27_append_only_has_both_halves(p: Probe) -> tuple[str, bool, str]:
             not findings, "; ".join(findings[:6]))
 
 
+# --------------------------------------------------------------------------------- D7 · the anti-gaming dashboard
+GAMING_KINDS = ("fast_climb", "correlated_cluster", "synthetic_chain", "builder_anomaly")
+GAMING_ACTIONS = ("exclude", "flag", "include", "clear")
+
+
+def gaming_rule_findings(rules: dict) -> list:
+    """Every finding kind served with BOTH of its readings, at a length that can explain something.
+
+    The product rule is "every classification label carries a visible rule and a disclaimer", and this is the one
+    screen where violating it costs somebody their standing: a finding that arrives with only the damning reading
+    is a finding that gets acted on before it is read. So the two texts are *data the API serves as a pair* — a
+    consumer cannot render one without having the other in hand — and this is the check that says so.
+    """
+    out = []
+    for kind in GAMING_KINDS:
+        entry = (rules or {}).get(kind)
+        if not isinstance(entry, dict):
+            out.append("%s has no rule entry at all" % kind)
+            continue
+        if set(entry) != {"rule", "innocent"}:
+            out.append("%s serves %s, expected exactly rule+innocent" % (kind, sorted(entry)))
+            continue
+        if len(str(entry["rule"])) < 200:
+            out.append("%s's rule is too short to state what was measured" % kind)
+        if len(str(entry["innocent"])) < 100:
+            out.append("%s has no workable reading of the innocent case" % kind)
+        if str(entry["rule"]) == str(entry["innocent"]):
+            out.append("%s's two readings are the same text" % kind)
+    extra = sorted(set(rules or {}) - set(GAMING_KINDS))
+    if extra:
+        out.append("the dashboard serves rules for unknown kinds: %s" % extra)
+    return out
+
+
+def decision_journal_findings(rows: list) -> list:
+    """The invariants of the append-only decision journal, checked on rows a live run just produced.
+
+    Three ways an operator's click stops being a record:
+
+    * **a repeated idempotency key** — a retried click that wrote twice reads, to every consumer that replays the
+      NEWEST row, as a later decision than the first one;
+    * **a reason too short to answer an appeal** (or no actor at all) — "suspicious" is not a record, and an
+      anonymous removal is worse than one that names its author;
+    * **an action outside the vocabulary** — the boards only act on `exclude` and `include` (with `flag` as a
+      question), so a typo'd action is a click that silently does nothing.
+    """
+    out = []
+    seen = {}
+    for row in rows or []:
+        key = str(row.get("idempotencyKey") or "")
+        if key:
+            seen[key] = seen.get(key, 0) + 1
+        if str(row.get("action") or "") not in GAMING_ACTIONS:
+            out.append("a decision with action %r is outside the vocabulary" % row.get("action"))
+        if len(str(row.get("reason") or "").strip()) < 8:
+            out.append("a decision was recorded without a usable reason")
+        if not str(row.get("actor") or "").strip():
+            out.append("a decision was recorded with no actor")
+        if str(row.get("wallet") or "") and not str(row.get("anon") or ""):
+            out.append("a decision row names a wallet and no pseudonym to quote afterwards")
+    for key in sorted(seen):
+        if seen[key] > 1:
+            out.append("idempotency key %s was written %d times" % (key, seen[key]))
+    return out
+
+
+def gaming_detector_findings() -> list:
+    """The four detectors, fired on a planted farm apiece and left quiet on an honest population.
+
+    A detector that only fires on the specimen it was written for is a stopped clock; a detector that fires on an
+    honest market maker is one whose output an operator learns to skip. Both directions are checked here, on the
+    real package, because the API tests prove the wiring and this proves the arithmetic.
+    """
+    sys.path.insert(0, str(ROOT / "packages"))
+    from polygm_core.gaming import detect as d, RULES, INNOCENT
+    out = gaming_rule_findings({k: {"rule": RULES[k], "innocent": INNOCENT[k]} for k in RULES})
+    day = d.DAY_MS
+    now = 1_700_000_000_000
+
+    def snap(wallet, rank, settled, ms):
+        return {"wallet": wallet, "board": "risk_adjusted", "windowKey": "30d", "rank": rank, "settled": settled,
+                "scoreBps": 100, "drawdownMicro": 0, "computedMs": ms}
+
+    history = []
+    for i in range(12):
+        history += [snap("w_ord%02d" % i, 300 + i, 60, now - 7 * day + 60_000),
+                    snap("w_ord%02d" % i, 298 + i, 61, now)]
+    history += [snap("w_thin", 900, 9, now - 7 * day + 60_000), snap("w_thin", 30, 9, now)]
+    climbs = d.climb_findings(history=history, at_ms=now)
+    if [f["wallet"] for f in climbs] != ["w_thin"]:
+        out.append("the climb rule did not fire on a thin record climbing past its population")
+
+    def fill(wallet, ts, token="tok1", side="buy"):
+        return {"wallet": wallet, "tsMs": ts, "tokenId": token, "side": side, "conditionId": "c",
+                "priceMicro": 1, "sizeMicro": 1, "notionalMicro": 1, "winner": None, "category": "", "marketId": "m"}
+
+    mirrored = ([fill("w_a", now + i * 60_000) for i in range(10)]
+                + [fill("w_b", now + i * 60_000 + 5_000) for i in range(10)])
+    clusters = d.cluster_findings(fills=mirrored, at_ms=now + 700_000)
+    if not clusters or clusters[0]["wallets"] != ["w_a", "w_b"]:
+        out.append("the cluster rule missed two mirrored wallets")
+    for c in clusters:
+        if int(c.get("worstOverlapBps") or 0) > 10_000:
+            out.append("an overlap of %d bps is not a ratio" % c["worstOverlapBps"])
+    thin = ([fill("w_x", now + i * 60_000) for i in range(3)]
+            + [fill("w_y", now + i * 60_000 + 1_000) for i in range(3)])
+    if d.cluster_findings(fills=thin, at_ms=now + 300_000):
+        out.append("the cluster rule fired on a tape too thin to be evidence")
+
+    refs = [{"referrer": "u-ref", "referee": "u-r%d" % i, "signedUpMs": 1_000, "qualifyMs": 2_000 + i,
+             "notionalMicro": 25_000_000, "fundingDigest": ("f_same" if i < 2 else "f_other"), "deviceDigest": "",
+             "accrualMicro": 0} for i in range(1, 4)]
+    chains = d.chain_findings(referrals=refs, at_ms=10_000)
+    if not chains or chains[0]["sharedFunding"] != 1:
+        out.append("the chain rule missed a second wallet funded by the first")
+    if "f_same" in repr(chains):
+        out.append("a funding digest was printed into a finding")
+
+    attrs = [{"wallet": "w_script", "userId": "u1", "orderId": "o%d" % i, "marketId": "m%d" % i,
+              "notionalMicro": 10_000_000, "feeMicroExpected": 1, "feeMicroObserved": 0,
+              "placedMs": now + i * 30_000} for i in range(6)]
+    if not d.builder_findings(attributions=attrs, at_ms=now + 300_000):
+        out.append("the builder rule missed a burst of attributed volume")
+    honest = [{"wallet": "w_real", "userId": "u2", "orderId": "o", "marketId": "m",
+               "notionalMicro": 10_000_000, "feeMicroExpected": 1, "feeMicroObserved": 1,
+               "placedMs": now + i * 86_400_000} for i in range(6)]
+    if d.builder_findings(attributions=honest, at_ms=now + 10 * 86_400_000):
+        out.append("the builder rule fired on an ordinary trader using our code")
+
+    clean = d.dashboard(history=[snap("w_a", 10, 90, now - day), snap("w_a", 10, 91, now)], fills=[],
+                        referrals=[], attributions=[], at_ms=now)
+    if any(clean[k] for k in ("climbers", "clusters", "chains", "builder")):
+        out.append("a clean tape produced findings: %s" % clean["counts"])
+    return out
+
+
+def gaming_api_findings(app_mod, client, token: str) -> list:
+    """What the served dashboard says, checked on the payload a real request returns."""
+    out = []
+    r = client.get("/v1/admin/gaming", headers={"X-Admin-Token": token})
+    if r.status_code != 200:
+        return ["the dashboard answered %d for an operator token" % r.status_code]
+    try:
+        body = r.json()
+    except ValueError:
+        return ["the dashboard answered 200 with a body that is not JSON"]
+    out += gaming_rule_findings(body.get("rules") or {})
+    for flag in ("asOf", "staleAfter", "cache"):
+        if flag not in body:
+            out.append("the payload is missing %s, so the client refuses it as an unstamped read" % flag)
+    findings = [f for key in ("climbers", "clusters", "chains", "builder") for f in body.get(key) or []]
+    for f in findings:
+        if not f.get("evidence"):
+            out.append("a %s finding arrived with no evidence" % f.get("kind"))
+        if str(f.get("suggested") or "") not in GAMING_ACTIONS:
+            out.append("a finding suggests %r" % f.get("suggested"))
+        pair = (body.get("rules") or {}).get(str(f.get("kind")))
+        if not pair or f.get("rule") != pair.get("rule"):
+            out.append("a finding's rule is not the one the dashboard serves for its kind")
+        if not any(f.get(k) for k in ("wallet", "wallets", "referrer")):
+            out.append("a finding names no subject at all")
+        anon = f.get("anon") or f.get("anonReferrer") or (f.get("anonWallets") or [""])[0]
+        if not str(anon).startswith("w_"):
+            out.append("a finding carries no pseudonym to quote afterwards")
+    blob = json.dumps(body)
+    allowed = set()
+    for f in findings:
+        allowed |= {str(w) for w in (f.get("wallets") or [])}
+        allowed |= {str(f.get("wallet") or ""), str(f.get("referrer") or "")}
+    for m in re.finditer(r"0x[0-9a-fA-F]{6,}", blob):
+        if m.group(0) not in allowed:
+            out.append("an address-shaped string nobody acted on is in the payload: %s" % m.group(0))
+    if client.get("/v1/admin/gaming", headers={"X-Admin-Token": "not-the-token"}).status_code != 403:
+        out.append("a wrong operator token was not refused")
+    if client.get("/v1/admin/gaming").status_code != 503:
+        out.append("a missing operator token did not answer SIGNER_UNAVAILABLE")
+    return out
+
+
+def c29_the_rules_travel_with_their_other_reading(p: Probe) -> tuple:
+    """D7: four detectors, each serving its rule AND the innocent reading, wired through to the served dashboard."""
+    findings = gaming_detector_findings()
+    os.environ["PGM_ADMIN_TOKEN"] = "adm_" + "g" * 44
+    findings += gaming_api_findings(p.app(), p.client(), "adm_" + "g" * 44)
+    return ("4 detectors fire on a planted farm and stay quiet on an honest tape, each serving its rule and the "
+            "innocent reading through the API", not findings, "; ".join(findings[:6]))
+
+
+def c30_one_click_is_one_row_and_the_boards_obey(p: Probe) -> tuple:
+    """D7: exclude/flag/include through the served route, the replay rule, and the public board obeying."""
+    import seed_leaderboard
+    out = []
+    token = "adm_" + "g" * 44
+    os.environ["PGM_ADMIN_TOKEN"] = token
+    client = p.client()
+    wallet = seed_leaderboard.wallet_for(3)
+    anon = p.app()._anon(wallet)
+
+    def click(action, reason, key):
+        body = {"wallet": wallet, "action": action, "reason": reason}
+        return client.post("/v1/admin/gaming/decide", json=body,
+                           headers={"X-Admin-Token": token, "Idempotency-Key": key})
+
+    def board_has() -> bool:
+        status, body = p.get("/v1/leaderboard", board="risk_adjusted", limit=200)
+        return status == 200 and any(row.get("anon") == anon for row in body.get("rows") or [])
+
+    if not board_has():
+        return ("one click is one append-only row and the public board obeys it", False,
+                "the seeded board does not contain the wallet the gate is about to exclude")
+    if click("flag", "the gate: climbing on a thin record", "g11-d7-flag").status_code != 200:
+        out.append("a flag was refused")
+    if not board_has():
+        out.append("a flag removed a wallet from a board; a flag is a question, not a removal")
+    clicked = click("exclude", "the gate: confirmed as a wash pair", "g11-d7-exclude")
+    if clicked.status_code != 200:
+        out.append("an exclude was refused (%d)" % clicked.status_code)
+    if board_has():
+        out.append("the public board still lists a wallet the operator excluded")
+    replay = click("exclude", "the gate: confirmed as a wash pair", "g11-d7-exclude")
+    if replay.status_code != 200 or replay.json().get("atMs") != clicked.json().get("atMs"):
+        out.append("a retried click did not replay the stored answer")
+    if click("include", "the gate: put back after review", "g11-d7-include").status_code != 200:
+        out.append("an include was refused")
+    if not board_has():
+        out.append("the board did not list the wallet again after an include")
+
+    # The reason is deliberately valid here: this call is about the MISSING KEY, and a short reason would answer
+    # 422 first (`_check_body` -> semantics -> key shape, the order every mutating route since P10 uses), which is
+    # how this check first failed - naming a rule it was not testing.
+    no_key = client.post("/v1/admin/gaming/decide",
+                         json={"wallet": wallet, "action": "exclude", "reason": "the gate: no key was sent at all"},
+                         headers={"X-Admin-Token": token})
+    if no_key.status_code != 400:
+        out.append("a decision without an Idempotency-Key answered %d, not 400" % no_key.status_code)
+    short = client.post("/v1/admin/gaming/decide", json={"wallet": wallet, "action": "exclude", "reason": "short"},
+                        headers={"X-Admin-Token": token, "Idempotency-Key": "g11-d7-short"})
+    if short.status_code != 422:
+        out.append("a decision with an unusable reason answered %d, not 422" % short.status_code)
+    bad_action = client.post("/v1/admin/gaming/decide",
+                             json={"wallet": wallet, "action": "banish", "reason": "the gate: not an action"},
+                             headers={"X-Admin-Token": token, "Idempotency-Key": "g11-d7-action"})
+    if bad_action.status_code != 422:
+        out.append("a decision outside the action vocabulary answered %d, not 422" % bad_action.status_code)
+
+    landed = p.app()._db.execute("SELECT wallet, action, reason, actor FROM leaderboard_exclusions"
+                                 " WHERE wallet=?", (wallet,)).fetchall()
+    if len(landed) != 3:
+        out.append("%d decision row(s) landed for 4 clicks; a replay must not append" % len(landed))
+    audit = p.app()._db.execute("SELECT target_id FROM audit_log WHERE action='gaming.decide'").fetchall()
+    if not audit:
+        out.append("no audit row was written for any decision")
+    for a in audit:
+        if "0x" in str(a[0]):
+            out.append("an audit row carries the wallet rather than the pseudonym")
+    rows = [{"action": str(r[1]), "reason": str(r[2]), "actor": str(r[3]), "wallet": str(r[0]), "anon": anon,
+             "idempotencyKey": "g11-d7-%s" % str(r[1])} for r in landed]
+    out += decision_journal_findings(rows)
+    return ("one click is one append-only row: flag asks, exclude removes from the public board, include restores, "
+            "and a retried click replays", not out, "; ".join(out[:6]))
+
 CHECKS = (c1_contract, c2_no_addresses, c3_gate_pair, c4_win_rate_gate, c5_refusals, c6_no_hidden_losses,
           c7_integers_only, c8_freshness, c9_read_plans, c10_history, c11_exclusions, c12_population,
           c13_published, c14_board_orders, c15_wallet_standing, c16_comparison_and_follows,
@@ -2096,7 +2357,10 @@ CHECKS = (c1_contract, c2_no_addresses, c3_gate_pair, c4_win_rate_gate, c5_refus
           c27_append_only_has_both_halves,
           # D6's own sentence, on the rendered document: 200 for a client with no cookies, the rows in the HTML,
           # the canonical link and the graph in the head, no address anywhere, and a card that is an image.
-          c28_the_pages_render_for_a_stranger)
+          c28_the_pages_render_for_a_stranger,
+          # D7. The dashboard's two claims: every finding arrives with its rule AND the innocent reading of the
+          # same shape, and one click is one append-only row the public board obeys.
+          c29_the_rules_travel_with_their_other_reading, c30_one_click_is_one_row_and_the_boards_obey)
 
 
 # --------------------------------------------------------------------------------------------------- self-test
@@ -2357,6 +2621,45 @@ def self_test() -> int:
         got = [len(referral_terms_findings(no_claw, payout)), len(referral_terms_findings(good, no_form)),
                len(referral_terms_findings(no_marker, payout)), len(referral_terms_findings(good, wrong_min))]
         return all(n >= 1 for n in got), got
+
+    @canary
+    def gaming_rule_halves():
+        """The rules the dashboard serves: complete, half-served, empty, and moulded from the real pair."""
+        # Long enough to pass the check's own length floors: a canary whose "good" fixture is too short to be
+        # accepted is a canary that reports the fixture rather than the scanner (which is what it did first).
+        window = ("A wallet is listed when it gains at least 25 places inside seven days and the gain is either "
+                  "three times the median climb on that board for the same window or at or above the 99th "
+                  "percentile of every climb on it, so the board's own churn sets the bar rather than a constant")
+        innocent = ("A lucky streak, a genuine edge that only just arrived, or a wallet that was simply unknown to "
+                    "us and is being discovered by the tape: rank is a comparison, so somebody climbs every week")
+        real = {k: {"rule": window + " " + k, "innocent": innocent + " " + k} for k in GAMING_KINDS}
+        complete = {**real, "fast_climb": {"rule": window, "innocent": innocent}}
+        no_innocent = {k: dict(v) for k, v in complete.items()}
+        no_innocent["climbers_typo"] = no_innocent.pop("fast_climb")
+        same = {k: dict(v) for k, v in complete.items()}
+        same["fast_climb"] = {"rule": window, "innocent": window}
+        short = {k: dict(v) for k, v in complete.items()}
+        short["fast_climb"] = {"rule": "climbs fast", "innocent": innocent}
+        for case in (complete,):
+            assert not gaming_rule_findings(case), case
+        got = [len(gaming_rule_findings(no_innocent)), len(gaming_rule_findings(same)),
+               len(gaming_rule_findings(short)), len(gaming_rule_findings({}))]
+        return got == [2, 1, 1, 4], got
+
+    @canary
+    def decision_journal():
+        """A journal that is a record, one that repeats a key, one with no reason, one with an unknown action."""
+        good = {"action": "exclude", "reason": "confirmed as a wash pair", "actor": "admin:fast_climb",
+                "wallet": "0xabc", "anon": "w_1", "idempotencyKey": "k-1"}
+        clean = [good, {**good, "action": "include", "reason": "put back after review", "idempotencyKey": "k-2"}]
+        replay = [good, {**good, "idempotencyKey": "k-1"}]
+        silent = [good, {**good, "reason": "hmm", "idempotencyKey": "k-3"}]
+        bogus = [good, {**good, "action": "banish", "idempotencyKey": "k-4"}]
+        for case in (clean,):
+            assert not decision_journal_findings(case), case
+        got = [len(decision_journal_findings(replay)), len(decision_journal_findings(silent)),
+               len(decision_journal_findings(bogus))]
+        return got == [1, 1, 1], got
 
     @canary
     def append_only_halves():

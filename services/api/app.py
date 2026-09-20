@@ -40,6 +40,7 @@ from polygm_core.radar import rankings as _radar
 from polygm_core.referrals import code as _rc
 from polygm_core.referrals import sybil as _sy
 from polygm_core.referrals import terms as _rt
+from polygm_core import gaming as _gm_gaming
 from polygm_core import public_pages as _pp
 from polygm_core.risk.gate import Intent, Limits, MarketState, evaluate, norm_tick
 from polygm_core.risk.idempotency import Idem
@@ -6118,6 +6119,18 @@ PUBLIC_BLOCK_RESPONSES = {
     422: {"description": "a reason is required, and the block has to expire"},
 }
 
+#: D7's two routes. The `403` is declared because the admin gate answers `ADMIN_REQUIRED` on a wrong token and
+#: `SIGNER_UNAVAILABLE` on a box with no token configured — the P04 rule that a misconfiguration must not look
+#: like an attack in the dashboards the on-call reads at 2am.
+GAMING_RESPONSES = {403: {"description": "a token that does not match the configured one"},
+                     422: {"description": "limit outside 1..100"},
+                     503: {"description": "no admin token offered, or none configured; the endpoint is closed, not open"}}
+GAMING_DECIDE_RESPONSES = {400: {"description": "no Idempotency-Key"},
+                           403: {"description": "a token that does not match the configured one"},
+                           409: {"description": "the same Idempotency-Key was used for a different decision"},
+                           422: {"description": "wallet/action/reason missing, or a reason outside 8-400 chars"},
+                           503: {"description": "no admin token offered, or none configured; the endpoint is closed, not open"}}
+
 for _t in (TAPE_FILLS_RESPONSES, FACETS_RESPONSES, WHALES_RESPONSES, TRADER_RESPONSES, COPY_CREATE_RESPONSES,
            COPY_GUARD_RESPONSES, COPY_MONITOR_RESPONSES, PORTFOLIO_RESPONSES, WHALE_VIEW_RESPONSES,
            RADAR_RESPONSES, RADAR_JOB_RESPONSES, COPY_LIST_RESPONSES, WHALE_VIEW_LIST_RESPONSES,
@@ -6132,7 +6145,8 @@ for _t in (TAPE_FILLS_RESPONSES, FACETS_RESPONSES, WHALES_RESPONSES, TRADER_RESP
            REFERRAL_TERMS_RESPONSES, REFERRAL_ME_RESPONSES, REFERRAL_CODE_RESPONSES, REFERRAL_APPLY_RESPONSES,
            REFERRAL_ACCRUE_RESPONSES, REFERRAL_REVIEW_RESPONSES, REFERRAL_REVIEW_SET_RESPONSES,
                    PUBLIC_TRADER_RESPONSES, PUBLIC_MARKET_RESPONSES, PUBLIC_BOARD_RESPONSES,
-                   PUBLIC_SITEMAP_RESPONSES, PUBLIC_BLOCK_LIST_RESPONSES, PUBLIC_BLOCK_RESPONSES):
+                   PUBLIC_SITEMAP_RESPONSES, PUBLIC_BLOCK_LIST_RESPONSES, PUBLIC_BLOCK_RESPONSES,
+                   GAMING_RESPONSES, GAMING_DECIDE_RESPONSES):
     _t.update(_INTERNAL)                       # every route can 500 through the app-wide handler
 del _t
 # ------------------------------------------------------------------ P11 D4 · self-rank and the identity you appear under
@@ -7857,6 +7871,253 @@ _levels_p11.update({
     "GET /v1/public/sitemap": (_authz.PUBLIC, ""),
     "GET /v1/public/blocks": (_authz.ADMIN, ""),
     "POST /v1/public/blocks": (_authz.ADMIN, ""),
+    # D7. The anti-gaming dashboard is ADMIN on both routes, and it is the only P11 surface that returns a raw
+    # wallet at all: the exclusion table is keyed by it and a reviewer cannot act on a pseudonym. Everything it
+    # returns is paired with the `w_...` a public page would show.
+    "GET /v1/admin/gaming": (_authz.ADMIN, ""),
+    "POST /v1/admin/gaming/decide": (_authz.ADMIN, ""),
 })
+
+# -------------------------------------------------------------------------------------------------------------
+# P11 · D7 · the anti-gaming dashboard: four questions about our own tape, and the two buttons that answer them.
+#
+# The detectors live in `polygm_core/gaming/detect.py` and are pure — they take rows and return findings — so this
+# section's whole job is to assemble the evidence from the tables we hold and to record what a human decides. Two
+# rules are enforced HERE rather than in the engine:
+#
+#   * **This is the only P11 surface that may see a raw wallet.** The public boards pseudonymise before they rank
+#     (§2.19), and that is right for a reader; a reviewer deciding whether a wallet belongs on a board cannot act
+#     on `w_…`, because the exclusion table is keyed by the wallet the tape actually names. So each finding carries
+#     both: the wallet (internal, ADMIN-only, never in a public payload) and the `w_…` a human quotes afterwards.
+#   * **A decision is a row, never a deletion.** `leaderboard_exclusions` is append-only and the boards replay the
+#     newest row per (wallet, board) at read time, so an exclusion is reversible (`include`/`clear`), attributable
+#     (an actor and a reason are required) and visible to the same code path the public board reads. `flag` records
+#     the question without removing anybody — a leaderboard that quietly dropped flagged wallets would be hiding
+#     them rather than reviewing them (§2.39's rule, applied to the tool that does the reviewing).
+
+GAMING_ACTIONS = ("exclude", "flag", "include", "clear")
+
+
+def _gm_audit(action: str, *, wallet: str, detail: dict, rid: str) -> None:
+    """One audit row per decision, with the pseudonym rather than the wallet as its subject.
+
+    An exclusion is a decision about somebody's standing, so the trail has to outlive the session — but the trail
+    is also the thing that gets copied into tickets and incident notes, and an address in a ticket is an address in
+    a support tool. The row therefore carries `w_…` and the reason, and the wallet itself stays in the append-only
+    table that needs it.
+    """
+    try:
+        _db.execute("INSERT INTO audit_log (at_ms, actor_type, actor_id, action, target_table, target_id,"
+                    " request_id, detail_json) VALUES (?,?,?,?,?,?,?,?)",
+                    (_now_ms(), "admin", "admin", str(action), "leaderboard_exclusions", _anon(str(wallet))[:64],
+                     str(rid), json.dumps(detail, sort_keys=True)))
+        _db.commit()
+    except Exception:                                                              # pragma: no cover - audit only
+        return
+
+
+def _gm_history(limit: int) -> list[dict]:
+    """The rank history the climb rule reads: `leaderboard_snapshots`, newest first.
+
+    Bounded by rows rather than by time because the table is written by the recompute: a board that has not been
+    recomputed for a fortnight has an *old* history rather than a long one, and the response says which (below,
+    with the newest timestamp it found).
+    """
+    rows = _db.execute(
+        "SELECT board, window_key, wallet, rank, settled, score_bps, drawdown_micro, computed_ms"
+        " FROM leaderboard_snapshots ORDER BY computed_ms DESC LIMIT ?", (max(1, limit) * 400,)).fetchall()
+    return [{"board": str(b), "windowKey": str(w), "wallet": str(x), "rank": _tm._int(r), "settled": _tm._int(s_),
+             "scoreBps": _tm._int(sc), "drawdownMicro": _tm._int(dd), "computedMs": _tm._int(ms)}
+            for (b, w, x, r, s_, sc, dd, ms) in rows]
+
+
+def _gm_fills() -> list[dict]:
+    """The tape the cluster rule reads — the same rows the boards rank from, through the same reader.
+
+    A second read path here would be a second answer about the same fills, and the one thing a suspicion engine
+    must not have is its own private view of the tape.
+    """
+    return [{"wallet": str(f["wallet"]), "tsMs": _tm._int(f["tsMs"]), "tokenId": str(f["tokenId"]),
+             "side": str(f["side"])} for f in _lb_fills()]
+
+
+def _gm_referrals() -> list[dict]:
+    """Attributions joined to the D5 signal digests — as digests, never as values.
+
+    Two referees funded from one source are one person, and that fact exists in exactly one place: the `funding`
+    and `device` digests the Sybil path stores. They reach the detector as `f_…`/`d_…` strings (the signals
+    schema refuses to store a raw value at all), and the detector counts collisions without printing them.
+    """
+    rows = _db.execute(
+        "SELECT a.referrer, a.referee, a.signed_up_ms, a.qualify_ms, a.notional_micro, a.state,"
+        " COALESCE(fs.hash,''), COALESCE(ds.hash,'')"
+        " FROM referral_attributions a"
+        " LEFT JOIN referral_signals fs ON fs.user_id = a.referee AND fs.kind = 'funding'"
+        " LEFT JOIN referral_signals ds ON ds.user_id = a.referee AND ds.kind = 'device'"
+        " ORDER BY a.signed_up_ms DESC LIMIT 20000").fetchall()
+    accruals: dict[str, int] = {str(r[0]): _tm._int(r[1]) for r in _db.execute(
+        "SELECT referrer, SUM(share_micro) FROM referral_accruals GROUP BY referrer").fetchall()}
+    out = []
+    for (referrer, referee, signed, qual, notional, state, funding, device) in rows:
+        st = str(state)
+        out.append({"referrer": str(referrer), "referee": str(referee), "signedUpMs": _tm._int(signed),
+                    "qualifyMs": _tm._int(qual), "notionalMicro": _tm._int(notional), "state": st,
+                    "fundingDigest": str(funding), "deviceDigest": str(device),
+                    # A refused or clawed-back referee is owed nothing, so its tree carries no accrual to weigh.
+                    "accrualMicro": 0 if st in ("refused", "clawed_back") else accruals.get(str(referrer), 0)})
+    return out
+
+
+def _gm_attributions() -> list[dict]:
+    """Every order we put to the venue through our builder code, with both fee numbers.
+
+    `fee_micro_observed` is NULL until the reconciliation writes it, and that NULL is deliberately passed through
+    as 0: an order we attributed and were never paid for is the shape this rule exists to find, and "we have not
+    looked yet" is answered by the same reviewer who can see the order's age. The wallet is the tape's
+    `wallets.address` (the id the boards and the exclusion table use), falling back to the user id when an account
+    has no provisioned wallet yet — a finding about a wallet that cannot be named is a finding nobody can act on.
+    """
+    # The notional is a TERM, not a fact about the venue: `builder_attribution` (P04) records what we expected to
+    # be paid, and `builder_attribution_terms` records the rate, the code and the base that produced the
+    # expectation. Reading the base from the terms row is the difference between this rule asking "how much
+    # volume was attributed" and asking "how large was the fee" — and a fee-based floor would silently exempt a
+    # low-rate code, which is the one code a farm would pick.
+    rows = _db.execute(
+        "SELECT a.user_id, COALESCE(a.order_id,''), a.market_id, COALESCE(t.notional_micro,0),"
+        " a.fee_micro_expected, COALESCE(a.fee_micro_observed,0), a.placed_ms, COALESCE(w.address,'')"
+        " FROM builder_attribution a"
+        " LEFT JOIN builder_attribution_terms t ON t.attribution_id = a.id"
+        " LEFT JOIN wallets w ON w.user_id = a.user_id"
+        " ORDER BY a.placed_ms DESC LIMIT 20000").fetchall()
+    return [{"wallet": str(addr) or str(uid), "userId": str(uid), "orderId": str(oid), "marketId": str(market),
+             "notionalMicro": _tm._int(notional), "feeMicroExpected": _tm._int(expected),
+             "feeMicroObserved": _tm._int(observed), "placedMs": _tm._int(placed)}
+            for (uid, oid, market, notional, expected, observed, placed, addr) in rows]
+
+
+def _gm_flags() -> dict[str, dict]:
+    """The newest human decision per wallet, replayed the same way the boards replay it.
+
+    Replayed from the same table rather than cached, because the screen and the ranking disagreeing about who has
+    already been decided about is exactly the bug that makes an operator distrust both.
+    """
+    out: dict[str, dict] = {}
+    for (wallet, action, reason, actor, at_ms) in _db.execute(
+            "SELECT wallet, action, reason, actor, at_ms FROM leaderboard_exclusions"
+            " ORDER BY at_ms ASC, id ASC").fetchall():
+        out[str(wallet)] = {"action": str(action), "reason": str(reason), "actor": str(actor),
+                            "atMs": _tm._int(at_ms)}
+    return out
+
+
+def _gm_dashboard(*, limit: int, at_ms: int) -> dict:
+    """The engine's payload, plus the two things only the API can add: pseudonyms and the evidence's own age."""
+    flags = _gm_flags()
+    history = _gm_history(limit)
+    out = _gm_gaming.detect.dashboard(history=history, fills=_gm_fills(), referrals=_gm_referrals(),
+                                      attributions=_gm_attributions(), at_ms=at_ms, limit=limit, flags=flags)
+    for group in ("climbers", "builder"):
+        for f in out[group]:
+            f["anon"] = _anon(str(f["wallet"]))
+    for f in out["clusters"]:
+        f["anonWallets"] = [_anon(str(w)) for w in f["wallets"]]
+    for f in out["chains"]:
+        f["anonReferrer"] = _anon(str(f["referrer"]))
+        f["anonReferees"] = [_anon(str(r)) for r in f["referees"]]
+    out["evidence"] = {"historyRows": len(history), "decisions": len(flags),
+                       "newestSnapshotMs": max([_tm._int(h.get("computedMs")) for h in history] or [0]),
+                       "fills": len(_gm_fills())}
+    return out
+
+
+@app.get("/v1/admin/gaming", status_code=200, responses=GAMING_RESPONSES)
+def admin_gaming(request: Request, limit: int = 25,
+                 x_admin: str | None = Header(default=None, alias="X-Admin-Token")):
+    """The four lists, the rules behind them and the wallets they name — for an operator, never for a reader.
+
+    The payload carries the raw wallet *and* its pseudonym because the two are needed for different jobs: a
+    decision is keyed by the wallet the tape names, and every sentence written afterwards quotes `w_…`. Serving
+    one without the other makes the other impossible; serving both behind an ADMIN gate keeps the pairing inside
+    the building, and `tests/test_gaming_api.py` greps every finding for an address to prove the pair is the only
+    place a wallet appears.
+    """
+    rid = request.state.request_id
+    ok, e = _admin(request)
+    if e:
+        return e
+    if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1 or limit > 100:
+        return err("VALIDATION", rid, where=["limit must be 1..100"])
+    at = _now_ms()
+    # Stamped with a zero TTL and a short stale window: the client refuses an unstamped read outright
+    # (`UNSTAMPED_READ`), which is how this route was caught — the screen said "the tape was not read" on a 200
+    # response, and the missing field was `asOf`. `ttlMs: 0` is also the honest answer for this payload: a cached
+    # suspicion list is yesterday's farms with today's clock on it.
+    #
+    # `asOf` is the age of the EVIDENCE rather than the time we answered, which is why it is the newest snapshot
+    # the climb rule actually read (or `at` when there is no history at all, because "we have looked" is true).
+    # The payload's own `evidence.newestSnapshotMs` carries the same number for the screen to print.
+    body = _gm_dashboard(limit=limit, at_ms=at)
+    newest = int(body.get("evidence", {}).get("newestSnapshotMs") or 0)
+    return _stamped(body, ttl_ms=0, stale_ms=120_000, as_of_ms=newest or at)
+
+
+@app.post("/v1/admin/gaming/decide", status_code=200, responses=GAMING_DECIDE_RESPONSES,
+          openapi_extra=_body_schema(("wallet", "action", "reason"), {
+              "wallet": {"type": "string", "minLength": 3, "maxLength": 120},
+              "action": {"type": "string", "enum": list(GAMING_ACTIONS)},
+              "reason": {"type": "string", "minLength": 8, "maxLength": 400},
+              "board": {"type": "string", "maxLength": 40, "default": "all"},
+              "finding": {"type": "string", "enum": list(_gm_gaming.RULES) + [""], "default": ""}}))
+def admin_gaming_decide(request: Request, body: dict = Body(...),
+                        idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+                        x_admin: str | None = Header(default=None, alias="X-Admin-Token")):
+    """Record one human decision about one wallet: exclude it, flag it for review, or put it back.
+
+    `exclude` removes the wallet from the named board (`all` for every board); `flag` records the question and
+    changes no ranking; `include`/`clear` reverse either. All four are rows — the boards replay the newest row per
+    (wallet, board) — so a wrong click is one append and one more click rather than a lost record. `finding` names
+    the kind of finding that prompted the decision, which is how the dashboard's precision becomes a number (how
+    many flags produced a confirmed farm) instead of an opinion.
+    """
+    rid = request.state.request_id
+    ok, e = _admin(request)
+    if e:
+        return e
+    bad = _check_body(body, ("wallet", "action", "reason"), rid,
+                      allowed=("wallet", "action", "reason", "board", "finding"))
+    if bad is not None:
+        return bad
+    wallet = str(body.get("wallet") or "").strip()
+    action = str(body.get("action") or "").strip()
+    reason = str(body.get("reason") or "").strip()
+    if action not in GAMING_ACTIONS:
+        return err("VALIDATION", rid, where=["action must be one of %s" % ", ".join(GAMING_ACTIONS)])
+    if not (8 <= len(reason) <= 400):
+        return err("BAD_REASON", rid)
+    board = str(body.get("board") or "").strip()
+    board = "" if board in ("", "all") else board
+    if board and board not in _lb_boards.BOARD_IDS:
+        return err("VALIDATION", rid, where=["board must be a board id, or 'all'"])
+    finding = str(body.get("finding") or "").strip()
+    if finding and finding not in _gm_gaming.RULES:
+        return err("VALIDATION", rid, where=["finding must be a finding kind, or empty"])
+    shaped = _idem_shape(idempotency_key)
+    if shaped is not None:
+        return shaped
+
+    def work():
+        at = _now_ms()
+        _db.execute("INSERT INTO leaderboard_exclusions (wallet, board, action, reason, actor, at_ms)"
+                    " VALUES (?,?,?,?,?,?)",
+                    (wallet, board, action, reason, "admin:%s" % (finding or "manual"), at))
+        _db.commit()
+        _gm_audit("gaming.decide", wallet=wallet, rid=rid,
+                  detail={"action": action, "board": board or "all", "finding": finding or "manual",
+                          "reason": reason})
+        return {"wallet": wallet, "anon": _anon(wallet), "action": action, "board": board or "all",
+                "finding": finding, "atMs": at}
+
+    return _idem_run(_operator_subject(), str(idempotency_key), body, rid, work)
+
 _authz.LEVELS_TABLE.update(_levels_p11)
 _authz._MATCHERS.clear()                    # the matchers cache the table; a new row must invalidate it

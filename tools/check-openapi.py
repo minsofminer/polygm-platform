@@ -133,6 +133,10 @@ TABLE_FOR_PATH = {
     "/v1/public/sitemap": "PUBLIC_SITEMAP_RESPONSES",
     ("GET", "/v1/public/blocks"): "PUBLIC_BLOCK_LIST_RESPONSES",
     ("POST", "/v1/public/blocks"): "PUBLIC_BLOCK_RESPONSES",
+    # D7. Both verbs are on their own path, so neither row needs a verb key - but the checker is told about them
+    # because an unmapped operation is one it would otherwise skip silently.
+    "/v1/admin/gaming": "GAMING_RESPONSES",
+    "/v1/admin/gaming/decide": "GAMING_DECIDE_RESPONSES",
     # A path with a read and a write has TWO tables, and they differ by exactly the rows that describe the
     # difference: only the write takes an Idempotency-Key, so only the write answers its 400. Keyed by
     # (verb, path) and looked up before the bare path, because a single name per path would force one of the

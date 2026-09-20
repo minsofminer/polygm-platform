@@ -1556,3 +1556,175 @@ body {
   display: grid;
   gap: var(--pgm-space-2);
 }
+
+/* --------------------------------------------------------------------------------------------- D7 · gaming
+ * The anti-gaming dashboard. Its own block rather than borrowed classes, because the one thing this screen must
+ * render unambiguously is the PAIR of readings — the rule and the innocent explanation — and a shared class would
+ * let one of them drift into the other's colour. Severity is carried by a left border and a word, never by colour
+ * alone: an operator reading this on a phone in daylight gets the same information as one at a desk. */
+.pgm-gaming {
+  display: grid;
+  gap: var(--pgm-space-5);
+}
+
+.pgm-gaming__lede,
+.pgm-gaming__hint,
+.pgm-gaming__note,
+.pgm-gaming__stamp {
+  margin: 0;
+  color: var(--pgm-text-muted);
+  font-size: var(--pgm-font-active);
+  overflow-wrap: anywhere;
+}
+
+.pgm-gaming__head form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--pgm-space-3);
+  margin-top: var(--pgm-space-3);
+}
+
+.pgm-gaming__head label,
+.pgm-gaming__act label {
+  display: grid;
+  gap: var(--pgm-space-1);
+  font-size: var(--pgm-font-active);
+}
+
+.pgm-gaming__head input,
+.pgm-gaming__act input {
+  min-width: 0;                 /* the grid cell decides the width; a min-width literal is a design decision */
+  padding: var(--pgm-space-2);
+  border: var(--pgm-border-w-hair) solid var(--pgm-border-default);
+  border-radius: var(--pgm-radius-sm);
+  background: var(--pgm-bg-inset);
+  color: var(--pgm-text-primary);
+  font: inherit;
+}
+
+.pgm-gaming__section {
+  display: grid;
+  gap: var(--pgm-space-3);
+}
+
+.pgm-gaming__section h3 {
+  display: flex;
+  gap: var(--pgm-space-2);
+  margin: 0;
+  font-size: var(--pgm-font-comfortable);
+}
+
+.pgm-gaming__count {
+  color: var(--pgm-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.pgm-gaming__list {
+  display: grid;
+  gap: var(--pgm-space-4);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.pgm-gaming__row {
+  display: grid;
+  gap: var(--pgm-space-2);
+  padding: var(--pgm-space-3);
+  border: var(--pgm-border-w-hair) solid var(--pgm-border-default);
+  border-left-width: var(--pgm-border-w-heavy);
+  border-radius: var(--pgm-radius-card);
+  background: var(--pgm-bg-elevated);
+}
+
+.pgm-gaming__row[data-severity="3"] {
+  border-left-color: var(--pgm-alert-critical);
+}
+
+.pgm-gaming__row[data-severity="2"] {
+  border-left-color: var(--pgm-alert-high);
+}
+
+.pgm-gaming__row[data-severity="1"] {
+  border-left-color: var(--pgm-border-strong);
+}
+
+.pgm-gaming__rowHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--pgm-space-2);
+}
+
+.pgm-gaming__kind {
+  font-weight: 600;
+}
+
+.pgm-gaming__severity,
+.pgm-gaming__anon,
+.pgm-gaming__wallet {
+  padding: 0 var(--pgm-space-1);
+  border-radius: var(--pgm-radius-sm);
+  background: var(--pgm-bg-inset);
+  font-size: var(--pgm-font-dense);
+}
+
+.pgm-gaming__anon {
+  color: var(--pgm-text-muted);
+}
+
+.pgm-gaming__wallet {
+  margin-left: auto;
+  overflow-wrap: anywhere;
+}
+
+.pgm-gaming__rule,
+.pgm-gaming__innocent,
+.pgm-gaming__reviewed,
+.pgm-gaming__problem,
+.pgm-gaming__notice,
+.pgm-gaming__empty {
+  margin: 0;
+  font-size: var(--pgm-font-active);
+  line-height: 1.5;
+}
+
+.pgm-gaming__innocent {
+  color: var(--pgm-text-muted);
+}
+
+.pgm-gaming__problem,
+.pgm-gaming__rule.is-bad {
+  color: var(--pgm-alert-critical);
+}
+
+.pgm-gaming__evidence {
+  display: grid;
+  gap: var(--pgm-space-1);
+  margin: 0;
+}
+
+.pgm-gaming__evidence dt {
+  color: var(--pgm-text-muted);
+  font-size: var(--pgm-font-dense);
+  text-transform: none;
+}
+
+.pgm-gaming__evidence dd {
+  margin: 0;
+  font-size: var(--pgm-font-active);
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.pgm-gaming__act {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--pgm-space-3);
+}
+
+.pgm-gaming__reviewed {
+  color: var(--pgm-text-muted);
+}

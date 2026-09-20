@@ -25,6 +25,12 @@ export const ROUTE_NOTES: Readonly<Partial<Record<RouteKey, string>>> = {
   createCopyConfig: "always a dry run: the schema has no field that turns copying live",
   copyGuards: "going live needs BOTH an acknowledged slippage warning and dry-run history (409 REFUSED otherwise)",
   leaderboardIdentitySet: "the listing toggle writes a consent record",
+  // D7. The internal dashboard: the one P11 surface that returns a raw wallet, paired with the pseudonym a human
+  // quotes later, and the two buttons whose only effect is an append-only row.
+  adminGaming:
+    "four detectors, each serving its rule AND the innocent reading of the same shape; the only read that returns a raw wallet, paired with the pseudonym",
+  adminGamingDecide:
+    "one append-only row carrying the reason and the finding kind; exclude/flag/include/clear, reversible because the boards replay the newest row",
   leaderboardFollows: "a follow is a watch, not a copy config",
   leaderboardFollow: "keyed by pseudonym: an address is not followable",
   copySources: "D7's discovery list, ranked risk-adjusted by default; each row carries its drawdown and its gate",

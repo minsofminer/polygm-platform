@@ -1,17 +1,16 @@
 # P11 — Leaderboard, Rankings & Referrals
 
-Status: **D1–D6 built**, verified by `tools/p11-gate-check.py` at **28/28** (18 scanners canaried,
-`docs/verification/P11-gate.txt`) with the whole backend suite at **1021 tests OK**, the web suite at **424 tests
-in 48 files OK** and `check-openapi` at 535/0 (69 paths, 106 schemas). D1 is the specification, the integrity rules and the
+Status: **D1–D7 built — the phase is complete**, verified by `tools/p11-gate-check.py` at **30/30** (20 scanners
+canaried, `docs/verification/P11-gate.txt`) with the whole backend suite at **1055 tests OK**, the web suite at
+**435 tests in 50 files OK** and `check-openapi` at 549/0 (71 paths, 112 schemas). D1 is the specification, the integrity rules and the
 ranking engine; D2 is the rankings API, the population the boards are demonstrated on, and the read path they are
 ranked from; D3 is the standing a wallet can see — its rank, its gap to the place above, its sparkline and the
 board it can put two other wallets beside; D4 is the reader's own row on all nine boards, pinned when it is off
 the page, with the listing control that decides whether that row is tied to an account; D5 is referrals — the
 reward model and its argument, the Sybil rules in their order of precedence, the clawback, the builder-code
-revocation ground, the funnel a referrer reads, and the payout and tax terms that go with being paid. D6 is the public pages — three server-rendered,
-crawlable, shareable surfaces with a generated card each, structured data that says only what the page shows, and
-the budget and block machinery that keeps them serving under a scraper. **D7, the anti-gaming dashboard, is next.**
-This file is written as the phase is built.
+revocation ground, the funnel a referrer reads, and the payout and tax terms that go with being paid. D7 is the anti-gaming dashboard: the four questions we ask our
+own tape, the rules they are asked by, and the two buttons whose only effect is an append-only row. This file is
+written as the phase is built.
 
 The phase's acceptance sentence, from the kit, is the thing everything below is arranged around:
 
@@ -34,7 +33,7 @@ better rank — is the one a user reports as a bug.
 | D4 | self-rank: your own position on every board, pinned when off-page, the unranked state, private-by-default with an opt-in | **built** — `GET /v1/leaderboard/me` + `GET|POST /v1/leaderboard/identity`; `0015_leaderboard_identity.sql` + its SQLite twin; `web/src/terminal/{selfRank.ts,SelfRank.tsx}` mounted in `BoardPanel` and rendered on `/leaderboard`; 16 API tests + 10 + 6 + 1 web tests |
 | D5 | referrals: link + short code, the reward model and its argument, Sybil defence (first matched order over a notional threshold, device/IP/funding dedupe, velocity limits, review queue, clawback, hard self-referral block), the referrer dashboard, payout terms | **built** — `packages/polygm_core/referrals/{terms,sybil,code}.py`, 37 unit tests; `0016_referrals.sql` + its SQLite twin; `GET /v1/referrals/terms`, `GET /me`, `POST /code`, `POST /apply`, `POST /accrue`, `GET\|POST /review`; `web/src/terminal/{referrals.ts,ReferralsView.tsx}` on `/referrals`; 26 API tests + 9 + 4 web tests |
 | D6 | public SSR pages: `/trader/<handle>`, `/market/<slug>`, `/leaderboard/<board>` with OG images, structured data, rate limiting | **built** — `packages/polygm_core/public_pages/{urls,budget,structured,cards}.py` (pure layer) + `0017_public_pages.sql` and `0018_append_only_grants.sql` with their SQLite twins; six operations (`GET /v1/public/{trader,market,leaderboard,sitemap}`, `GET\|POST /v1/public/blocks`); `web/{app/trader/[who],app/market/[market],app/leaderboard/[board]}` each with a page and an `opengraph-image` (three card routes for the board family: the plain, `/w/<window>` and `/c/<category>` forms); `web/src/public/*`; 18 + 12 backend tests, 26 web tests; gate c23–c28 |
-| D7 | anti-gaming dashboard: fast climbers, correlated clusters, synthetic referral chains, unusual builder-code attribution; exclude and flag in one click | not started |
+| D7 | anti-gaming dashboard: fast climbers, correlated clusters, synthetic referral chains, unusual builder-code attribution; exclude and flag in one click | **built** — `packages/polygm_core/gaming/{rules,detect}.py` (four pure detectors, 22 tests) + `GET /v1/admin/gaming` and `POST /v1/admin/gaming/decide` (12 API tests), both ADMIN and both in the contract; `web/src/terminal/{gaming.ts,GamingView.tsx}` on `/admin/gaming` behind `@/i18n/admin`; gate c29/c30 |
 
 ## 2. Decisions taken here, and why
 
@@ -687,6 +686,80 @@ the rows arrive with the followers read, and asking for them synchronously is a 
 later. The neighbouring test awaited its boxes. Raising timeouts would have made it pass and left the race in place;
 `findAllByRole` is the fix, and it is checked by running the suite three times.
 
+### 2.45 A detector proposes and a human records; the rule and the innocent reading are one served object
+
+D7 is the internal half of the integrity story, and its design constraint is that a dashboard which prints
+"suspicious" next to a wallet id is worse than no dashboard at all — it invites a removal on a feeling. So the
+engine (`gaming/detect.py`) is pure and returns *findings*: the shape it measured, the numbers it measured it from,
+a rule sentence, and a `suggested` action that is a word rather than an act. Nothing in the package writes
+anything. The only write in D7 is a human's click, and it lands as one row in `leaderboard_exclusions` — append-only
+since D1 — carrying the action, the reason, the actor and the kind of finding that prompted it. The boards already
+replay the newest row per (wallet, board) at read time, so the click is reversible (`include`, `clear`), the
+reversal is itself a record, and the public ranking obeys the moment it happens. The gate's c30 proves that end to
+end against the served routes: a flag leaves the board untouched, an exclude removes the wallet from the public
+read, an include puts it back, and a retried click replays rather than appending a second row.
+
+The rules are **data, not docstrings** (`gaming/rules.py`): `RULES[kind]` and `INNOCENT[kind]` are served as a pair
+by the API, so a consumer cannot render the damning reading without having the other one in hand. That is the
+product's "every classification label has a visible rule and a disclaimer" made structural, and it is tested from
+both ends — the pure tests assert every kind carries both, and the gate's c29 asserts the served payload's pair for
+each finding equals the pair the dashboard serves for its kind.
+
+### 2.46 Four questions, and what each looks like when nothing is wrong
+
+* **Fast climbers.** A climb must be at least 25 places inside seven days *and* either three times the board's own
+  median climb or at or above its 99th percentile. The first version used the percentile alone, and the pure tests
+  showed why that is a dead rule: in a population of forty-one climbers the single largest climb sits at 9756 bps,
+  so a 9900-bps bar can never be reached by anybody. A threshold no specimen can satisfy is not a strict rule. A
+  climb on a record thinner than the median of the wallets it climbed past is what raises a finding to the top of
+  the list, and the innocent reading says the obvious thing: a lucky streak looks exactly like that.
+* **Correlated clusters.** Two wallets are joined when at least 8 of the smaller tape's fills land on the same
+  token, same side, within 60 seconds, for at least 60% of that smaller tape; components are unioned transitively
+  so a farm of six arrives as one cluster rather than fifteen pairs. This one shipped a real bug and the gate's own
+  tape found it: the overlap was computed as `|hit[a] ∩ fills(b)| / min(|a|,|b|)`, which counts the *larger*
+  wallet's fills against the smaller wallet's count and produced `worstOverlapBps: 10034` — an overlap of 100.34%
+  printed next to a 60% threshold. The fix counts the smaller wallet's own fills that have a counterpart, which
+  cannot exceed 100% by construction, and the pure test now plants the exact shape that produced the bug.
+* **Synthetic referral chains.** One referrer with three or more referees, plus at least one of: two referees
+  sharing a funding or device digest, two qualifying inside 48 hours of signup, or two qualifying at the $25 floor
+  (within 2%). D5's Sybil rules refuse a *self*-referral at apply time; a referrer whose referees collide with
+  **each other** is the same fact seen from the other end and is invisible to a pairwise check, which is why it
+  needs this screen. The digests are compared as one-way values and counted, never printed — a ticket that quotes
+  `f_…` has copied a link between two people into a support tool.
+* **Builder-code anomalies.** Attributed volume of $25 or more with either five distinct markets inside ten
+  minutes, or at least half the attributed orders never observed a fee. The volume base comes from
+  `builder_attribution_terms.notional_micro` rather than from the fee: a fee-based floor would silently exempt a
+  low-rate code, which is the one code a farm would pick. Expected-versus-observed is the only pair of numbers that
+  separates "the venue charged less" (D5's lesson) from "the venue charged nothing", and the innocent reading says
+  what the burst usually is — a market maker, or a trader's own bot.
+
+### 2.47 This is the only P11 surface that may name a wallet, and it names two
+
+The public boards pseudonymise before they rank, and that is right for a reader. It is wrong for a reviewer: the
+exclusion table is keyed by the wallet the tape names, and a human cannot act on `w_…` without guessing. So every
+finding carries **both** the raw wallet (internal, ADMIN-only, never in a public payload) and the `w_…` the page
+would show, and the audit row for a decision carries the pseudonym rather than the wallet — the trail outlives the
+investigation, and an address in a ticket is an address in a support tool. The gate greps the payload for any
+address-shaped string that no finding is about; the API tests do the same for a whole document.
+
+### 2.48 The screen: both readings, the evidence, and a reason before the button
+
+`web/src/terminal/gaming.ts` (pure) owns what a finding is called, which actions a row offers (the reversal of
+whatever was already recorded comes first), and the exact body a click sends — and it returns `null` rather than
+posting a decision whose reason is shorter than 8 characters, because the row is the record that answers an appeal
+and "suspicious" is not one. `GamingView.tsx` renders the rule and the innocent reading side by side from the
+API's own strings, prints the evidence lines, and holds the operator token in React state only: no cookie, no
+`localStorage`, and a reload asks again, because an operator token that survives the browser being handed to
+somebody else is the entire risk of having an internal tool.
+
+Two more things the screen work found. **The route was unstamped**: the client refuses a read without
+`asOf`/`staleAfter` (`UNSTAMPED_READ`), so the dashboard rendered "the tape was not read" on a 200 response — the
+first version of the view test caught it, and the route now stamps with `ttl_ms=0` (a cached suspicion list is
+yesterday's farms with today's clock on it) and `asOf` set to the newest snapshot the climb rule actually read.
+And **the cluster finding's `size` field** tripped the contract's own rule that prices and sizes are strings, never
+JSON numbers: renamed `walletCount` / `refereeCount` rather than exempted, because an exemption is how the next one
+gets missed.
+
 ## 3. Where the numbers come from
 
 * `tests/test_leaderboard_rank.py` — **20 tests, OK** (`python3 -m unittest discover -s tests -p "test_leaderboard_rank.py"`).
@@ -699,6 +772,12 @@ later. The neighbouring test awaited its boxes. Raising timeouts would have made
   reasons (9 settled markets; 21 markets of forty cents). Measured on that population: **64 ranked**, 7 unranked,
   **5 blown up**, 1 provisional, 1 disputed result withheld, and the gate pair at ranks 12/47 has **48 versus 26
   settled markets** — the smaller sample ranked *below*, and the sentence explaining it is served by `/why`.
+* The whole backend suite on the D7 tree: **1055 tests, OK** (105.5 s, no skips) — D7 adds `tests/test_gaming.py`
+  (22: the four detectors fired on a planted farm apiece *and* left quiet on the honest near-miss beside it,
+  including the 100.34%-overlap specimen and the "one wallet is its own median" case) and `tests/test_gaming_api.py`
+  (12: the admin gate's three refusals, a planted climb arriving with its rule and pseudonym, a referral tree whose
+  second wallet shares the first's funding digest, flag/exclude/include against the public board, the idempotent
+  replay, the 400/422 shapes, and the scoped decision).
 * The whole backend suite on the D6 tree: **1021 tests, OK** (`python3 -m unittest discover -s tests`, 87.3 s,
   no skips) — the D5 count was 990. The D6 additions are `tests/test_public_pages.py` (19: `urls`'s grammar and
   the robots decisions, `budget`'s two-window arithmetic and the auto-block rule, `structured.unbacked` and
@@ -706,7 +785,9 @@ later. The neighbouring test awaited its boxes. Raising timeouts would have made
   standings and 404 parity with an unclaimed handle, the market page's odds age and verbatim resolution text, the
   board page's formula/gate/tie-breaks, the sitemap's caps and audit, the block routes' operator token and digest
   storage, and the public reads' audit rows).
-* `tools/check-openapi.py` — **535 passed, 0 failed** on the D6 tree (498 in D5) (the contract gained the seven leaderboard paths and 22
+* `tools/check-openapi.py` — **549 passed, 0 failed** on the D7 tree (535 in D6): 71 paths, 112 schemas, the two
+  admin operations with their ADMIN auth level, and `GAMING_RESPONSES`/`GAMING_DECIDE_RESPONSES` mapped so the
+  checker cannot silently skip them (the contract gained the seven leaderboard paths and 22
   components in D2, D3's four routes, D4's `me`/`identity` pair with six components and the `HANDLE_TAKEN` code,
   and D5's seven referral operations with nine schemas — `ReferralTerms`, `ReferralTermSheet`, `ReferralLink`,
   `ReferralMe`, `ReferralCode`, `ReferralApply`, `ReferralAccrue`, `ReferralReviewList`, `ReferralReviewSet` —
@@ -719,7 +800,7 @@ later. The neighbouring test awaited its boxes. Raising timeouts would have made
   property path does not resolve — the sub-object needs a top-level schema (`ReferralTermSheet` exists for exactly
   that reason). The status sets must equal the app's own response table plus `_INTERNAL`'s 500 and the implicit
   200, which is what caught the admin routes' missing `503 SIGNER_UNAVAILABLE`.
-* `tools/p11-gate-check.py` — **28/28 checks, 18/18 scanners canaried**, recorded in `docs/verification/P11-gate.txt`, 17.3 s. D5 adds c19 `reward_needs_a_trade` (a clean apply is `pending` and §2.25's "no trade, no referral" — an unqualified referee on whose orders no fee was paid writes **zero** accrual rows — and then, once qualified, the accrual is 25% of the **observed** $8 fee, not the expected $40: "1 accrual row(s), 8.00 of fee observed; 0 findings"), c20 `second_wallet_is_caught` (a second wallet on one funding source refused 409 `REFUSED`, a shared device opened for review, a self-referral refused 409 `SELF_REFERRAL` with no attribution row written and the builder code disabled with "self-referral" in its note, two review items open), c21 `dashboard_arithmetic` (two referees: signups/funded/trading/earned = 2, accrued 2,000,000 micro, the totals equal to the row sums, the review count equal to the queue) and c22 `payout_reality_and_clawback` (the $20 minimum as the gap from the **payable** balance, the 30-day hold, seven published rules, the future-day 422, a clawback cancelling the unpaid share without deleting a row, and the absent referrer leaderboard). Four D5 canaries (`referral_model`, `referral_collisions`, `referral_dashboard`, `referral_terms`) plant
+* `tools/p11-gate-check.py` — **30/30 checks, 20/20 scanners canaried**, recorded in `docs/verification/P11-gate.txt`, 17.3 s. D5 adds c19 `reward_needs_a_trade` (a clean apply is `pending` and §2.25's "no trade, no referral" — an unqualified referee on whose orders no fee was paid writes **zero** accrual rows — and then, once qualified, the accrual is 25% of the **observed** $8 fee, not the expected $40: "1 accrual row(s), 8.00 of fee observed; 0 findings"), c20 `second_wallet_is_caught` (a second wallet on one funding source refused 409 `REFUSED`, a shared device opened for review, a self-referral refused 409 `SELF_REFERRAL` with no attribution row written and the builder code disabled with "self-referral" in its note, two review items open), c21 `dashboard_arithmetic` (two referees: signups/funded/trading/earned = 2, accrued 2,000,000 micro, the totals equal to the row sums, the review count equal to the queue) and c22 `payout_reality_and_clawback` (the $20 minimum as the gap from the **payable** balance, the 30-day hold, seven published rules, the future-day 422, a clawback cancelling the unpaid share without deleting a row, and the absent referrer leaderboard). Four D5 canaries (`referral_model`, `referral_collisions`, `referral_dashboard`, `referral_terms`) plant
 violations in each scanner's own input and fail the run if it walks past them. D6 adds c23 (`public_pages_exist_and_are_server_rendered`: the eleven page/view files present, each route importing its view and reading on the
 server, no `"use client"` in any of them, `revalidate` on every card route, the market page's odds through the
 number layer with a freshness, the breadcrumb handed to the graph by all three views, and the four public routes
@@ -732,7 +813,15 @@ the contract and the ledger, `urls.py`'s three kinds, the live sitemap listing a
 canonical one, the caps and count agreeing, the sitemap itself indexable, and the OG URL one suffix off the page),
 c27 (`append_only_has_both_halves`) and c28 (`the_pages_render_for_a_stranger`: the three pages fetched from a real
 `next start` + uvicorn pair with no cookie jar, each 200 with a document, a canonical link, structured data, a row
-on the board page and no address anywhere in the HTML, plus the three card routes answering with an image). Two new
+on the board page and no address anywhere in the HTML, plus the three card routes answering with an image). D7 adds c29 (`the_rules_travel_with_their_other_reading`: the four detectors fired on a planted farm apiece and
+left quiet on an honest tape, every kind's rule+innocent pair served with the length floors, each finding's rule
+equal to the pair served for its kind, evidence present, a pseudonym next to every wallet, and no address-shaped
+string that no finding is about — plus the 403/503 refusals) and c30 (`one_click_is_one_row_and_the_boards_obey`:
+flag leaves the board alone, exclude removes the wallet from the public read, include restores it, the replay
+returns the stored answer, the 400/422 shapes hold, the audit row names the pseudonym, and the decision journal
+passes its own invariants). Two more canaries plant the violations those checks are built on: a rules map missing a
+half (and one whose two halves are the same text, which is the subtler version of the same lie) and a decision
+journal with a repeated key, an unusable reason and an action outside the vocabulary. Two new
 canaries plant the violations c27 and c28 are built on — the append-only halves (both directions, including the
 `FOREACH ... ARRAY` form the grants are written in) and a payload with an address three levels down, a graph claim
 the page never makes, and a provisional card that lost its sentence. c17 walks the self-rank (`/me` = nine board answers, the pin's board and rank agreeing with the board's own row, `private` for a fresh account, the unranked wallet's steps naming a number, 401 without a session); c18 walks the identity (no handle in any public payload before opt-in, the handle on exactly that wallet's row after it, a second account claiming it refused with 409 `HANDLE_TAKEN`, opt-out removing the link but keeping the row and the rank, the owner's own payloads still carrying it, and at least two `leaderboard.identity` audit rows).
@@ -780,9 +869,10 @@ the page never makes, and a provisional card that lost its sentence. c17 walks t
 
 ## 4. Open, in the order it should be closed
 
-1. **D7** as listed in §1 — the internal anti-gaming dashboard: fast climbers, correlated clusters, synthetic
-   referral chains, wallets whose volume hits our builder code unusually, with one-click exclude and flag. D6 is
-   closed (§2.35–§2.44), and `0018`'s grants plus c27 mean the schema half of the exclusion path is already guarded.
+1. **Nothing is outstanding in P11.** D1–D7 are built, and the phase's two acceptance sentences are answered by
+   the gate: c11/c14 print why a wallet at rank 47 with fewer resolved markets can sit above rank 12 (the board
+   ranks risk-adjusted PnL, not market count, and the row carries the comparison), and c20/c29/c30 catch a second
+   wallet funded by the first. What remains is the next phase (P12) and the two launch items D6 recorded.
 2. **The eligibility floor re-derived on production data** ($500 and its $0.02-median sensitivity are a judgement,
    §2.2), plus a real **category taxonomy**: `seed_leaderboard` invents four strings (Politics/Sports/Crypto/
    Finance) because the venue's own tags are not in our ingest yet, and the category board is only as meaningful
@@ -834,3 +924,20 @@ the page never makes, and a provisional card that lost its sentence. c17 walks t
 11. **The public gate's subject is the client address as this process sees it.** Behind a load balancer that is the
    balancer unless `X-Forwarded-For` is trusted, so the deployed value of that header is a launch item: the limit
    is generous enough that a mis-set subject degrades politely, but the auto-block's blast radius depends on it.
+
+12. **The dashboard's detectors are tuned for a tape the size of ours, and the percentiles say so.** The climb rule
+    needs a population to compare against (its multiple-of-median arm carries small boards, its percentile arm
+    carries large ones), the cluster rule is O(n·k) per token-second bucket because the pairwise version was too
+    slow to run on a busy day, and the chain rule's floors are the D5 terms rather than new numbers. None of that
+    is a limitation today and all of it is a thing to re-measure when the tape grows: the honest signal is the
+    gate's own runtime (22.4 s with D7's two checks in it).
+13. **An operator token is the whole authentication story on this screen.** There is no SSO integration, no role
+    model and no second factor behind `/admin/gaming` — the token is held in memory for the tab and compared
+    against `PGM_ADMIN_TOKEN` on every request. That is the same gate every admin route in this codebase uses
+    (`_admin`, since P04), so this deliverable did not weaken anything, but a real deployment should front it with
+    the operator identity provider rather than hand out a shared secret; the audit trail already records an actor
+    and a reason per decision, which is what makes that migration additive.
+14. **`flag` is a question and nothing consumes it yet.** A flag is recorded, shown as reviewed, and reversible,
+    but no query reports "flags per week" or "how many flags became exclusions" — the `finding` field on every row
+    exists so that becomes a query rather than a change, and P12's operator surface is where it should land.
+

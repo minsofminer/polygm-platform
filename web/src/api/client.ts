@@ -30,6 +30,13 @@ export type RequestOptions = {
   signal?: AbortSignal;
   /** Only for the order path: the caller owns the key so a user retry reuses it. */
   idempotencyKey?: string;
+  /**
+   * Extra headers, for the one surface that authenticates with a token instead of a session: the internal
+   * anti-gaming dashboard presents `X-Admin-Token`. The token lives in React state for the life of the tab and is
+   * never written to storage — an operator's token in `localStorage` is a token that survives the browser being
+   * handed to somebody else, and there is no version of that this screen needs.
+   */
+  headers?: Record<string, string>;
   maxAttempts?: number;
   timeoutMs?: number;
 };
@@ -90,7 +97,7 @@ export async function request<T>(opts: RequestOptions): Promise<Result<T>> {
   // can start talking: flip `built` in the ledger and the screen begins to work unchanged.
   if (!decl.built) return { ok: false, error: notBuilt(opts.key) };
   const mutating = MUTATING.has(decl.method);
-  const headers: Record<string, string> = { accept: "application/json" };
+  const headers: Record<string, string> = { accept: "application/json", ...(opts.headers ?? {}) };
   if (mutating) {
     headers["content-type"] = "application/json";
     headers["idempotency-key"] = opts.idempotencyKey ?? newIdempotencyKey(opts.key);

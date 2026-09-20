@@ -37,6 +37,7 @@ const KEY_SHAPE = /^[a-z][a-zA-Z0-9]*(?:\.[a-z][a-zA-Z0-9-]+){2,3}(?:#[a-z][a-zA
 const FAMILIES = [
   { prefix: "terminal", file: "src/i18n/en.terminal.ts", module: "@/i18n/terminal" },
   { prefix: "public", file: "src/i18n/en.public.ts", module: "@/i18n/public" },
+  { prefix: "admin", file: "src/i18n/en.admin.ts", module: "@/i18n/admin" },
 ];
 
 function* walk(dir, skip = []) {

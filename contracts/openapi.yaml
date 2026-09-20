@@ -3667,6 +3667,96 @@ paths:
         "503": {$ref: "#/components/responses/Denied"}
         "500": {$ref: "#/components/responses/Internal"}
 
+  /v1/admin/gaming:
+    get:
+      tags: [admin]
+      operationId: getAdminGaming
+      x-auth: admin
+      x-rate-class: admin
+      x-cache: no-store
+      summary: The anti-gaming dashboard — fast climbers, correlated clusters, synthetic chains, builder anomalies
+      description: |-
+        The internal screen, and the only P11 read that returns a raw wallet at all: a decision is keyed by the
+        wallet the tape names, while every sentence written afterwards quotes the `w_…` a public page would show.
+        So each finding carries BOTH, behind an admin token. Every list is produced by a rule that is served with
+        it, paired with the innocent reading of the same shape — a finding is a question a human answers, and the
+        two texts are what make it answerable.
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema: {type: integer, minimum: 1, maximum: 100, default: 25}
+          description: rows per list; the four lists are capped independently
+        - name: X-Admin-Token
+          in: header
+          required: false
+          schema: {type: string}
+          description: absent or empty means 503 SIGNER_UNAVAILABLE rather than a 401
+      responses:
+        "200":
+          description: the four lists, the rules behind them, and how old the evidence is
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Stamped"
+                  - $ref: "#/components/schemas/GamingDashboard"
+        "403": {$ref: "#/components/responses/Denied"}
+        "422": {$ref: "#/components/responses/Validation"}
+        "503": {$ref: "#/components/responses/Denied"}
+        "500": {$ref: "#/components/responses/Internal"}
+  /v1/admin/gaming/decide:
+    post:
+      tags: [admin]
+      operationId: postAdminGamingDecide
+      x-auth: admin
+      x-rate-class: admin
+      x-cache: no-store
+      summary: Exclude a wallet from a board, flag it for review, or put it back (idempotent per key)
+      description: |-
+        One click, one append-only `leaderboard_exclusions` row with an actor, a reason and the kind of finding
+        that prompted it. `exclude` removes the wallet from the named board (`all` for every board); `flag`
+        records the question and changes no ranking; `include`/`clear` reverse either. The boards replay the
+        newest row per (wallet, board) at read time, so a wrong click costs one more click, not a record.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - name: X-Admin-Token
+          in: header
+          required: false
+          schema: {type: string}
+          description: absent or empty means 503 SIGNER_UNAVAILABLE rather than a 401
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [wallet, action, reason]
+              properties:
+                wallet: {type: string, minLength: 3, maxLength: 120, description: "the id the tape and the exclusion table use"}
+                action: {type: string, enum: [exclude, flag, include, clear]}
+                reason: {type: string, minLength: 8, maxLength: 400}
+                board: {type: string, maxLength: 40, default: all}
+                finding:
+                  type: string
+                  enum: [fast_climb, correlated_cluster, synthetic_chain, builder_anomaly, ""]
+                  default: ""
+      responses:
+        "200":
+          description: the decision as recorded, including the pseudonym it will be quoted by
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Stamped"
+                  - $ref: "#/components/schemas/GamingDecision"
+        "400": {$ref: "#/components/responses/Validation"}
+        "403": {$ref: "#/components/responses/Denied"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/Validation"}
+        "503": {$ref: "#/components/responses/Denied"}
+        "500": {$ref: "#/components/responses/Internal"}
+
 
 components:
   headers:
@@ -4802,6 +4892,131 @@ components:
         hours: {type: integer, minimum: 1, maximum: 168}
         extended: {type: boolean, description: "true when this replaced an earlier block on the same subject"}
         note: {type: string}
+
+    GamingRule:
+      type: object
+      required: [rule, innocent]
+      additionalProperties: false
+      properties:
+        rule: {type: string, description: "what was measured, at what threshold"}
+        innocent:
+          type: string
+          description: "the other reading of the same shape: the product rule that every label carries a rule AND a disclaimer, made structural"
+
+    GamingFinding:
+      type: object
+      required: [kind, severity, suggested, rule, evidence]
+      properties:
+        kind: {type: string, enum: [fast_climb, correlated_cluster, synthetic_chain, builder_anomaly]}
+        severity: {type: integer, minimum: 1, maximum: 3}
+        suggested: {type: string, enum: [exclude, flag], description: "a suggestion; this route never acts"}
+        rule: {type: string}
+        evidence: {type: array, items: {type: string}, description: "the numbers the finding was produced from"}
+        decided:
+          type: object
+          description: "the newest human decision about this wallet, when there is one: the screen shows it as reviewed rather than asking twice"
+
+    GamingDashboard:
+      type: object
+      required: [atMs, limit, rules, climbers, clusters, chains, builder, counts, evidence]
+      properties:
+        atMs: {type: integer}
+        limit: {type: integer, minimum: 1, maximum: 100}
+        rules:
+          type: object
+          description: "one entry per finding kind, each carrying the rule and its innocent reading"
+          additionalProperties: {$ref: "#/components/schemas/GamingRule"}
+        climbers:
+          type: array
+          items:
+            allOf:
+              - $ref: "#/components/schemas/GamingFinding"
+              - type: object
+                properties:
+                  wallet: {type: string, description: "internal: the id the exclusion table is keyed by"}
+                  anon: {type: string, pattern: "^w_[0-9a-f]{8,}$"}
+                  board: {type: string}
+                  fromRank: {type: integer}
+                  toRank: {type: integer}
+                  climb: {type: integer}
+                  settled: {type: integer}
+                  percentileBps: {type: integer}
+                  medianClimb: {type: integer}
+        clusters:
+          type: array
+          items:
+            allOf:
+              - $ref: "#/components/schemas/GamingFinding"
+              - type: object
+                properties:
+                  wallets: {type: array, items: {type: string}}
+                  anonWallets: {type: array, items: {type: string}}
+                  walletCount: {type: integer, minimum: 2}
+                  pairs: {type: integer}
+                  worstOverlapBps: {type: integer, minimum: 0, maximum: 10000}
+                  coTimed: {type: integer}
+                  windowMs: {type: integer}
+        chains:
+          type: array
+          items:
+            allOf:
+              - $ref: "#/components/schemas/GamingFinding"
+              - type: object
+                properties:
+                  referrer: {type: string}
+                  anonReferrer: {type: string}
+                  referees: {type: array, items: {type: string}}
+                  anonReferees: {type: array, items: {type: string}}
+                  refereeCount: {type: integer}
+                  edges: {type: array, items: {type: object}}
+                  fastReferees: {type: array, items: {type: string}}
+                  floorReferees: {type: array, items: {type: string}}
+                  sharedFunding: {type: integer, description: "a COUNT of collisions; the digests themselves are never served"}
+                  sharedDevice: {type: integer}
+                  accrualMicro: {type: integer}
+        builder:
+          type: array
+          items:
+            allOf:
+              - $ref: "#/components/schemas/GamingFinding"
+              - type: object
+                properties:
+                  wallet: {type: string}
+                  anon: {type: string, pattern: "^w_[0-9a-f]{8,}$"}
+                  userId: {type: string}
+                  orders: {type: integer}
+                  markets: {type: integer}
+                  burstMarkets: {type: integer}
+                  volumeMicro: {type: integer}
+                  unpaidBps: {type: integer}
+        counts:
+          type: object
+          required: [climbers, clusters, chains, builder, reviewed]
+          properties:
+            climbers: {type: integer, minimum: 0}
+            clusters: {type: integer, minimum: 0}
+            chains: {type: integer, minimum: 0}
+            builder: {type: integer, minimum: 0}
+            reviewed: {type: integer, minimum: 0}
+        evidence:
+          type: object
+          required: [historyRows, decisions, newestSnapshotMs, fills]
+          properties:
+            historyRows: {type: integer, minimum: 0}
+            decisions: {type: integer, minimum: 0}
+            newestSnapshotMs: {type: integer, minimum: 0}
+            fills: {type: integer, minimum: 0}
+
+    GamingDecision:
+      type: object
+      required: [wallet, anon, action, board, finding, atMs]
+      properties:
+        wallet: {type: string}
+        anon: {type: string, pattern: "^w_[0-9a-f]{8,}$"}
+        action: {type: string, enum: [exclude, flag, include, clear]}
+        board: {type: string, description: "a board id, or 'all'"}
+        finding: {type: string}
+        atMs: {type: integer}
 
     PublicBlockList:
       type: object
