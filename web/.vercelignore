@@ -1,0 +1,9 @@
+# Nothing here is needed to build: Vercel runs `npm install` and `next build` itself. Keeping the upload to source
+# means the deployment cannot succeed because of a stale local artifact — the failure mode of shipping `.next/`.
+node_modules
+.next
+coverage
+test-results
+*.log
+.env
+.env.*

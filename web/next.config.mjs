@@ -12,6 +12,11 @@
  *    `index.html`/RSC documents are `no-store` so a stale document cannot point at pruned chunks.
  * 3. `poweredByHeader: false` and no `Server` value we control that names a framework version.
  */
+// Which deployment this is. The Mini App's own Vercel project sets `PGM_SURFACE=miniapp`; the main site does not,
+// and an unset value must mean "the main site" rather than "refuse everything" — the failure mode of a missing env
+// var has to be the product working, not the product vanishing.
+const MINIAPP = (process.env.PGM_SURFACE ?? "").trim().toLowerCase() === "miniapp";
+
 const TELEGRAM_ORIGINS = [
   "https://web.telegram.org",
   "https://telegram.org",
@@ -52,14 +57,30 @@ export default {
       key: "Content-Security-Policy",
       value: cspFor({ framing: "'self' " + TELEGRAM_ORIGINS.join(" "), tma: true }),
     };
+    // On the Mini App's own domain every path it serves is frameable by Telegram and nothing is reachable off the
+    // allowlist (see middleware.ts), so the CSP is stated once for the whole origin. Ordering matters here: a path
+    // matched by both a `frame-ancestors 'none'` rule and a Telegram rule would send BOTH headers, and a browser
+    // enforces the intersection — which is to say the webview breaks and no test in this repo would say why.
+    const framing = MINIAPP
+      ? [{ source: "/:path*", headers: [tg] }]
+      : [
+          { source: "/:path*", headers: [none] },
+          { source: "/tma/:path*", headers: [tg] },
+          { source: "/tma", headers: [tg] },
+        ];
     return [
-      { source: "/:path*", headers: [none] },
-      { source: "/tma/:path*", headers: [tg] },
-      { source: "/tma", headers: [tg] },
+      ...framing,
       {
         source: "/:all*(html|txt)",
         headers: [{ key: "Cache-Control", value: "no-store, max-age=0" }],
       },
+      // The Mini App's domain is not a second SEO surface: it exists to be opened inside Telegram, and two indexable
+      // copies of the same product on two domains is duplicate content with a support cost. The main site keeps its
+      // own indexability (`app/layout.tsx` metadata), and `web/vercel.json` deliberately carries no header like this
+      // — that file is read by both deployments.
+      ...(MINIAPP
+        ? [{ source: "/:path*", headers: [{ key: "X-Robots-Tag", value: "noindex, nofollow" }] }]
+        : []),
       {
         source: "/.well-known/:path*",
         headers: [{ key: "Cache-Control", value: "public, max-age=3600" }],

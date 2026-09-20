@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import type { ReactNode } from "react";
+import { isMiniAppSurface } from "@/tma/surface.server";
 
 /**
  * The Mini App entry. Same shell, same components, same routes — one codebase (P08 D2). What differs is the
@@ -12,9 +13,12 @@ export const metadata: Metadata = {
 };
 
 export default function TmaLayout({ children }: { children: ReactNode }) {
+  // One injection, never two: on the Mini App's own deployment the root layout already owns the bridge (every page
+  // there is the Mini App), and a second `script` tag with the same src is a second fetch and a second `WebApp`
+  // assignment for no reason.
   return (
     <>
-      <script src="https://telegram.org/js/telegram-web-app.js" async />
+      {isMiniAppSurface() ? null : <script src="https://telegram.org/js/telegram-web-app.js" async />}
       {children}
     </>
   );
