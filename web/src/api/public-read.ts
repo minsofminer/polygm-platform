@@ -19,11 +19,21 @@
 import "server-only";
 
 import { freshnessOf, stampFrom, type Freshness } from "@/api/envelope";
+// The declaration of which paths are public lives on the route ledger, and this read is one of the two
+// transports that honour it: the other is the client-side proxy (`src/auth/server.ts`), which had the same bug
+// for the Mini App's reads. Sharing the predicate is what stops the two from drifting into two truths.
+import { isAnonymousRead } from "@/auth/anonymous";
 import type { ServerRead } from "@/api/server-read";
 
 const API_ORIGIN = process.env.PGM_API_ORIGIN ?? "http://127.0.0.1:8000";
 
 export async function publicRead<T>(method: "GET", path: string): Promise<ServerRead<T>> {
+  // A public page reading a path the ledger does not declare anonymous would render a 401 as this file's "no data"
+  // state — the exact failure it was written to end, one layer down. It throws instead, where the developer sees it,
+  // because the alternative is a public page that looks fine to whoever wrote it and empty to a crawler.
+  if (!isAnonymousRead(method, path)) {
+    throw new Error(`publicRead(${method} ${path}) is not declared anonymous on the route ledger`);
+  }
   let status = 0;
   let text = "";
   try {

@@ -181,6 +181,9 @@ export const ROUTES = {
     built: true,
     whileMissing: "refuses",
     owner: "P11",
+    // `x-auth: public` in the contract, like the market page: the route ledger is where "nobody needs a session
+    // for this" is declared once, and both transports read that declaration (see src/auth/anonymous.ts).
+    anonymous: true,
   },
   publicMarketPage: {
     method: "GET",
@@ -198,8 +201,12 @@ export const ROUTES = {
     built: true,
     whileMissing: "refuses",
     owner: "P11",
+    // `x-auth: public` in the contract, like the market page: the route ledger is where "nobody needs a session
+    // for this" is declared once, and both transports read that declaration (see src/auth/anonymous.ts).
+    anonymous: true,
   },
-  publicSitemap: { method: "GET", path: "/v1/public/sitemap", built: true, whileMissing: "refuses", owner: "P11" },
+  // `x-auth: public`, and the one read a crawler makes with no cookies at all.
+  publicSitemap: { method: "GET", path: "/v1/public/sitemap", built: true, whileMissing: "refuses", owner: "P11", anonymous: true },
   publicBlocks: { method: "GET", path: "/v1/public/blocks", built: true, whileMissing: "refuses", owner: "P11" },
   // P11 D5: the referral programme. Five rows, and the split is the model's: the terms are PUBLIC (a programme
   // whose terms are discovered after the money moves is a complaint), the link and the funnel are USER-scoped,
@@ -211,6 +218,9 @@ export const ROUTES = {
     built: true,
     whileMissing: "refuses",
     owner: "P11",
+    // `x-auth: public`, and the comment above says why: the terms are the one part of the programme that must be
+    // readable before anything is joined. Declared here so the two transports agree about it.
+    anonymous: true,
   },
   referralsMe: {
     method: "GET",
