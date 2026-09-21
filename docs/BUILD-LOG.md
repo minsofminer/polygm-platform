@@ -4,6 +4,60 @@ Format per phase: **built / verified / `[UNVERIFIED]`**. Newest first.
 
 ---
 
+## P13 — Test Strategy & Implementation · 2026-09-21
+
+**Built.** `docs/P13-testing.md` (D1–D8, ~330 lines) plus the machinery it documents:
+`tools/p13-gate-check.py` (the phase gate, 8 sections, 12 canaries), `tools/p13-money-matrix.py` (D2: **43 rows**
+— OL-1…13, AMB-1…8, RG-1…5, FEE-1…5, NEG-1…3, WAL-1…5, AUTH-1…4 — each mapped to the test that proves it, with
+`--check` refusing a row whose test does not exist and `--run` refusing to call a run green unless every mapped
+test actually executed), `tools/p13-chaos-suite.py` (D7: the ten drills, each now printing its **expected
+outcome above its observations** from an `EXPECT` table), `tools/p13-load.py` (D5: soak, books, api, storm,
+fanout, budget — `--quick` for CI, the kit's sizes for nightly), `tools/p13-recovery-loop.py` (the headline loop).
+Frontend: `web/src/num/p13-property.test.tsx` (number-layer properties over seeded inputs, 2,000 rendered money
+values), `web/src/screens/p13-a11y.test.tsx` (the axe rules written out as a function over the rendered tree),
+`web/playwright.config.ts` with a **telegram-webview** project and `web/e2e/{buy-flow,wallet-ceremony,telegram-webview}.spec.ts`.
+CI: `.github/workflows/nightly.yml` (drills + full-size load + Playwright + the gate over the night's records),
+`.github/workflows/release.yml` (a tag cannot be cut without them), and the PR path gained the money matrix and
+the phase gate plus a `web` job. `Makefile` gained `p13`, `p13-read`, `p13-matrix`, `p13-chaos`,
+`p13-chaos-live`, `p13-recovery`, `p13-load-quick`, `p13-load`, `p13-soak`; `make check` now runs `p13-read`.
+
+**Verified.** `pytest` **1332 passed in 120.4 s**; `vitest` **62 files / 560 passed**; `p12-gate-check` **41/0**
+(with `node_modules` restored); `check-openapi` 659/0; chaos suite **9 of 9 PASS** here plus the live drill-2
+artifact; money matrix **43 of 43 rows green, 62 of 62 mapped tests ran in 15 s**. D5 at the kit's sizes:
+2,000 books — **11,955,200 deltas at 99,625/s**, RSS +7.8 MB; **500 concurrent users** p95 1,997 / p99 2,138 ms
+with 0 errors; **10,000 subscribers** drained in 54.7 s (SLO 300 s); **1,000 clients** through a SIGKILL, back in
+6.09 s with 0 slow failures while the server was down; **100 aggressive users** demanding 30,000 calls,
+184 served inside `{data.trades 60, clob.book 62, gamma.markets 62}` per 10 s. The headline loop:
+**100/100 kills, zero duplicate orders, zero lost positions** (`ccfa0e1`).
+
+**Three bugs, one of them money.** `Reconciler.sync_fills` booked a venue fill priced **worse than the order's
+own limit** — a BUY above our limit, silently, at the venue's price. Cost basis moved, the notification quoted a
+number the user never agreed to, and nothing said so. Now refused with the ledger untouched and an
+`ambiguous_settlement` case naming both prices, while price *improvement* still books at the venue's better
+price (asserted separately). Proven by stashing the fix and watching the new test fail. The other two were in
+P13's own tooling and both were found by noticing a runtime instead of a verdict: the money matrix passed pytest
+node ids without the `tests/` prefix — pytest collected **nothing**, the failure-set stayed empty, and the matrix
+reported "43 of 43 rows green in 0.3 s" — and the first fix then read any node-id-shaped line as a failure, so the
+warnings summary turned a passing test red. `summarise()` now demands returncode 0, a parseable summary, counts
+that add up to exactly the mapped tests, and zero skips, and the gate **replays both false greens as canaries**.
+
+**Harness honesty.** Two of the three load findings were the harness's own: the soak keyed its delivery queue on
+`(rule_id, dedupe_key)` while the product keys a signal on `UNIQUE (rule_id, dedupe_key, fired_bucket)`, so a
+legitimate re-fire in a later window reused an idempotency key and the harness counted 6,000 duplicates of its own
+making; and the storm's 1-second health probe timed out against a load that the API was serving at p95 2.0 s, so
+it reported a restart that had already happened as "the API did not come back". Both are written into
+`docs/P13-testing.md` with the product's version of events, along with the pacing rule that an unpaced 30-minute
+soak finishes in 45 s and must not report 1,800.
+
+**`[UNVERIFIED]`.** Playwright's chromium downloads here and cannot launch (host libraries, uid 1000, no root),
+so the three browser specs run in the nightly `e2e` job and the gate reports "deferred" rather than a pass. There
+is no Redis and no Postgres in this deployment: drills 4 and 5 test the equivalent failure against SQLite's lock
+and the in-process cache, stated in the drills themselves. The kit's "nightly green for 3 consecutive days"
+release clause is a property of a CI account with history, so the release workflow gates on one full run of the
+same evidence instead. And no real funds: the $50 canary and the user phase still wait for P14 and owner action.
+
+---
+
 ## P03 — Design system · 2026-09-17
 
 **Built.** `docs/P03-design-system.md` (D0–D8, 1,283 lines): D0 records where the prompt's premises were

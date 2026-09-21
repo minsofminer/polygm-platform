@@ -50,13 +50,18 @@ describe("the number layer, swept", () => {
     for (let i = 0; i < 2_000; i += 1) {
       // The sweep deliberately includes the shapes that break naive formatters: sub-cent amounts, values whose
       // fraction is not representable in binary (0.1, 0.3), the 53-bit float ceiling, and the extremes.
-      const micro = [
+      // `noUncheckedIndexedAccess` is on in this repo, so an index into a literal is `T | undefined` and the
+      // sweep has to say what it means. The two picks below are `!`-asserted with a reason rather than the
+      // compiler flag being relaxed for the file: the index is modulo the array's own length.
+      const picks = [1, 10, 100_000, 999_999, 1_000_001, 3_000_000, 1_290_000_000] as const;
+      const spans = [
         Math.floor(rnd() * 1e6),
         Math.floor(rnd() * 1e9),
         Math.floor(rnd() * 1e12),
         Math.floor(rnd() * 9_007_199_254_740),
-        [1, 10, 100_000, 999_999, 1_000_001, 3_000_000, 1_290_000_000][i % 7],
-      ][i % 5];
+        picks[i % picks.length]!,
+      ];
+      const micro = spans[i % spans.length]!;
       // One mount per value, unmounted immediately: 2,000 live React roots at once is what produced the
       // "Invalid hook call" this sweep first failed with — reported against the *next* test, because the crash
       // landed in testing-library's auto-cleanup.
@@ -80,7 +85,10 @@ describe("the number layer, swept", () => {
         const units = 1 + Math.floor(rnd() * Math.max(1, maxUnits - 1));
         const text = unitsToPrice(units, tick);
         expect(text, `tick=${tick} units=${units}`).toMatch(/^\d+\.\d+$/);
-        expect(text.split(".")[1].length, `tick=${tick} text=${text}`).toBeLessThanOrEqual(decimals);
+        const fraction = text.split(".")[1];
+        expect(fraction === undefined, `tick=${tick} text=${text} has no fraction, which the regex above allows a
+          whole number to be — but every tick in TICKS has decimals`).toBe(false);
+        expect(fraction!.length, `tick=${tick} text=${text}`).toBeLessThanOrEqual(decimals);
         expect(priceToUnits(text, tick), `tick=${tick} text=${text}`).toBe(units);
       }
     }

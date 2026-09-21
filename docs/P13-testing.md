@@ -91,7 +91,7 @@ them. `tests/conftest.py` provides the per-run tmp dirs (`PGM_TEST_TMPDIR`), the
 ## D2. The money-path matrix
 
 `tools/p13-money-matrix.py` enumerates the kit's rows and maps each to the test that proves it: **43 rows, 64
-mapped tests, all collected**. The matrix is the only coverage gate in this repo — the kit's D8 asks for exactly
+mapped test references (62 distinct tests), all collected and all executed**. The matrix is the only coverage gate in this repo — the kit's D8 asks for exactly
 that ("coverage reported but not gated — except the money paths, which are gated at 100% of the enumerated
 matrix"), and `tools/p13-gate-check.py` fails if a workflow introduces a global coverage threshold.
 
@@ -112,6 +112,19 @@ The seven groups, and what the rows required beyond what earlier phases already 
 * **Wallet (WAL-1…5).** Deposits on each chain; allowance exhausted mid-session; a non-allowlisted withdrawal;
   key export audited; the provider down.
 * **Auth (AUTH-1…4).** `initData` HMAC valid / tampered / stale / replayed.
+
+### Two false greens in the matrix itself
+
+`--run` was written to prove the mapped tests pass, and for one commit it proved nothing. It passed pytest the
+node ids without the `tests/` prefix, so pytest answered `ERROR: file or directory not found … no tests ran in
+0.00s`; the tool's only failure signal was a regex over its own output, that set stayed empty, and the matrix
+reported **43 of 43 rows green in 0.3 s**. The fix surfaced the second bug in the same code path: the replacement
+parser treated *any* node-id-shaped line as a failure, and the warnings summary supplies one for a test that
+passed. `summarise()` now requires a zero return code, a parseable summary line, counts that add up to exactly
+the number of mapped tests, zero skips (a skipped money-path test is a hole wearing a green badge), and an empty
+failure set — and both false greens are replayed as canaries in `tools/p13-gate-check.py`. What caught them was
+not a verdict but a runtime: 0.3 s for 62 tests, then a green run that said `1 failed`. A gate that cannot fail
+is not a gate, and neither is one that fails on its own warnings.
 
 ### The bug the matrix found in the product
 

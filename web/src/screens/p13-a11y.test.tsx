@@ -135,9 +135,12 @@ describe("the ticket, for a keyboard", () => {
     // (the section is labelled "Trade"), which is the kind of selector a test should not be guessing with.
     const buttons = screen.getAllByRole("button");
     const send = buttons[buttons.length - 1];
-    send.focus();
+    // Not `!`: if the ticket rendered no buttons at all, the sweep above already failed, and a test that would
+    // otherwise crash on an empty list should say which invariant broke.
+    expect(send, "the ticket rendered no buttons at all").toBeTruthy();
+    send!.focus();
     expect(document.activeElement).toBe(send);                 // reachable by keyboard
-    fireEvent.click(send);
+    fireEvent.click(send!);
     await waitFor(() => expect(container.textContent ?? "").toMatch(/feed down|nothing/i));
     expect(sent.length).toBe(0);
     expect(a11yProblems(container)).toEqual([]);

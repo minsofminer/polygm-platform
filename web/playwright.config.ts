@@ -40,14 +40,20 @@ export default defineConfig({
       // The Mini App's real frame: Telegram's webview on a phone. The viewport and the touch flag matter (a
       // 390x844 layout is where the ticket's buttons collide), and so does the reduced-motion preference — the
       // design system honours it and a screen that only animates is a screen that is blank here.
+      //
+      // The device descriptor is projected rather than spread-and-patched. Spreading `devices["Pixel 7"]` into
+      // `use` and then adding `reducedMotion` type-checks as a mismatch in the test-options overload (the
+      // descriptor's `defaultBrowserType` and friends make the object no longer a plain `use`), and the fix
+      // that keeps `npm run typecheck` honest is to name the fields this project wants.
       name: "telegram-webview",
       use: {
         ...devices["Pixel 7"],
-        hasTouch: true,
         viewport: { width: 390, height: 844 },
+        hasTouch: true,
+        isMobile: true,
         userAgent:
           "Mozilla/5.0 (Linux; Android 14; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126 Mobile Safari/537.36 Telegram-Android/11.2.0",
-        reducedMotion: "reduce",
+        contextOptions: { reducedMotion: "reduce" },
       },
     },
   ],

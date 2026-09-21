@@ -29,13 +29,20 @@ APPLY=0
 cd "$(dirname "$0")/.."
 
 if ! git remote get-url origin >/dev/null 2>&1; then
+  # Two places a token legitimately lives in this workspace, tried in order: gh's own config, and the operator's
+  # `~/.secrets/tokens.env` (which is where this build keeps them and which is gitignored and outside the repo).
+  # The `gh auth git-credential` helper is a third option and was the only one for a while, but it fails with
+  # "Permission denied" whenever the gh binary's own state is missing — and a recovery script that cannot add a
+  # remote is a recovery script that cannot recover.
   TOKEN_FILE="$HOME/.config/gh/hosts.yml"
-  if [ ! -f "$TOKEN_FILE" ]; then
-    echo "no origin remote and no $TOKEN_FILE — re-authenticate gh first" >&2
-    exit 1
+  TOKEN=""
+  if [ -f "$TOKEN_FILE" ]; then
+    TOKEN=$(sed -n 's/.*oauth_token:[[:space:]]*\([^[:space:]]*\).*/\1/p' "$TOKEN_FILE" | head -1)
   fi
-  TOKEN=$(sed -n 's/.*oauth_token:[[:space:]]*\([^[:space:]]*\).*/\1/p' "$TOKEN_FILE" | head -1)
-  [ -n "$TOKEN" ] || { echo "the gh config holds no oauth_token" >&2; exit 1; }
+  if [ -z "$TOKEN" ] && [ -f "$HOME/.secrets/tokens.env" ]; then
+    TOKEN=$(sed -n 's/^export GH_TOKEN=["'"'"']\?\([^"'"'"'[:space:]]*\).*/\1/p' "$HOME/.secrets/tokens.env" | head -1)
+  fi
+  [ -n "$TOKEN" ] || { echo "no origin remote and no token in $TOKEN_FILE or ~/.secrets/tokens.env" >&2; exit 1; }
   echo "+ git remote add origin github.com/minsofminer/polygm-platform"
   [ "$APPLY" = "1" ] && git remote add origin "https://x-access-token:$TOKEN@github.com/minsofminer/polygm-platform.git"
 fi
