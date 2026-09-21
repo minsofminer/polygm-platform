@@ -1,0 +1,45 @@
+P12 D6 (web, part 1): the wallet's QR is built here, and this time the reference was the one that was wrong
+
+A deposit address is the one thing on the wallet screen a person scans rather than types, so the QR is the
+safer input path and it is not decoration: a matrix that is almost right scans into an address nobody owns.
+`web/src/tma/qr.ts` is a dependency-free byte-mode/level-M/versions-1-10 encoder (14 to 213 bytes: an address,
+an EIP-681 URI, a short bot link), with a typed `QrTooLongError` rather than a truncation, and `qrSvgPath`
+for the webview to render with no network.
+
+The interesting part is how the fixtures were finally pinned. `qr.test.ts` compares every cell of three
+matrices (`address` v3, `eip681` v4, `long` v8 — one block, two blocks, four unequal blocks plus the version
+header) against a second implementation. Two cases failed, and the failure was in the error-correction tail,
+not in the data. Bisecting it out took four separate suspects, and three of them were mine:
+
+  * the candidate mask was being scored with the format information already drawn; ISO/IEC 18004 section 7.8
+    says to evaluate the data region, so the header is now written after the choice, not before;
+  * the Annex B rule-3 penalty searched for the eleven-module sequence `10111010000`, which only matches
+    patterns whose four light modules are *inside* the symbol — every match flush against an edge, which is
+    most of the score on a small symbol, was missed. Rewritten as the seven-module core plus a light area on
+    one side or the symbol edge;
+  * my own "is this stream Reed-Solomon clean" check had the wrong roots (they are alpha^0..alpha^(ec-1));
+  * and the actual cause of the two failures: **segno**, the reference, appends `8 - (length % 8)` padding
+    bits, which is a whole extra zero codeword when the bit stream already ends on a codeword boundary.
+    ISO/IEC 18004 7.4.10 pads only as far as the boundary, and only if it is not there already. Invisible to
+    a decoder, but it shifted 24 codewords and the whole EC tail on two of the three cases, and it moved the
+    eip681 symbol's chosen mask from 2 to 6. Verified for every text length from 1 to 13 bytes; the two
+    encoders agree at 14, where the stream fills the block and carries no pad codewords at all — which is
+    exactly why `address` passed from the start.
+
+`tools/build-qr-fixtures.py` now patches that deviation out, cross-checks every fixture's codeword stream
+against `qrcode`'s byte for byte, and reads each generated matrix back — format information, codeword walk,
+de-interleave, syndromes, payload — before writing it, because a fixture is only worth comparing against if
+it is a real QR. All three fixtures are now the same symbol both encoders describe. The tool also records
+*why* segno is the mask authority and `qrcode` is not: they score the candidates in different states, and
+the spec's own rule is the one segno implements.
+
+Also in this pass:
+  * `qr.ts` rewritten clean under `noUncheckedIndexedAccess` (57 errors): table and matrix reads go through
+    `lg`/`al` and `darkAt`/`fixedAt`, and the two writes throw rather than silently dropping a module.
+  * `tools/p12-gate-check.py` gains a fourth section: the encoder still imports nothing, still fetches
+    nothing, the test still compares every cell of every case in the file, each fixture is a square matrix of
+    the size it claims, the fixtures on disk are still the ones the generator produces, and two canaries for
+    the fixture shapes that would make those checks vacuous. 31 -> 41 checks.
+
+Verified: `npx vitest run` 58 files / 511 tests green (qr.test.ts 9/9), `npx tsc --noEmit` clean,
+`python3 tools/p12-gate-check.py` 41/0, `--self-test` 4/4 caught.

@@ -15,7 +15,15 @@ three things this phase can get wrong in ways no unit test on either side would 
      and the Python table and the TypeScript table must have the same keys. A code that exists only in the nicer
      table is a message that never renders.
 
-  3. **The surfaces stay separate.** The Mini App is its own deployment with its own root document and its own
+  3. **The wallet's QR is built here and compared against another encoder.** The deposit address is the one thing on
+     the wallet screen a person scans rather than types, so a QR that is *almost* right is the worst kind of wrong: it
+     scans into an address nobody owns. The encoder is dependency-free by design, and `qr.fixtures.json` holds matrices
+     from a second implementation that `qr.test.ts` compares cell for cell — including the mask that implementation
+     chose. Checked here: that the module still imports nothing and fetches nothing, that the comparison is still
+     every cell rather than a sample, that each fixture is a square matrix of the size it claims, and (when the
+     reference encoders are importable) that the fixtures on disk are the ones the generator produces.
+
+  4. **The surfaces stay separate.** The Mini App is its own deployment with its own root document and its own
      surface gate: the paths it must 404, the CSP that frames only Telegram, the two noindex signals, and the
      `PGM_SURFACE` switch that turns all of it on. Checked here by reading the sources and config that implement it —
      the live URLs are checked by `--live`, which is opt-in because a gate that needs the network is a gate that fails
@@ -247,6 +255,70 @@ def surfaces() -> None:
           "noindex" not in vercel_web.lower(), "")
 
 
+# ---------------------------------------------------------------------------------------------------------------------
+# 4 · the QR on the wallet screen, and the fixtures it is compared against
+# ---------------------------------------------------------------------------------------------------------------------
+def square_fixture(case: dict) -> bool:
+    """A fixture is usable only if it is a square matrix of the width it claims, over {0, 1}."""
+    rows = case.get("rows") or []
+    size = case.get("size") or 0
+    return (bool(rows) and len(rows) == size and all(len(row) == size for row in rows)
+            and all(set(row) <= {"0", "1"} for row in rows))
+
+
+def fixtures_are_current() -> tuple[bool, str]:
+    """Re-generate the fixtures in memory and compare, when this box has the reference encoders.
+
+    The comparison is the *tool's* own `--check`, not a re-implementation: two checks of the same property that drift
+    apart are worse than one. Where the reference encoders are not installed the check reports so, and the cell-by-cell
+    comparison is still enforced by the web suite, which is where it belongs.
+    """
+    try:
+        import qrcode  # noqa: F401
+        import segno  # noqa: F401
+    except ImportError:
+        return True, "reference encoders not installed here; the web suite still compares every cell"
+    proc = subprocess.run([sys.executable, str(ROOT / "tools" / "build-qr-fixtures.py"), "--check"],
+                          capture_output=True, text=True)
+    return proc.returncode == 0, (proc.stdout or proc.stderr).strip().splitlines()[-1] if (proc.stdout or proc.stderr) else ""
+
+
+def wallet_qr() -> None:
+    src = (ROOT / "web" / "src" / "tma" / "qr.ts").read_text(encoding="utf-8")
+    test = (ROOT / "web" / "src" / "tma" / "qr.test.ts").read_text(encoding="utf-8")
+    cases = json.loads((ROOT / "web" / "src" / "tma" / "qr.fixtures.json").read_text(encoding="utf-8"))
+    code = src.split("*/", 1)[-1]  # everything after the module docstring
+
+    # A dependency in the money path is a supply chain, and the Mini App renders inside a webview with no network, so
+    # the encoder has to work with nothing else present.
+    check("the QR encoder imports nothing", "import " not in code and "require(" not in code, "")
+    check("the QR encoder fetches nothing at runtime", "fetch(" not in code and "http" not in code, "")
+    check("the encoder states its own ceiling rather than truncating", "MAX_VERSION = 10" in code
+          and "QrTooLongError" in code, "a QR that silently truncates a destination is the failure this file prevents")
+
+    # The comparison itself: every cell, over every case in the file, mask included.
+    check("the fixture comparison is every cell, not a sample",
+          "toEqual(fixture.rows)" in test and "asRows(matrix)" in test,
+          "a spot check on three modules agrees with a wrong QR")
+    check("the test walks the fixture file rather than a hand-written list", "Object.entries(fixtures)" in test,
+          "a hand-written list stops covering the day a new case is added")
+    check("the fixtures record the mask and version the reference chose",
+          all({"mask", "version", "size", "text", "rows"} <= set(case) for case in cases.values()),
+          "without the recorded mask, the test cannot assert which mask won")
+    check("every fixture is a square matrix of the size it claims",
+          all(square_fixture(case) for case in cases.values()), "")
+    current, why = fixtures_are_current()
+    check("the fixtures on disk are the ones the generator produces", current, why)
+
+    # Canaries: the shapes of broken fixture that would make the checks above vacuous.
+    broken = dict(cases[next(iter(cases))])
+    short_row = dict(broken, rows=broken["rows"][:-1])
+    no_mask = {k: v for k, v in broken.items() if k != "mask"}
+    check("canary: a fixture missing its last row is rejected", not square_fixture(short_row), "")
+    check("canary: a fixture with no recorded mask is rejected",
+          not ({"mask", "version", "size", "text", "rows"} <= set(no_mask)), "")
+
+
 def live_probe() -> None:
     import urllib.error
     import urllib.request
@@ -309,6 +381,7 @@ def main() -> int:
     live = "--live" in sys.argv
     deep_link_round_trip()
     refusal_vocabulary()
+    wallet_qr()
     surfaces()
     if live:
         live_probe()
