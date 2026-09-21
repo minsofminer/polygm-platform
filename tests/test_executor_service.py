@@ -729,6 +729,72 @@ class TestClaimLease(Harness):
                          "uncertain")
 
 
+class TestSignerOutage(Harness):
+    """P14 D2's wallet-provider drill, as a test: the provider answers nothing and the executor must not die.
+
+    Found by the drill and fixed in the same chunk. The provider's `sign` was the one external call in
+    `handle_intent` that was not guarded (the venue calls below it already catch `TimeoutError`/`ConnectionError`),
+    so a signer that raised propagated out of `tick`, killed the whole pass — every other intent in the batch
+    unprocessed — and left the intent sitting in `signing` with nothing on the wire and no named reason.
+
+    The state it lands in is `queued` rather than `uncertain`, and that is the load-bearing decision: the attempt
+    row is written *after* signing, so a signer that answered nothing proves nothing was sent. `uncertain` is
+    never auto-requeued, so using it here would turn a provider blip into a queue of orders a human has to clear
+    one at a time — which is the failure mode this executor goes out of its way to avoid everywhere else.
+    """
+
+    class DownSigner:
+        name = "provider-down"
+        pubkey = "0x" + "d0" * 32
+
+        def sign(self, payload: dict) -> dict:                            # noqa: ARG002
+            raise RuntimeError("PROVIDER_DOWN: the signing provider returned no signature")
+
+    def test_a_signer_that_answers_nothing_is_a_named_retry_and_not_a_crash(self) -> None:
+        iid = self.queue()
+        self.ex.signer = self.DownSigner()                                # type: ignore[assignment]
+        rep = self.ex.tick(at=self.at + 10, reconcile=False)              # must not raise
+        self.assertEqual(len(rep["handled"]), 1)
+        verdict = rep["handled"][0]
+        self.assertEqual(verdict["state"], "retryable")
+        self.assertEqual(verdict["code"], "SIGNER_UNAVAILABLE")
+        row = self.rows("SELECT state, risk_code FROM order_intents WHERE id=?", (iid,))[0]
+        self.assertEqual(row["state"], "queued", "a provider outage is a retry, not a dead order")
+        self.assertEqual(row["risk_code"], "SIGNER_UNAVAILABLE")
+        # Nothing was signed, so nothing may claim to have been: no attempt row (which is what proves "not
+        # sent"), no venue call, no order, no fill, no cash.
+        self.assertEqual(self.rows("SELECT * FROM order_attempts"), [])
+        self.assertEqual(self.tp.post_calls, 0)
+        self.assertEqual(self.orders(), [])
+        self.assertEqual(self.fills(), [])
+        self.assertEqual(self.cash(), [])
+        # The trail names the reason and stays inside the state machine's own vocabulary.
+        trail = self.rows("SELECT state, reason FROM order_lifecycle WHERE intent_id=? ORDER BY id", (iid,))
+        self.assertEqual(trail[-1]["state"], "draft")
+        self.assertIn("SIGNER_UNAVAILABLE", trail[-1]["reason"])
+        # The user is told, in the vocabulary the notification table already has.
+        notes = self.rows("SELECT event, detail_json FROM order_notifications WHERE intent_id=?", (iid,))
+        self.assertEqual([n["event"] for n in notes], ["queued"])
+        self.assertIn("SIGNER_UNAVAILABLE", str(notes[0]["detail_json"]))
+
+    def test_the_retry_after_the_provider_returns_is_exactly_one_order(self) -> None:
+        iid = self.queue()
+        self.ex.signer = self.DownSigner()                                # type: ignore[assignment]
+        self.ex.tick(at=self.at + 10, reconcile=False)
+        self.ex.signer = executor_main.TestSigner()                        # type: ignore[assignment]
+        # The book has to be fresh for the retry, and that is the point rather than a fixture detail: the
+        # requeued intent goes through the risk gate AGAIN, so a retry can never ride an old snapshot into the
+        # book. (With a stale book this tick answers `rejected/STALE_QUOTE`, which the drill observed first.)
+        self.store.conn.execute("UPDATE book_levels SET updated_ms=? WHERE market_id=?", (self.at, self.market))
+        rep = self.ex.tick(at=self.at + 20, reconcile=False)
+        self.assertEqual(rep["handled"][0]["state"], "submitted")
+        self.assertEqual(len(self.orders()), 1)
+        self.assertEqual(len(self.rows("SELECT * FROM order_attempts WHERE intent_id=?", (iid,))), 1)
+        # A third pass must not re-POST: the attempt row already covers this intent.
+        self.ex.tick(at=self.at + 30, reconcile=False)
+        self.assertEqual(len(self.orders()), 1)
+
+
 from store import CLAIM_LEASE_MS                                          # noqa: E402  (used above)
 
 if __name__ == "__main__":

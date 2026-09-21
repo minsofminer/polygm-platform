@@ -147,7 +147,8 @@ class Executor:
                                      on_book=crash_hook)
         self.cancel_budget = v2.CancelBudget()
         self.stats: dict[str, int] = {"ticks": 0, "handled": 0, "submitted": 0, "uncertain": 0, "rejected": 0,
-                                      "halted_skips": 0, "signed": 0, "reconcile_passes": 0}
+                                      "halted_skips": 0, "signed": 0, "reconcile_passes": 0,
+                                      "signer_failed": 0}
         self.last_pass: dict = {}
 
     # --------------------------------------------------------------------------- context assembly
@@ -349,7 +350,38 @@ class Executor:
                                 separators=(",", ":")))
         self.store.lifecycle(intent_id=it.id, order_id="", user_id=it.user_id, state="signing",
                              reason="payload %s" % digest[:12], source="system", at=at)
-        signed = self.signer.sign(payload)
+        # The provider call is the one external call in this method that was not already guarded, and P14's
+        # wallet-provider drill proved it: a signer that answers nothing (a 500, a timeout, a dead session key)
+        # propagated out of `handle_intent`, out of `tick`, and killed the whole pass — every other intent in the
+        # batch unprocessed, the intent left in `signing`, and a worker that crash-loops for as long as the
+        # provider is down. Guarding it is not leniency: it is the same rule the venue calls already follow.
+        #
+        # `queued`, not `uncertain`, and the difference is the whole reason this can retry safely: the attempt row
+        # is written *after* this line, so a signer that answered nothing proves nothing reached the wire.
+        # `uncertain` is never auto-requeued — using it here would turn a provider blip into a queue of orders a
+        # human has to resolve one by one, which is the failure mode this code goes out of its way to avoid
+        # elsewhere. A requeued intent re-runs the risk gate on its next attempt, so freshness is re-checked too.
+        try:
+            signed = self.signer.sign(payload)
+        except Exception as e:                                        # noqa: BLE001 - the provider is not our code
+            self.stats["signer_failed"] = self.stats.get("signer_failed", 0) + 1
+            code = "SIGNER_UNAVAILABLE"
+            self.store.set_intent_state(it.id, IntentState.QUEUED.value, at=at, risk_code=code)
+            # `draft`, from the state machine's own vocabulary: there is no signature and no attempt row, so the
+            # order is exactly where it was before we asked. Inventing a state for this would put a word into the
+            # lifecycle table that the UI, the reconciler and the runbook all have to learn.
+            self.store.lifecycle(intent_id=it.id, order_id="", user_id=it.user_id, state="draft",
+                                 reason="SIGNER_UNAVAILABLE: %s: %s" % (type(e).__name__, str(e)[:160]),
+                                 source="system", at=at)
+            # `queued` from ORDER_EVENTS, not a new word: the user-visible fact is that the order is not away
+            # and is waiting to be tried again. The *reason* rides in the detail, where a notification can show it.
+            self.store.notify(intent_id=it.id, user_id=it.user_id, event="queued", at=at,
+                              detail={"code": code, "retryable": True, "detail": str(e)[:120]})
+            o.state, o.stage, o.code = "retryable", "signing", code
+            o.notes.append("the signer answered nothing (%s); nothing was sent, no attempt row was written, and "
+                           "the intent is back in the queue for the next pass" % type(e).__name__)
+            o.latency_ms = (time.perf_counter() - t0) * 1000
+            return o
         self.stats["signed"] += 1
         # The attempt row is written BEFORE the POST: it is the difference between "we may have sent it"
         # being provable and being a guess.

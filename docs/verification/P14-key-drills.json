@@ -1,0 +1,532 @@
+{
+  "verdict": "CONDITIONAL",
+  "open_conditions": [
+    {
+      "check": "BREAK-GLASS IS ONE HOUR ONLY IF THE CUSTODIAN IS FAST ENOUGH: the provider-bound half of a 10,000-key break-glass is UNMEASURED (at 1 call/s per key it is 2.8 hours, over the limit)",
+      "why": "measure Turnkey's revoke/rewrap rate limit on real keys, then re-run this drill with --provider-rate <calls per second>; until then the one-hour claim is unproven and the product does not launch on a key-compromise promise nobody can keep"
+    }
+  ],
+  "facts": {
+    "budgets_ms": {
+      "user_key_leaked": 900000,
+      "signing_service_compromised": 3600000,
+      "key_in_a_log": 1800000,
+      "contractor_leaves": 3600000,
+      "support_impersonation": 300000,
+      "wallet_provider_outage": 900000
+    },
+    "break_glass_limit_ms": 3600000,
+    "drills": {
+      "user_key_leaked": {
+        "steps": [
+          {
+            "step": "the stolen session works before the drill (the drill must not be measuring a dead token)",
+            "at_ms": 234,
+            "ok": true,
+            "detail": ""
+          },
+          {
+            "step": "every session of that account is revoked",
+            "at_ms": 235,
+            "ok": true,
+            "detail": "{\"sessions\": 1, \"refresh\": 1}"
+          },
+          {
+            "step": "the stolen token no longer reads the wallet",
+            "at_ms": 238,
+            "ok": true,
+            "detail": ""
+          },
+          {
+            "step": "the signing key itself is revoked (the exec can no longer sign for this user)",
+            "at_ms": 238,
+            "ok": true,
+            "detail": "1 wrap row(s) revoked"
+          },
+          {
+            "step": "no live key wrap remains for that account",
+            "at_ms": 238,
+            "ok": true,
+            "detail": "[]"
+          },
+          {
+            "step": "...and the first step really did work (must-accept guard for the whole drill)",
+            "at_ms": 238,
+            "ok": true,
+            "detail": ""
+          }
+        ],
+        "measured_ms": 238,
+        "budget_ms": 900000,
+        "verdict": "pass",
+        "failed_step": "",
+        "notes": []
+      },
+      "signing_service_compromised": {
+        "steps": [
+          {
+            "step": "the kill switch engages (stops new orders and sweeps the queue)",
+            "at_ms": 5,
+            "ok": true,
+            "detail": "200 {\"engaged\":true,\"atMs\":1789976900028}"
+          },
+          {
+            "step": "the kill switch is engaged on the record, not just in the response",
+            "at_ms": 5,
+            "ok": true,
+            "detail": "(1,)"
+          },
+          {
+            "step": "one approver is refused (must-refuse: an attacker with the admin token cannot do it alone)",
+            "at_ms": 9,
+            "ok": true,
+            "detail": "422 {\"error\":{\"code\":\"VALIDATION\",\"message\":\"request body or parameters are not valid for this endpoint (approvers needs at "
+          },
+          {
+            "step": "every session in the product is revoked under the two-approver rule",
+            "at_ms": 10,
+            "ok": true,
+            "detail": "{\"sessions\": 500, \"refresh\": 501}"
+          },
+          {
+            "step": "a session minted before the break-glass reads nothing now",
+            "at_ms": 14,
+            "ok": true,
+            "detail": "status 401"
+          },
+          {
+            "step": "the rotation plan covers every live wrap (create kek_versions row for v2)",
+            "at_ms": 17,
+            "ok": true,
+            "detail": "planned 500 of 500"
+          },
+          {
+            "step": "every re-wrapped DEK is read back under the new KEK (500 of 500)",
+            "at_ms": 40,
+            "ok": true,
+            "detail": "unverified 0"
+          },
+          {
+            "step": "the superseded generations are revoked once every new one is verified (500 rows)",
+            "at_ms": 46,
+            "ok": true,
+            "detail": "500 of 500"
+          },
+          {
+            "step": "the local half scales: 10,000 keys projects to 0.01 minutes at the measured rate",
+            "at_ms": 46,
+            "ok": true,
+            "detail": "projected 560 ms over the 3600000 ms limit"
+          },
+          {
+            "step": "the old KEK is retired only once nothing live references it",
+            "at_ms": 49,
+            "ok": true,
+            "detail": "no live wraps reference it"
+          },
+          {
+            "step": "KEK v1 is retired and the rotation is closed",
+            "at_ms": 51,
+            "ok": true,
+            "detail": "{\"retired\": 1}"
+          },
+          {
+            "step": "the halt is released once the rotation is verified",
+            "at_ms": 55,
+            "ok": true,
+            "detail": "200 (0,)"
+          },
+          {
+            "step": "the whole break-glass is inside the kit's one-hour limit (55 ms measured, limit 3600000)",
+            "at_ms": 55,
+            "ok": true,
+            "detail": "500 keys, 500 sessions"
+          }
+        ],
+        "measured_ms": 55,
+        "budget_ms": 3600000,
+        "verdict": "pass",
+        "failed_step": "",
+        "notes": [
+          "rotation phase: 28 ms for 500 keys (0.06 ms/key) -> a 10,000-key rotation projects to 0.0 minutes, against the kit's 60-minute limit",
+          "provider-bound half: 10000 calls, 2.8 hours at 1 call/s per key \u2014 the provider's revoke rate limit ([UNVERIFIED] until P13); if it is 1 call/s and one call per key, this arithmetic is a ",
+          "measured wall clock: 0.06 s for 500 wrapped keys and 500 sessions"
+        ]
+      },
+      "key_in_a_log": {
+        "steps": [
+          {
+            "step": "the log line exists (so the next check is not passing on an empty string)",
+            "at_ms": 106,
+            "ok": true,
+            "detail": "{\"detail\":{\"init\":\"***\",\"material\":\"0x***\",\"seed\":\"***\"},\"ev\":\"http\",\"level\":\"er"
+          },
+          {
+            "step": "the private key does not appear in what was emitted",
+            "at_ms": 106,
+            "ok": true,
+            "detail": "{\"detail\":{\"init\":\"***\",\"material\":\"0x***\",\"seed\":\"***\"},\"ev\":\"http\",\"level\":\"error\",\"path\":\"/v1/wallet?token=***\"}\n"
+          },
+          {
+            "step": "a mnemonic does not appear in what was emitted",
+            "at_ms": 106,
+            "ok": true,
+            "detail": "{\"detail\":{\"init\":\"***\",\"material\":\"0x***\",\"seed\":\"***\"},\"ev\":\"http\",\"level\":\"error\",\"path\":\"/v1/wallet?token=***\"}\n"
+          },
+          {
+            "step": "an initData hash does not appear in what was emitted",
+            "at_ms": 106,
+            "ok": true,
+            "detail": "{\"detail\":{\"init\":\"***\",\"material\":\"0x***\",\"seed\":\"***\"},\"ev\":\"http\",\"level\":\"error\",\"path\":\"/v1/wallet?token=***\"}\n"
+          },
+          {
+            "step": "the independent secret scanner finds nothing in the sanitised line",
+            "at_ms": 107,
+            "ok": true,
+            "detail": "still present: []"
+          },
+          {
+            "step": "the account's sessions are closed as well: a leaked key usually travelled with one",
+            "at_ms": 107,
+            "ok": true,
+            "detail": "{\"sessions\": 1, \"refresh\": 1}"
+          },
+          {
+            "step": "the stolen token is dead",
+            "at_ms": 112,
+            "ok": true,
+            "detail": ""
+          },
+          {
+            "step": "the exposed generation is revoked, not merely re-wrapped",
+            "at_ms": 112,
+            "ok": true,
+            "detail": "1 revoked"
+          },
+          {
+            "step": "nothing live remains for that account",
+            "at_ms": 114,
+            "ok": true,
+            "detail": "[]"
+          }
+        ],
+        "measured_ms": 114,
+        "budget_ms": 1800000,
+        "verdict": "pass",
+        "failed_step": "",
+        "notes": [
+          "credential generation before the drill: None"
+        ]
+      },
+      "contractor_leaves": {
+        "steps": [
+          {
+            "step": "the operator credential works before the drill (must-accept)",
+            "at_ms": 35,
+            "ok": true,
+            "detail": "200 {\"atMs\":1789976900198,\"limit\":25,\"rules\":{\"fast_climb\":{\"rule\":\"A wallet is listed when it gains at "
+          },
+          {
+            "step": "the departed contractor's credential is refused once the token is rotated",
+            "at_ms": 40,
+            "ok": true,
+            "detail": "403 {\"error\":{\"code\":\"ADMIN_REQUIRED\",\"message\":\"this route is admin-only\",\"retryable\":false,\"requestId\""
+          },
+          {
+            "step": "the new credential works (so the rotation is not an outage)",
+            "at_ms": 75,
+            "ok": true,
+            "detail": "200"
+          },
+          {
+            "step": "the rotation is recorded in the secret inventory with an owner and a next date",
+            "at_ms": 76,
+            "ok": true,
+            "detail": "{\"name\": \"PGM_ADMIN_TOKEN\", \"environment\": \"prod\", \"stored_in\": \"secret_manager\", \"owner\": \"on-call lead\", \"rotate_by_ms\": 1797752900271, \"last_rotated_ms\": 1789976900271, \"can_rot"
+          },
+          {
+            "step": "a secret past its rotation date is reported as due (the inventory is not decoration)",
+            "at_ms": 76,
+            "ok": true,
+            "detail": "[{\"name\": \"PGM_ADMIN_TOKEN\", \"environment\": \"prod\", \"stored_in\": \"secret_manager\", \"owner\": \"on-call lead\", \"rotate_by_ms\": 1797752900271, \""
+          },
+          {
+            "step": "their product account's sessions are revoked as well as their operator token",
+            "at_ms": 181,
+            "ok": true,
+            "detail": "{\"sessions\": 1, \"refresh\": 1}"
+          }
+        ],
+        "measured_ms": 182,
+        "budget_ms": 3600000,
+        "verdict": "pass",
+        "failed_step": "",
+        "notes": []
+      },
+      "support_impersonation": {
+        "steps": [
+          {
+            "step": "an admin token cannot /v1/wallet/withdraw as the user (401)",
+            "at_ms": 110,
+            "ok": true,
+            "detail": ""
+          },
+          {
+            "step": "an admin token cannot /v1/wallet/keys/export as the user (401)",
+            "at_ms": 115,
+            "ok": true,
+            "detail": ""
+          },
+          {
+            "step": "an admin token cannot /v1/wallet/withdrawal-addresses/remove as the user (422)",
+            "at_ms": 119,
+            "ok": true,
+            "detail": ""
+          },
+          {
+            "step": "an admin token cannot /v1/orders as the user (503)",
+            "at_ms": 123,
+            "ok": true,
+            "detail": ""
+          },
+          {
+            "step": "no money path accepted an operator credential as a user (4 attempted)",
+            "at_ms": 123,
+            "ok": true,
+            "detail": "accepted: []"
+          },
+          {
+            "step": "no admin operation is a money-moving route at all (16 admin operations)",
+            "at_ms": 123,
+            "ok": true,
+            "detail": "money-shaped admin routes: []"
+          },
+          {
+            "step": "admin_may_not() forbids all 7 actions, and no admin route's name matches one",
+            "at_ms": 123,
+            "ok": true,
+            "detail": "hits: []"
+          },
+          {
+            "step": "the user's own session without a second factor cannot export keys either",
+            "at_ms": 227,
+            "ok": true,
+            "detail": "403 {\"error\":{\"code\":\"TOTP_REQUIRED\",\"message\":\"a 6-digit code is needed for this action\",\"retryable\":false,\"reque"
+          }
+        ],
+        "measured_ms": 228,
+        "budget_ms": 300000,
+        "verdict": "pass",
+        "failed_step": "",
+        "notes": [
+          "admin operations (16): GET /v1/admin/gaming, GET /v1/public/blocks, GET /v1/referrals/review, GET /v1/telegram/metrics, GET /v1/telegram/ops, POST /v1/admin/flags, POST /v1/admin/gaming/decide, POST /v1/admin/kill-switch, POST /v1/admin/revoke-keys, POST /v1/admin/revoke-sessions, POST /v1/public/blocks, POST /v1/referrals/accrue, POST /v1/referrals/review, POST /v1/telegram/broadcast, POST /v1/telegram/drain, POST /v1/telegram/kill",
+          "break_glass_denied events on the record: 0"
+        ]
+      },
+      "wallet_provider_outage": {
+        "steps": [
+          {
+            "step": "the executor does not crash on a provider that returns nothing (it answers with a verdict)",
+            "at_ms": 28,
+            "ok": true,
+            "detail": "{\"at_ms\": 1789976900630, \"kill_switch\": false, \"handled\": [{\"intent_id\": \"i-3b04605621db36762c9a\", \"stage\": \"signing\", \"state\": \"retryable\", \"order_id\": \"\", \"code\": \"SIGNER_UNAVAIL"
+          },
+          {
+            "step": "the attempt actually reached the signer (not refused earlier by the gate or the halt)",
+            "at_ms": 28,
+            "ok": true,
+            "detail": "the first tick answered 'SIGNER_UNAVAILABLE' at stage 'signing'"
+          },
+          {
+            "step": "the intent is NOT reported as executed while the provider never signed (state=queued)",
+            "at_ms": 28,
+            "ok": true,
+            "detail": "state 'queued' with error 'SIGNER_UNAVAILABLE'"
+          },
+          {
+            "step": "no order row was created for a signature that does not exist",
+            "at_ms": 28,
+            "ok": true,
+            "detail": "{'orders': 0, 'fills': 0, 'cash': 0} -> {'orders': 0, 'fills': 0, 'cash': 0}"
+          },
+          {
+            "step": "the failure is named, not silent (a state a human can act on)",
+            "at_ms": 28,
+            "ok": true,
+            "detail": "state 'queued'"
+          },
+          {
+            "step": "the client order hash is computed before any signature exists (a retry is the *same* order)",
+            "at_ms": 28,
+            "ok": true,
+            "detail": "client_order_hash '0x4b55356b66ba6b4ec68d73'"
+          },
+          {
+            "step": "nothing is left mid-flight for a retry to double-submit",
+            "at_ms": 28,
+            "ok": true,
+            "detail": "stuck: 0"
+          },
+          {
+            "step": "no attempt row was written for the failed signature (so absence still proves 'not sent')",
+            "at_ms": 28,
+            "ok": true,
+            "detail": "0 attempt row(s)"
+          },
+          {
+            "step": "recovery needs no cleanup: once the provider is back the executor moves the intent on",
+            "at_ms": 29,
+            "ok": true,
+            "detail": "state queued -> submitted (risk code 'SIGNER_UNAVAILABLE')"
+          },
+          {
+            "step": "...and the recovery produced at most one order (no double submit on the retry)",
+            "at_ms": 29,
+            "ok": true,
+            "detail": "0 -> 1"
+          },
+          {
+            "step": "the successful retry wrote exactly one attempt row",
+            "at_ms": 29,
+            "ok": true,
+            "detail": "1 attempt row(s), order ids: 0x2c51b9f020bfa7efd747102457faffa7f33f1d798b9997ec2fa9ba8e6b072baa"
+          },
+          {
+            "step": "a third pass does not re-POST the order that attempt row already covers",
+            "at_ms": 30,
+            "ok": true,
+            "detail": "1 -> 1 order(s)"
+          }
+        ],
+        "measured_ms": 30,
+        "budget_ms": 900000,
+        "verdict": "pass",
+        "failed_step": "",
+        "notes": [
+          "intent state after the outage tick: queued / SIGNER_UNAVAILABLE",
+          "hashes: failed attempt 0x4b55356b66ba6b4e, retry 0x2c51b9f020bfa7ef \u2014 different by design (a fresh expiration per attempt), which is why exactly-once is carried by the attempt row and not by the hash"
+        ]
+      }
+    },
+    "recorded": [
+      {
+        "kind": "key_compromise",
+        "verdict": "pass",
+        "measured_ms": 238,
+        "failed_step": ""
+      },
+      {
+        "kind": "key_compromise",
+        "verdict": "pass",
+        "measured_ms": 55,
+        "failed_step": ""
+      },
+      {
+        "kind": "key_compromise",
+        "verdict": "pass",
+        "measured_ms": 114,
+        "failed_step": ""
+      },
+      {
+        "kind": "key_compromise",
+        "verdict": "pass",
+        "measured_ms": 181,
+        "failed_step": ""
+      },
+      {
+        "kind": "phishing_support",
+        "verdict": "pass",
+        "measured_ms": 227,
+        "failed_step": ""
+      },
+      {
+        "kind": "pg_failover",
+        "verdict": "pass",
+        "measured_ms": 30,
+        "failed_step": ""
+      }
+    ]
+  },
+  "checks": [
+    {
+      "status": "PASS",
+      "name": "user_key_leaked: every step passed (6 steps, 0.24 s of 900 s budget)",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "user_key_leaked: inside its budget (0.24 s)",
+      "why": ""
+    },
+    {
+      "status": "OPEN",
+      "name": "BREAK-GLASS IS ONE HOUR ONLY IF THE CUSTODIAN IS FAST ENOUGH: the provider-bound half of a 10,000-key break-glass is UNMEASURED (at 1 call/s per key it is 2.8 hours, over the limit)",
+      "why": "measure Turnkey's revoke/rewrap rate limit on real keys, then re-run this drill with --provider-rate <calls per second>; until then the one-hour claim is unproven and the product does not launch on a key-compromise promise nobody can keep"
+    },
+    {
+      "status": "PASS",
+      "name": "signing_service_compromised: every step passed (13 steps, 0.06 s of 3600 s budget)",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "signing_service_compromised: inside its budget (0.06 s)",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "key_in_a_log: every step passed (9 steps, 0.11 s of 1800 s budget)",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "key_in_a_log: inside its budget (0.11 s)",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "contractor_leaves: every step passed (6 steps, 0.18 s of 3600 s budget)",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "contractor_leaves: inside its budget (0.18 s)",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "support_impersonation: every step passed (8 steps, 0.23 s of 300 s budget)",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "support_impersonation: inside its budget (0.23 s)",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "wallet_provider_outage: every step passed (12 steps, 0.03 s of 900 s budget)",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "wallet_provider_outage: inside its budget (0.03 s)",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "BREAK-GLASS UNDER THE KIT'S ONE HOUR (0.06 s measured, 3600 s limit)",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "every drill wrote its own record into the product's drill table (6 rows)",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "canary: a drill with no steps recorded is a failure, not a pass",
+      "why": ""
+    }
+  ]
+}

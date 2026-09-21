@@ -119,3 +119,88 @@ Two surfaces the kit names are **not testable over HTTP today**, and that is rec
   API identity, and the comparator that guards the executor's door answers correctly in both directions (it
   refuses an empty or missing secret, and accepts the real one). The executor's own refusal of a foreign intent is
   `tools/p08-gate-check.py`'s drill.
+
+---
+
+## D2 — the six key-compromise drills, with a stopwatch on each
+
+`tools/p14-key-drills.py` runs six scenarios end to end and records a wall-clock time for every one. Recorded run:
+`docs/verification/P14-key-drills.txt` / `.json` → **`15 checks passed, 0 failed, 1 OPEN`**, and the one open item
+is a launch condition, not a formality (below).
+
+Two rules shape the tool, and both of them bit during its own construction:
+
+* **Every step calls the product's own function** — `SEC.revoke_all_sessions`, `SEC.revoke_key`,
+  `keys.rotation_plan`, `keys.can_retire_kek`, the kill switch's own table, the executor's own preflight. A drill
+  that re-implements the procedure measures the drill; the first version of the provider-outage scenario drove an
+  HTTP route that returns *wrapped* material and never touches a signer, so it was measuring a refusal by a
+  different control entirely.
+* **The clock starts when the response starts.** The break-glass population (500 wrapped keys by default) is built
+  before the clock starts, and the population's Argon2id hashing is deliberately outside the measurement. Inflating
+  a security measurement is a lie in the safe direction, and it is still a lie.
+
+| Drill | What it does | Measured | Budget |
+|---|---|---|---|
+| `user_key_leaked` | revoke the account's sessions, revoke the key generation, confirm no live wrap remains | **0.2 s** | 15 min |
+| `signing_service_compromised` | kill switch → two-approver session revocation → re-wrap every DEK under a new KEK → read every one back → revoke the old generations → retire the old KEK → release the halt | **0.06 s** for 500 keys (local half) | 60 min |
+| `key_in_a_log` | a private key, a mnemonic and an initData hash through the **real log-line builder**, then the key treated as compromised | **0.1 s** | 30 min |
+| `contractor_leaves` | rotate the operator token, confirm the old one is refused and the new one works, record the rotation in the secret inventory | **0.2 s** | 60 min |
+| `support_impersonation` | an operator token against every money path a support agent could be asked to use | **0.2 s** | 5 min |
+| `wallet_provider_outage` | the executor's signer seam answering nothing, then recovery | **0.03 s** | 15 min |
+
+What makes these more than "it worked":
+
+* **Must-accept guards.** The stolen session is used *before* the drill (a drill measuring an already-dead token
+  proves nothing), the operator credential is used before rotation, and the revenue-side refusal is paired with a
+  legal order that still gets through.
+* **Must-refuse on the dangerous path.** A **single** approver is refused (an attacker holding the admin token must
+  not be able to run the break-glass alone), and the kill switch is checked on the *record*, not in the response.
+* **Read-before-retire.** Every re-wrapped DEK is opened under the new KEK before any old generation is revoked,
+  and the old KEK is retired only when `can_retire_kek` says nothing live references it. The rotation follows P07's
+  order — mint new → serve both → revoke old → retire — because `key_wraps` is unique on `(user_id, dek_version)`
+  and the schema is what refuses a rotation that would leave an in-flight signature unresolvable.
+* **Recovery is asserted, not assumed.** The provider drill ends with the halt released, the intent executed, and a
+  third pass that must not re-POST.
+
+### Finding F6 — a provider outage killed the executor pass (fixed)
+
+The drill found it on its first run: **`signer.sign()` was the one external call in `handle_intent` that was not
+guarded** — the venue calls beneath it already catch `TimeoutError`/`ConnectionError` — so a signing provider that
+raised (a 500, a timeout, a dead session key) propagated out of `handle_intent`, out of `tick`, and killed the
+whole pass: every other intent in the batch unprocessed, the intent left in `signing`, and a worker that
+crash-loops for as long as the provider is down. The attempts-permanent class of defect that the kit says may never
+be deferred: the component that signs for everybody was one provider hiccup away from a halt.
+
+The fix is in `services/executor/main.py` and the decision inside it is the load-bearing part: **the intent goes
+back to `queued`, not to `uncertain`.** The attempt row is written *after* signing, so a signer that answered
+nothing proves nothing was sent; `uncertain` is never auto-requeued, so using it here would have turned a provider
+blip into a queue of orders a human has to clear one at a time. The failure is named (`SIGNER_UNAVAILABLE`), the
+lifecycle state stays inside the state machine's own vocabulary (`draft`, from the vocabulary the DB checks), and
+the requeued intent re-runs the risk gate on its next attempt — so a retry can never ride an old book snapshot into
+the market. The drill observed exactly that on its own first green run: with a stale book the retry came back
+`rejected / STALE_QUOTE`, which is the gate doing its job on the second pass.
+
+*Retest:* `tests/test_executor_service.py::TestSignerOutage` — the tick must not raise, the intent must be `queued`
+with `SIGNER_UNAVAILABLE`, there must be no attempt row / venue call / order / fill / cash, the trail must name the
+reason, the user must be notified, and the retry after the provider returns must produce **exactly one** order
+(and a third pass must not re-POST it).
+
+### OPEN — the one-hour break-glass is unproven, and that gates the launch
+
+The kit's constraint is that a full break-glass takes under an hour and that a breach is said in writing. Here is
+the writing:
+
+* **The half we control is measured**: kill switch, two-approver revocation of 500 sessions, re-wrap of 500 DEKs
+  under a new KEK, read-back verification of all 500, revocation of the superseded generations and retirement of
+  the old KEK took **0.06 s**, and at the measured 0.06 ms/key a 10,000-key rotation projects to well under a
+  minute.
+* **The half we do not control is unmeasured.** Re-wrapping 10,000 DEKs at a custodian is 10,000 provider calls,
+  and `keys.revocation_throughput` is explicit that the provider's rate limit — not our batching — is the binding
+  constraint: at **1 call/s per key, 10,000 keys is 2.8 hours**, over the limit. Turnkey's limit has not been
+  measured on real keys.
+
+So the recorded artifact says `CONDITIONAL`, not `PASS`, and the condition is repeated in the report:
+**the product does not launch on a key-compromise promise nobody has measured.** The measurement is one re-run —
+`python3 tools/p14-key-drills.py --provider-rate <calls per second>` — and until it exists the claim is open. This
+is the honest shape of the kit's rule: a drill that reported `PASS` here would be claiming an hour we cannot
+demonstrate.
