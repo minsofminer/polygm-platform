@@ -274,5 +274,10 @@ withdrawal ceremony (password, then the authenticator code) against the allowlis
   1,984 MB of RAM and no swap — the build reaches "Creating an optimized production build" and is OOM-killed
   (`BUILD_EXIT=137`), both with a 1,400 MB heap cap and with 850 MB. The one thing the attempt *did* buy is a real
   bug: the first run failed on `@import` ordering in `globals.css` (the QR rules had been added above the token
-  import), which is fixed. The build itself is a CI/Vercel-side check for P15; the phone run in the acceptance list is
-  still the owner's step, and the two things under "only the owner can finish" are unchanged.
+  import), which is fixed. **The build itself is fine — Vercel built this commit in 20 s**, which is why the alias
+  below carries the wallet. P08's c8/c11 stay red on this machine and nowhere else.
+* the deployed Mini App after this commit: `https://polygm-mini-app.vercel.app` answers 200 with `X-Robots-Tag:
+  noindex`, `/wallet` and `/markets` 404, and the document carries the view switch (`>Trade<`, `>Wallet<`) — the
+  wallet is a view on the root document, so the URL BotFather is registered with still opens the product. The phone
+  run in the acceptance list is still the owner's step, and the two things under "only the owner can finish" are
+  unchanged.
