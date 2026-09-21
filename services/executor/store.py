@@ -368,10 +368,10 @@ class Store:
         if not str(code or ""):
             return {"recorded": False, "reason": "no builder code on the order"}
         self.execute("INSERT INTO builder_code_status (code, state, last_seen_ms, changed_ms, reject_count,"
-                     " source, note) VALUES (?,?,?,?,1,'venue',?)"
+                     " source, note) VALUES (?,?,?,?,1,'venue_rejection',?)"
                      " ON CONFLICT(code) DO UPDATE SET state='disabled', last_seen_ms=excluded.last_seen_ms,"
                      " changed_ms=excluded.changed_ms, reject_count=builder_code_status.reject_count + 1,"
-                     " source='venue', note=excluded.note",
+                     " source='venue_rejection', note=excluded.note",
                      (str(code), "disabled", int(at), int(at), str(reason)[:400]))
         return {"recorded": True, "code": str(code)}
 

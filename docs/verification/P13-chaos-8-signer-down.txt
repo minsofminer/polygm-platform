@@ -1,0 +1,8 @@
+CHAOS 8 — signer / wallet provider down
+==============================================================================
+verdict: PASS
+elapsed: 0.8 s
+
+executor with a watch-only wallet: state=rejected code=SIGNATURE_REFUSED posts=0
+reads during the outage: book -> 200, healthz -> 200
+

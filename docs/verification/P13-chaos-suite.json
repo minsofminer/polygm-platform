@@ -1,0 +1,106 @@
+{
+  "at": "2026-09-21T05:16:47+0000",
+  "drills": {
+    "1": {
+      "artifact": "docs/verification/P13-chaos-1-executor-kill.txt",
+      "facts": {
+        "artifact": "docs/verification/P13-chaos-1-executor-kill.txt",
+        "runs": 6
+      },
+      "title": "executor killed mid-submit",
+      "verdict": "PASS"
+    },
+    "10": {
+      "artifact": "docs/verification/P13-chaos-10-key-compromise.txt",
+      "facts": {
+        "artifact": "docs/verification/P13-chaos-10-key-compromise.txt"
+      },
+      "title": "key compromise drill",
+      "verdict": "PASS"
+    },
+    "3": {
+      "artifact": "docs/verification/P13-chaos-3-ingest-killed-mid-write.txt",
+      "facts": {
+        "distinct_keys": 4000,
+        "durable_at_kill": 3476,
+        "rows_after_replay": 4000
+      },
+      "title": "ingest killed mid-write",
+      "verdict": "PASS"
+    },
+    "4": {
+      "artifact": "docs/verification/P13-chaos-4-database-killed-mid-flight.txt",
+      "facts": {
+        "idem_rows_added_while_locked": 0,
+        "recovered_status": 202,
+        "refusal_ms": 5309.6,
+        "refused_status": 503,
+        "rows_added_while_locked": 0
+      },
+      "title": "database killed mid-flight",
+      "verdict": "PASS"
+    },
+    "5": {
+      "artifact": "docs/verification/P13-chaos-5-cache-killed.txt",
+      "facts": {
+        "cache_entries_cleared": 0,
+        "ms_each": 3.4,
+        "ok": 25,
+        "reads": 25
+      },
+      "title": "cache killed",
+      "verdict": "PASS"
+    },
+    "6": {
+      "artifact": "docs/verification/P13-chaos-6-venue-429-storm.txt",
+      "facts": {
+        "intents_with_two_orders": 0,
+        "refusals": {
+          "ORDER_RATE@preflight": 25,
+          "STALE_QUOTE@preflight": 15,
+          "THROTTLED@preflight": 8
+        },
+        "states": {
+          "queued": 20,
+          "rejected": 48
+        },
+        "venue_requests_phase_a": 8,
+        "venue_requests_phase_b": 0
+      },
+      "title": "venue 429 storm",
+      "verdict": "PASS"
+    },
+    "7": {
+      "artifact": "docs/verification/P13-chaos-7-builder-code-disabled-by-the-venue.txt",
+      "facts": {
+        "first_code": "BUILDER_DISABLED",
+        "intent_state": "rejected",
+        "reject_count": 1,
+        "retried": 0,
+        "sentence": "The venue refused the order because the builder code on it is disabled, so nothing was placed. The code is marked off an",
+        "status_state": "disabled"
+      },
+      "title": "builder code disabled by the venue",
+      "verdict": "PASS"
+    },
+    "8": {
+      "artifact": "docs/verification/P13-chaos-8-signer-down.txt",
+      "facts": {
+        "book_status": 200,
+        "code": "SIGNATURE_REFUSED",
+        "posts": 0
+      },
+      "title": "signer / wallet provider down",
+      "verdict": "PASS"
+    },
+    "9": {
+      "artifact": "docs/verification/P13-chaos-9-kill-switch.txt",
+      "facts": {
+        "artifact": "docs/verification/P13-chaos-9-kill-switch.txt"
+      },
+      "title": "kill switch during a copy-trade",
+      "verdict": "PASS"
+    }
+  },
+  "failed": []
+}

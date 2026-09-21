@@ -1,0 +1,8 @@
+CHAOS 5 — cache killed
+==============================================================================
+verdict: PASS
+elapsed: 0.9 s
+
+first read: market 200, book levels 5, 0 cache entries cleared
+25 market+book reads with an empty cache: 25 complete, 86 ms total, 3.4 ms each
+

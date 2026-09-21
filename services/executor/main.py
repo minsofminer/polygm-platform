@@ -237,9 +237,12 @@ class Executor:
         # signed it.
         all_in = notional_floor(it.size_micro, it.price_micro) + fees.total_micro
         if it.all_in_limit_micro and all_in > it.all_in_limit_micro:
+            # In dollars, not micros. The refusal is rendered on the user's phone, and `56045000` is not a
+            # number anyone has ever spent: P13's money matrix asserts both figures are *formatted*, which is
+            # how this line was caught reading its own integer columns out loud.
             return self._reject(o, it, code="OVER_ORDER_CAP",
-                                msg="the all-in cost %d is above this order's cap of %d"
-                                    % (all_in, it.all_in_limit_micro), at=at, t0=t0)
+                                msg="the all-in cost %s is above this order's cap of %s"
+                                    % (fmt_usdc(all_in), fmt_usdc(it.all_in_limit_micro)), at=at, t0=t0)
         pf = v2.preflight(order_type=it.order_type, audience=it.audience, side=it.side,
                           price_micro=it.price_micro, size_shares_micro=it.size_micro,
                           usdc_available_micro=self.store.balance_available_micro(it.user_id),
@@ -390,7 +393,14 @@ class Executor:
                 # The one rejection that is not about this order: the venue has switched the code off, so every
                 # order under it will be refused until someone acts. Recorded at the code, in the table an
                 # operator already reads, and counted — see `Store.record_builder_rejection`.
-                self.store.record_builder_rejection(code=str(getattr(it, "builder_code", "") or ""),
+                #
+                # The code comes from the PAYLOAD, which is where it actually is. The first version of this line
+                # read `getattr(it, "builder_code", "")` and `IntentRow` has no such field, so the alarm recorded
+                # nothing while the venue was refusing every order under the code: P13's chaos drill caught it
+                # on the first run, which is what the drill is for. (The payload's `builder` is the zero code
+                # today — see the finding in docs/verification/P13-chaos-7-*.txt: the order path does not yet
+                # carry the user's referral code to the venue, so this alarm reports on the code we did send.)
+                self.store.record_builder_rejection(code=str(payload.get("builder") or ""),
                                                     reason=str((resp or {}).get("message") or "builder code "
                                                                                             "disabled at the venue"),
                                                     at=at)

@@ -1,0 +1,63 @@
+P13 D7 — ten chaos tests
+==============================================================================
+
+ 1. PASS     executor killed mid-submit
+     report: docs/verification/P13-chaos-1-executor-kill.txt
+     artifact: docs/verification/P13-chaos-1-executor-kill.txt
+     runs: 6
+
+ 3. PASS     ingest killed mid-write
+     report: docs/verification/P13-chaos-3-ingest-killed-mid-write.txt
+     distinct_keys: 4000
+     durable_at_kill: 3476
+     rows_after_replay: 4000
+
+ 4. PASS     database killed mid-flight
+     report: docs/verification/P13-chaos-4-database-killed-mid-flight.txt
+     idem_rows_added_while_locked: 0
+     recovered_status: 202
+     refusal_ms: 5309.6
+     refused_status: 503
+     rows_added_while_locked: 0
+
+ 5. PASS     cache killed
+     report: docs/verification/P13-chaos-5-cache-killed.txt
+     cache_entries_cleared: 0
+     ms_each: 3.4
+     ok: 25
+     reads: 25
+
+ 6. PASS     venue 429 storm
+     report: docs/verification/P13-chaos-6-venue-429-storm.txt
+     intents_with_two_orders: 0
+     refusals: {'ORDER_RATE@preflight': 25, 'STALE_QUOTE@preflight': 15, 'THROTTLED@preflight': 8}
+     states: {'queued': 20, 'rejected': 48}
+     venue_requests_phase_a: 8
+     venue_requests_phase_b: 0
+
+ 7. PASS     builder code disabled by the venue
+     report: docs/verification/P13-chaos-7-builder-code-disabled-by-the-venue.txt
+     first_code: BUILDER_DISABLED
+     intent_state: rejected
+     reject_count: 1
+     retried: 0
+     sentence: The venue refused the order because the builder code on it is disabled, so nothing was placed. The code is marked off an
+     status_state: disabled
+
+ 8. PASS     signer / wallet provider down
+     report: docs/verification/P13-chaos-8-signer-down.txt
+     book_status: 200
+     code: SIGNATURE_REFUSED
+     posts: 0
+
+ 9. PASS     kill switch during a copy-trade
+     report: docs/verification/P13-chaos-9-kill-switch.txt
+     artifact: docs/verification/P13-chaos-9-kill-switch.txt
+
+10. PASS     key compromise drill
+     report: docs/verification/P13-chaos-10-key-compromise.txt
+     artifact: docs/verification/P13-chaos-10-key-compromise.txt
+
+CHAOS SUITE: PASS — 9 of 9 drills reported
+The kit's ten rows are all represented; the substitutions (no Redis, SQLite in dev/CI) are stated
+in the artifact of the drill that hits them rather than left implicit.

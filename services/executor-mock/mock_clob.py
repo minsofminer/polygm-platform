@@ -254,6 +254,14 @@ class MockClob:
             scen = self.scenario
             for o in self.orders.values():
                 if scen == "partial_fill" and o["status"] == "live":
+                    # The order type is in the payload we send, so a venue that ignores it is not modelling a
+                    # venue: fill-or-kill means the order is either filled whole or not at all. Found by P13's
+                    # money matrix, which asked for "FOK rejected → no fill, no partial" and got a partial fill
+                    # back from a mock that had never read the field.
+                    if str(o["payload"].get("order_type") or "").upper() == "FOK":
+                        o["status"] = "cancelled"
+                        self.cancelled += 1
+                        continue
                     o["status"] = "matched"
                     # The 40% is computed in MICRO units, not as a float: `size * 0.4` on 6 shares is
                     # 2.4000000000000004 in binary floating point, and the reconciler's `_exact_micro` round-trips

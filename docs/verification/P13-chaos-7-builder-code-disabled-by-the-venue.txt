@@ -1,0 +1,10 @@
+CHAOS 7 — builder code disabled by the venue
+==============================================================================
+verdict: PASS
+elapsed: 0.6 s
+
+first tick: state=rejected code=BUILDER_DISABLED
+second tick 5 s later: handled=[] posts=1
+builder_code_status: state=disabled source=venue_rejection rejections=1 note=mock: builder code  is disabled
+user-facing sentence: The venue refused the order because the builder code on it is disabled, so nothing was placed. The code is marked off an
+

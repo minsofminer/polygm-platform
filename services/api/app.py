@@ -99,6 +99,13 @@ CODES = {
     "DAILY_CAP": ("24h limit reached", 403, False),
     "IDEM_CONFLICT": ("idempotency key reused with a different body", 409, False),
     "IDEM_IN_PROGRESS": ("the first attempt is still running", 409, True),
+    # Registered late and for a real reason: `SERVICE_UNAVAILABLE` was already being *returned* by the referral
+    # route (a missing salt is a misconfiguration, not a bad request) while missing from this table, and `err()`
+    # falls back to `("request failed", 400, False)` for an unregistered code — so a configuration outage was
+    # answering 400 "your request is wrong" to a client whose request was fine. P13's chaos drill on the store
+    # then found the same shape one layer down, and the fix is the same code for both: a dependency is down,
+    # nothing was placed, and retrying is the correct advice.
+    "SERVICE_UNAVAILABLE": ("a dependency is unavailable; nothing was placed - retry", 503, True),
     "RISK_UNAVAILABLE": ("risk check unavailable", 503, True),
     "SIGNER_UNAVAILABLE": ("signing is unavailable; trading disabled", 503, True),
     "NOT_FOUND": ("no such market", 404, False),
@@ -545,6 +552,18 @@ def _on_crash(request: Request, exc: Exception):
     rid = getattr(request.state, "request_id", "-")
     print(_redact.line(ts=_now_ms(), level="error", ev="unhandled", rid=rid, type=type(exc).__name__,
                        msg=_redact.redact_text(str(exc))[:400]), flush=True)
+    # A store that refuses the write is a dependency outage, not a bug in this process: the file is the problem,
+    # the request was fine, and the client should be told 503-and-retry rather than 500. Only the shapes SQLite
+    # raises when the STORE is the problem are mapped here; a programming error ("no such column") is still
+    # INTERNAL and still keeps its Python message out of the body.
+    if isinstance(exc, sqlite3.OperationalError) and any(
+            marker in str(exc).lower() for marker in
+            ("database is locked", "database table is locked", "readonly database", "unable to open database",
+             "disk i/o error", "database or disk is full")):
+        msg, status, retry = CODES["SERVICE_UNAVAILABLE"]
+        return JSONResponse({"error": {"code": "SERVICE_UNAVAILABLE", "message": msg, "retryable": retry,
+                                       "requestId": rid}}, status_code=status,
+                            headers={"Retry-After": "2"})
     msg, status, retry = CODES["INTERNAL"]
     return JSONResponse({"error": {"code": "INTERNAL", "message": msg, "retryable": retry,
                                   "requestId": rid}}, status_code=status,
@@ -8926,6 +8945,7 @@ def _tg_plain_refusal(code: str, detail: str = "") -> str:
                    "the app once you have read what happened."),
         "RISK_UNAVAILABLE": ("The risk check could not run, so I will not send an order through it. Nothing was "
                              "placed — try again in a moment."),
+        "SERVICE_UNAVAILABLE": ("Our database refused the write, so nothing was placed — try again in a moment."),
         "SIGNER_UNAVAILABLE": "Signing is unavailable right now, so nothing can be placed. Try again shortly.",
         # --- the market itself -----------------------------------------------------------------------
         "MARKET_NOT_ACCEPTING": "That market is not taking orders at the moment. Nothing was placed.",

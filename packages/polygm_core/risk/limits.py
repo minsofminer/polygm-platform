@@ -78,6 +78,12 @@ DENY_CODES: dict[str, DenySpec] = dict([
     _d("THROTTLED", 429, True, "warn", "venue is rate limiting us", "p06"),
     _d("VALIDATION", 422, False, "info", "venue could not parse the order", "p06"),
     _d("DELAYED", 409, True, "info", "this market opens on a delay", "p06"),
+    # P13 D7.7: the venue can switch a builder code off, and that refusal is not a generic one — it is a
+    # commercial event (revenue for that code stops) with its own sentence. It reaches this registry because the
+    # executor's `_reject` renders every code through `spec_for`, which raises on an unregistered one: without
+    # this line, a disabled builder code crashed the executor instead of telling the user, which the P13 chaos
+    # suite caught on its first run.
+    _d("BUILDER_DISABLED", 409, False, "warn", "the venue has disabled that builder code", "p13"),
     _d("VENUE_REJECTED", 422, False, "warn", "the venue rejected this order", "p06"),
     # --- P06 risk extras
     _d("CIRCUIT_OPEN", 503, True, "hard", "risk controls are unavailable; nothing will be signed", "p06"),

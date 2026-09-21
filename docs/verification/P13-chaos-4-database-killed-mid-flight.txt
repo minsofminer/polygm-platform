@@ -1,0 +1,12 @@
+CHAOS 4 — database killed mid-flight
+==============================================================================
+verdict: PASS
+elapsed: 6.2 s
+
+before the lock: POST /v1/orders -> 202
+with the write lock held: POST /v1/orders -> 503 in 5310 ms, code SERVICE_UNAVAILABLE
+body: {"error": {"code": "SERVICE_UNAVAILABLE", "message": "a dependency is unavailable; nothing was placed - retry", "retryable": true, "requestId": "f18ed0752aba4251"}}
+rows with the lock held (intents, cash, idem): (1, 0, 1)
+after the lock is released: GET /v1/markets/0xM1 -> 200
+and an order is accepted again: POST /v1/orders -> 202; rows now (intents, cash, idem) (2, 0, 2)
+

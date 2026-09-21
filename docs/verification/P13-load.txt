@@ -1,0 +1,31 @@
+P13 D5 load tests — full
+==============================================================================
+
+[soak] starting
+[soak] FAIL — soak: 6000 duplicate deliveries (the idempotency key is supposed to make this zero)
+
+[books] starting
+[books] PASS in 120.0 s
+
+[api] starting
+[api] PASS in 124.6 s
+
+[storm] starting
+[storm] FAIL — storm: the API did not come back after the kill
+
+[fanout] starting
+[fanout] PASS in 56.4 s
+
+[budget] starting
+[budget] PASS in 60.4 s
+
+==============================================================================
+LOAD: FAIL — 4 of 6 tests passed in 2209.5 s
+  - soak: soak: 6000 duplicate deliveries (the idempotency key is supposed to make this zero)
+  - storm: storm: the API did not come back after the kill
+
+Adaptations, stated rather than hidden:
+  * the API runs on SQLite (this box's engine); one writer, so its concurrency numbers are a floor
+  * the reconnect storm is over REST polling, because this deployment has no WebSocket server
+  * the fanout figures are a drain model (16 workers × 80 ms median send), not a live Telegram run
+  * no test here reaches Polymarket: the venue side is a counting transport and generated payloads

@@ -116,8 +116,11 @@ class TestOrderStructAgainstTheVenueValidator(unittest.TestCase):
         app = import_app("api-p13-codes")
         codes = set(app.CODES)
         mapped = set(clob_v2.BATCH_ITEM_CODES.values())
-        unknown = sorted(c for c in mapped if not (limits.deny_code_known(c) or c in codes))
-        self.assertEqual([], unknown, "these venue rejections are in neither vocabulary: %s" % unknown)
+        # Every code the executor can *write* must be in the risk plane's registry: `_reject` renders each one
+        # through `spec_for(code)` and raises on an unknown name, so a mapped venue rejection that is missing
+        # here is a crash in the executor rather than a refusal on the user's phone.
+        unknown = sorted(c for c in mapped if not limits.deny_code_known(c))
+        self.assertEqual([], unknown, "these venue rejections would crash `_reject`: %s" % unknown)
         # and the ones without their own sentence must still get a true one from the fallback
         for code in mapped - codes:
             sentence = app._tg_plain_refusal(code)

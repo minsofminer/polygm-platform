@@ -1,0 +1,10 @@
+CHAOS 6 — venue 429 storm
+==============================================================================
+verdict: PASS
+elapsed: 0.1 s
+
+phase A (8 orders, under our budget): 8 venue requests, refusals {('THROTTLED', 'preflight'): 8}
+phase B (60 orders, over the budget): 0 further venue requests, refusals now {('THROTTLED', 'preflight'): 8, ('ORDER_RATE', 'preflight'): 25, ('STALE_QUOTE', 'preflight'): 15}
+orders rows: 0, fills: 0, cash rows: 0, intents with two orders: 0
+the two refusals are distinguishable to the user: `THROTTLED` is the venue's answer, `ORDER_RATE` is ours, and both say retryable/not per their registry entry
+

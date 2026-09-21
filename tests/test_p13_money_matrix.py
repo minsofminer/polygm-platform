@@ -29,10 +29,10 @@ import unittest
 from fractions import Fraction
 
 from conftest import import_app, refresh_flags                          # noqa: F401
-from test_executor_service import Harness                               # the funded queue + scenario venue
+from test_executor_service import Cfg, Harness                          # the funded queue + scenario venue
 from test_telegrambot_api import CHAT, TG_USER, UID, TelegramBase, sign_init_data   # noqa: F401
 
-from polygm_core.money.cents import SCALE, notional_floor
+from polygm_core.money.cents import SCALE, fmt_usdc, notional_floor
 from polygm_core.venue import clob_v2 as v2
 
 # The rates the product charges: none, the venue's measured taker rates, and our builder leg.
@@ -207,6 +207,34 @@ class TestFillOrKill(Harness):
         self.assertEqual(1, self.tp.post_calls)
 
 
+    def test_a_partially_fillable_book_kills_the_fok_and_leaves_the_limit_order_working(self):
+        """One book, two order types: the venue can fill only 40% of either, so the FOK is killed and the limit
+        order works. Both orders carry `order_type` in the signed payload — which is what makes this a test of
+        the product and of the mock together: until P13 asked for this case, the mock partial-filled a
+        fill-or-kill order, i.e. it modelled a venue that has never existed.
+        """
+        self.mock.set_scenario("partial_fill")
+        fok = self.queue(order_type="FOK", audience="automation", key="p13-fok-partial")
+        gtc = self.queue(order_type="GTC", audience="automation", key="p13-gtc-partial")
+        self.ex.tick(at=self.at, reconcile=False)
+        self.mock.tick_scenario()
+        # After the grace: inside it, a missing fill is not yet evidence (see `Cfg.fill_grace_ms`).
+        self.ex.tick(at=self.at + Cfg.fill_grace_ms + 1_000, reconcile=True)
+        self.assertEqual(1, self.mock.cancelled, "the venue did not kill exactly one order, and it had to be the FOK")
+        fok_orders = {r["id"] for r in self.rows("SELECT id FROM orders WHERE intent_id=?", (fok,))}
+        self.assertEqual([], [f for f in self.fills() if f["order_id"] in fok_orders],
+                         "a fill-or-kill order booked a partial fill")
+        self.assertGreaterEqual(len([f for f in self.fills()
+                                     if f["order_id"] in {r["id"] for r in
+                                                          self.rows("SELECT id FROM orders WHERE intent_id=?",
+                                                                    (gtc,))}]), 1,
+                                "the control order booked nothing, so this test would pass against a venue that "
+                                "fills nothing at all")
+        self.assertEqual(40 * 10**6, sum(int(r["shares_open_micro"]) for r in
+                                         self.rows("SELECT shares_open_micro FROM position_lots")),
+                         "the book holds the limit order's 40% and nothing from the killed FOK")
+
+
 class TestAllInCapAtTheExecutor(Harness):
     """OL-11's second half: the cap has a reader, and the reader is the last stop before signing."""
 
@@ -261,6 +289,63 @@ class TestAllInCapAtTheExecutor(Harness):
         cap2 = int(self.rows("SELECT all_in_limit_micro AS c FROM order_directives WHERE intent_id=?",
                              (r2["intent_id"],))[0]["c"])
         self.assertEqual(42_000_000, cap2)
+
+    def test_the_fee_is_inside_the_cap_so_the_boundary_moves_with_it(self):
+        """Two identical orders at one cap: the fee-free one fits and the fee-bearing one does not.
+
+        This is D2's sentence made falsifiable — if the cap were compared against the notional alone, both
+        orders would go through and the fee would be discovered by the venue after we had signed.
+        """
+        notional = notional_floor(100 * 10**6, 550_000)
+        free = self.queue(price_micro=550_000, size_micro=100 * 10**6, builder_bps=0, fee_rate_bps=0,
+                          key="p13-cap-free")
+        paid = self.queue(price_micro=550_000, size_micro=100 * 10**6, builder_bps=100, fee_rate_bps=200,
+                          key="p13-cap-fee")
+        for iid in (free, paid):
+            self.store.conn.execute("UPDATE order_directives SET all_in_limit_micro=? WHERE intent_id=?",
+                                    (notional, iid))
+        rep = self.ex.tick(at=self.at, reconcile=False)
+        by_id = {h["intent_id"]: h for h in rep["handled"]}
+        self.assertEqual("submitted", by_id[free]["state"], by_id[free])
+        self.assertEqual("rejected", by_id[paid]["state"], "a fee-bearing order passed a cap that excludes the fee")
+        self.assertEqual("OVER_ORDER_CAP", by_id[paid]["code"], by_id[paid])
+        fees = v2.estimate_fees(size_shares_micro=100 * 10**6, price_micro=550_000, fee_rate_bps=200,
+                                builder_bps=100)
+        reason = self.rows("SELECT reason FROM order_lifecycle WHERE intent_id=? AND state='rejected'", (paid,))
+        sentence = reason[0]["reason"] if reason else ""
+        # The refusal is rendered on a phone: micros are not a number anyone has spent.
+        self.assertIn(fmt_usdc(notional + fees.total_micro), sentence, sentence)
+        self.assertIn(fmt_usdc(notional), sentence, sentence)
+
+    def test_the_fee_the_cap_is_sized_with_is_the_one_measured_off_the_tape(self):
+        """The rate is not a constant: P01 measured that nearly every market is 0 bps and a few are not, so the
+        order path reads the fee off the tape. A market whose tape says 200 bps must size its cap with 200."""
+        app = import_app("api-p13-measured-fee")
+        row = app._db.execute("SELECT id, slug, condition_id FROM markets WHERE slug IS NOT NULL LIMIT 1").fetchone()
+        self.assertIsNotNone(row)
+        mid, slug, cond = str(row[0]), str(row[1]), str(row[2])
+        at = app._now_ms()
+        app._db.execute("DELETE FROM book_levels WHERE market_id=?", (mid,))
+        app._db.execute("INSERT INTO book_levels (market_id, side, price_micro, size_shares_micro, level_count,"
+                        " updated_ms) VALUES (?, 'ask', 620000, 900000000, 1, ?)", (mid, at))
+        app._db.execute("INSERT INTO tape_fills (dedupe_key, condition_id, token_id, outcome, outcome_index,"
+                        " wallet, side, price_micro, size_micro, usd_notional_micro, ts_ms, ingest_ms, source,"
+                        " fee_rate_bps) VALUES ('p13-measured-fee', ?, 'tok-measured', 'Yes', 0, '0xwallet',"
+                        " 'BUY', 620000, 1000000, 620000, ?, ?, 'rest', 200)", (cond, at, at))
+        app._db.commit()
+        app._FEE_RATE_CACHE.clear()          # the lookup is cached for a minute; this test just changed the tape
+        uid = str(app._db.execute("SELECT id FROM users LIMIT 1").fetchone()[0])
+        out = app._order_from_card(uid, {"slug": slug, "side": "yes", "amount": "25"}, "p13-measured-fee-1")
+        self.assertTrue(out["ok"], out)
+        rate, cap = app._db.execute("SELECT fee_rate_bps, all_in_limit_micro FROM order_directives"
+                                    " WHERE intent_id=?", (out["intent_id"],)).fetchone()
+        self.assertEqual(200, int(rate), "the order was sized against a fee rate the tape does not support")
+        fees = v2.estimate_fees(size_shares_micro=int(out["shares_micro"]), price_micro=int(out["price_micro"]),
+                                fee_rate_bps=200, builder_bps=0)
+        notional = notional_floor(int(out["shares_micro"]), int(out["price_micro"]))
+        self.assertEqual(notional + fees.total_micro, int(cap))
+        self.assertGreater(int(cap), notional, "the cap cannot be the notional when the tape says 200 bps")
+        self.assertLessEqual(notional, 25_000_000, "a $25 card spent more than $25 on shares")
 
     def test_the_amount_route_queues_a_directive_with_a_cap_the_executor_can_read(self):
         # The API is the third producer, and until this phase it wrote intents with no directive at all — so the

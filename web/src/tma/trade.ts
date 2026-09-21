@@ -222,6 +222,7 @@ export function plainRefusal(code: string, detail?: string): string {
     RISK_HALT: "Trading is paused right now. Nothing you did caused it — try again shortly.",
     HALTED: "Your account is stopped for the day: your own daily-loss limit was hit. Read what happened and lift it.",
     RISK_UNAVAILABLE: "The risk check could not run, so nothing was placed. Try again in a moment.",
+    SERVICE_UNAVAILABLE: "Our database refused the write, so nothing was placed. Try again in a moment.",
     SIGNER_UNAVAILABLE: "Signing is unavailable right now, so nothing can be placed. Try again shortly.",
     MARKET_NOT_ACCEPTING: "That market is not taking orders at the moment. Nothing was placed.",
     NOT_FOUND: "I could not find that market — it may have closed.",

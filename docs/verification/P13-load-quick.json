@@ -1,0 +1,245 @@
+{
+  "at": "2026-09-21T05:08:18+0000",
+  "failures": [],
+  "mode": "quick (CI)",
+  "paced": false,
+  "quick": true,
+  "results": {
+    "api": {
+      "basis": "500 concurrent users at the measured per-client rate, against one worker's peak",
+      "engine": "sqlite (single writer; a lower bound on Postgres)",
+      "knee_clients": 10,
+      "ramp": [
+        {
+          "as_of_top": [
+            [
+              "1789967267038",
+              234
+            ],
+            [
+              "1789967267036",
+              120
+            ]
+          ],
+          "distinct_as_of": 220,
+          "max_ms": 325.5,
+          "ok": 825,
+          "other": {},
+          "p50_ms": 18.089,
+          "p95_ms": 151.649,
+          "p99_ms": 232.189,
+          "requests": 825,
+          "requests_per_s": 266.2,
+          "sample_errors": [],
+          "seconds": 3.1,
+          "server_errors": 0,
+          "slowest": [
+            [
+              325.5,
+              "/v1/leaderboard?limit=25"
+            ],
+            [
+              311.7,
+              "/v1/leaderboard?limit=25"
+            ],
+            [
+              276.2,
+              "/v1/leaderboard?limit=25"
+            ]
+          ],
+          "straggler_threads": 0,
+          "users": 10
+        },
+        {
+          "as_of_top": [
+            [
+              "1789967267038",
+              236
+            ],
+            [
+              "1789967267036",
+              121
+            ]
+          ],
+          "distinct_as_of": 212,
+          "max_ms": 1072.3,
+          "ok": 829,
+          "other": {},
+          "p50_ms": 50.003,
+          "p95_ms": 374.142,
+          "p99_ms": 630.5,
+          "requests": 829,
+          "requests_per_s": 268.6,
+          "sample_errors": [],
+          "seconds": 3.09,
+          "server_errors": 0,
+          "slowest": [
+            [
+              1072.3,
+              "/v1/leaderboard?limit=25"
+            ],
+            [
+              742.1,
+              "/v1/leaderboard?limit=25"
+            ],
+            [
+              730.7,
+              "/v1/leaderboard?limit=25"
+            ]
+          ],
+          "straggler_threads": 0,
+          "users": 25
+        },
+        {
+          "as_of_top": [
+            [
+              "1789967267038",
+              225
+            ],
+            [
+              "1789967267036",
+              128
+            ]
+          ],
+          "distinct_as_of": 211,
+          "max_ms": 1511.0,
+          "ok": 798,
+          "other": {},
+          "p50_ms": 104.234,
+          "p95_ms": 798.829,
+          "p99_ms": 1176.674,
+          "requests": 798,
+          "requests_per_s": 225.8,
+          "sample_errors": [],
+          "seconds": 3.53,
+          "server_errors": 0,
+          "slowest": [
+            [
+              1511.0,
+              "/v1/leaderboard?limit=25"
+            ],
+            [
+              1460.6,
+              "/v1/leaderboard?limit=25"
+            ],
+            [
+              1456.4,
+              "/v1/leaderboard?limit=25"
+            ]
+          ],
+          "straggler_threads": 0,
+          "users": 50
+        }
+      ],
+      "throughput_peak_req_s": 268.6,
+      "workers_needed_for_500": 0.93
+    },
+    "books": {
+      "books": 300,
+      "cap": 300,
+      "cpu_pct": 93.7,
+      "events": 484400,
+      "events_per_s": 96827,
+      "modelled_bytes_per_book": 8240,
+      "resyncs": 0,
+      "rss_delta_mb": 0.0,
+      "rss_mb": 32.5
+    },
+    "budget": {
+      "by_source": {
+        "clob.book": {
+          "budget_10s": 800,
+          "capacity": 200,
+          "peak_10s": 60,
+          "per_sec": 60,
+          "rate_per_s": 6.44,
+          "sends": 60
+        },
+        "data.trades": {
+          "budget_10s": 110,
+          "capacity": 60,
+          "peak_10s": 62,
+          "per_sec": 5,
+          "rate_per_s": 6.66,
+          "sends": 62
+        },
+        "gamma.markets": {
+          "budget_10s": 300,
+          "capacity": 100,
+          "peak_10s": 60,
+          "per_sec": 20,
+          "rate_per_s": 6.44,
+          "sends": 60
+        }
+      },
+      "demand": 1600,
+      "dropped_by_backpressure": 1374,
+      "note": "user demand is dropped by the bounded queue, never queued for minutes; what reaches the venue is the bucket's business, and that is the assertion",
+      "seconds": 9.3,
+      "served": 182,
+      "straggler_threads": 4,
+      "users": 40,
+      "workers": 4
+    },
+    "fanout": {
+      "cycles": 63,
+      "delivered": 1000,
+      "deliveries_per_s": 194.8,
+      "drain_seconds": 5.13,
+      "send_ms": 80.0,
+      "slo_seconds": 300.0,
+      "subscribers": 1000,
+      "workers": 16
+    },
+    "soak": {
+      "alerts_fired": 480,
+      "alerts_suppressed": 144,
+      "cpu_s": 2.57,
+      "deliveries": 400,
+      "duplicate_deliveries": 0,
+      "fills": 6000,
+      "notes": [
+        "virtual clock 6000 fills at 200/s (30.0 s of venue time in 2.6 s of wall clock)",
+        "RSS slope measured after the first quarter of the run (warm-up excluded); the dedupe window is bounded at 100000 keys exactly as Tape's is",
+        "cooldown memory 480 entries, queued deliveries 80 at the end"
+      ],
+      "rate": 200,
+      "rss_end_mb": 32.9,
+      "rss_growth_mb_per_min": 121.958,
+      "rss_second_half_mb": 3.1,
+      "rss_start_mb": 26.0,
+      "seconds": 30,
+      "skew_ms_first_tenth": -1608.2,
+      "skew_ms_last_tenth": -26245.7,
+      "skew_ms_max": -247.6,
+      "tape_dups": 0
+    },
+    "storm": {
+      "as_of_after": [
+        [
+          "1789967277448",
+          14
+        ],
+        [
+          "1789967277442",
+          9
+        ]
+      ],
+      "as_of_before": [
+        "1789967277446",
+        "1789967277448"
+      ],
+      "came_back": true,
+      "clients": 200,
+      "err": 13857,
+      "note": "the transport is REST polling; the kill is SIGKILL of the API process",
+      "ok": 1746,
+      "outage_seconds": 3.84,
+      "recovered": 55,
+      "restart_seconds": 1.72,
+      "slow_err": 0,
+      "status_after_restart": "clean"
+    }
+  },
+  "verdict": "PASS"
+}

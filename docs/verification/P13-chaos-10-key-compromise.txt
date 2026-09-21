@@ -1,0 +1,14 @@
+CHAOS 10 — key compromise drill
+==============================================================================
+verdict: PASS
+elapsed: 1.0 s
+
+command: /usr/local/bin/python3 /home/user/polygm-platform/tools/p07-drill.py --keys 10000 --record /home/user/polygm-platform/docs/verification/P13-chaos-10-key-compromise.txt
+exit: 0, artifact: docs/verification/P13-chaos-10-key-compromise.txt
+     same statements and the triggers are the same five declarations - but the *concurrency* is not: 10,000 revokes
+     against a live queue has contention this run cannot show.
+  verdict: pass
+  recorded 99 lines -> /home/user/polygm-platform/docs/verification/P13-chaos-10-key-compromise.txt
+  /usr/local/lib/python3.13/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
+    from starlette.testclient import TestClient as TestClient  # noqa
+

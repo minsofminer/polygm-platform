@@ -1,0 +1,11 @@
+CHAOS 1 — executor killed mid-submit
+==============================================================================
+verdict: PASS
+elapsed: 22.3 s
+
+command: /usr/local/bin/python3 /home/user/polygm-platform/tools/p13-recovery-loop.py --runs 6 --seed 13 --record /home/user/polygm-platform/docs/verification/P13-chaos-1-executor-kill.txt
+exit: 0
+  
+  RECOVERY LOOP: PASS — 6/6 kills recovered cleanly, zero duplicate orders, zero lost positions
+  recorded: /home/user/polygm-platform/docs/verification/P13-chaos-1-executor-kill.txt
+

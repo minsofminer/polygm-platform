@@ -1,0 +1,319 @@
+{
+  "at": "2026-09-21T05:08:34+0000",
+  "failures": [
+    "soak: soak: 6000 duplicate deliveries (the idempotency key is supposed to make this zero)",
+    "storm: storm: the API did not come back after the kill"
+  ],
+  "mode": "full",
+  "paced": true,
+  "quick": false,
+  "results": {
+    "api": {
+      "basis": "500 concurrent users at the measured per-client rate, against one worker's peak",
+      "engine": "sqlite (single writer; a lower bound on Postgres)",
+      "knee_clients": 10,
+      "ramp": [
+        {
+          "as_of_top": [
+            [
+              "1789967036017",
+              1585
+            ],
+            [
+              "1789967036012",
+              795
+            ]
+          ],
+          "distinct_as_of": 1436,
+          "max_ms": 458.7,
+          "ok": 5554,
+          "other": {},
+          "p50_ms": 19.279,
+          "p95_ms": 144.68,
+          "p99_ms": 246.244,
+          "requests": 5554,
+          "requests_per_s": 277.0,
+          "sample_errors": [],
+          "seconds": 20.05,
+          "server_errors": 0,
+          "slowest": [
+            [
+              458.7,
+              "/v1/leaderboard?limit=25"
+            ],
+            [
+              380.0,
+              "/v1/leaderboard?limit=25"
+            ],
+            [
+              374.5,
+              "/v1/leaderboard?limit=25"
+            ]
+          ],
+          "straggler_threads": 0,
+          "users": 10
+        },
+        {
+          "as_of_top": [
+            [
+              "1789967036017",
+              1589
+            ],
+            [
+              "1789967036015",
+              798
+            ]
+          ],
+          "distinct_as_of": 1434,
+          "max_ms": 559.0,
+          "ok": 5566,
+          "other": {},
+          "p50_ms": 72.783,
+          "p95_ms": 208.122,
+          "p99_ms": 348.632,
+          "requests": 5566,
+          "requests_per_s": 277.1,
+          "sample_errors": [],
+          "seconds": 20.09,
+          "server_errors": 0,
+          "slowest": [
+            [
+              559.0,
+              "/v1/leaderboard?limit=25"
+            ],
+            [
+              530.6,
+              "/v1/leaderboard?limit=25"
+            ],
+            [
+              506.2,
+              "/v1/leaderboard?limit=25"
+            ]
+          ],
+          "straggler_threads": 0,
+          "users": 25
+        },
+        {
+          "as_of_top": [
+            [
+              "1789967036017",
+              1551
+            ],
+            [
+              "1789967036015",
+              778
+            ]
+          ],
+          "distinct_as_of": 1410,
+          "max_ms": 798.7,
+          "ok": 5434,
+          "other": {},
+          "p50_ms": 172.12,
+          "p95_ms": 321.053,
+          "p99_ms": 473.808,
+          "requests": 5434,
+          "requests_per_s": 267.9,
+          "sample_errors": [],
+          "seconds": 20.29,
+          "server_errors": 0,
+          "slowest": [
+            [
+              798.7,
+              "/v1/leaderboard?limit=25"
+            ],
+            [
+              718.4,
+              "/v1/leaderboard?limit=25"
+            ],
+            [
+              684.5,
+              "/v1/leaderboard?limit=25"
+            ]
+          ],
+          "straggler_threads": 0,
+          "users": 50
+        },
+        {
+          "as_of_top": [
+            [
+              "1789967036017",
+              1572
+            ],
+            [
+              "1789967036015",
+              801
+            ]
+          ],
+          "distinct_as_of": 1449,
+          "max_ms": 1040.9,
+          "ok": 5536,
+          "other": {},
+          "p50_ms": 338.416,
+          "p95_ms": 578.179,
+          "p99_ms": 717.267,
+          "requests": 5536,
+          "requests_per_s": 269.3,
+          "sample_errors": [],
+          "seconds": 20.56,
+          "server_errors": 0,
+          "slowest": [
+            [
+              1040.9,
+              "/v1/leaderboard?limit=25"
+            ],
+            [
+              1025.3,
+              "/v1/leaderboard?limit=25"
+            ],
+            [
+              1024.7,
+              "/v1/leaderboard?limit=25"
+            ]
+          ],
+          "straggler_threads": 0,
+          "users": 100
+        },
+        {
+          "as_of_top": [
+            [
+              "1789967036017",
+              1607
+            ],
+            [
+              "1789967036012",
+              810
+            ]
+          ],
+          "distinct_as_of": 1487,
+          "max_ms": 1393.6,
+          "ok": 5657,
+          "other": {},
+          "p50_ms": 906.01,
+          "p95_ms": 1086.145,
+          "p99_ms": 1202.894,
+          "requests": 5657,
+          "requests_per_s": 270.1,
+          "sample_errors": [],
+          "seconds": 20.94,
+          "server_errors": 0,
+          "slowest": [
+            [
+              1393.6,
+              "/v1/leaderboard?limit=25"
+            ],
+            [
+              1380.9,
+              "/v1/leaderboard?limit=25"
+            ],
+            [
+              1378.4,
+              "/v1/leaderboard?limit=25"
+            ]
+          ],
+          "straggler_threads": 0,
+          "users": 250
+        },
+        {
+          "as_of_top": [
+            [
+              "1789967036017",
+              1685
+            ],
+            [
+              "1789967036012",
+              844
+            ]
+          ],
+          "distinct_as_of": 1591,
+          "max_ms": 2418.5,
+          "ok": 5912,
+          "other": {},
+          "p50_ms": 1837.569,
+          "p95_ms": 2124.544,
+          "p99_ms": 2195.174,
+          "requests": 5912,
+          "requests_per_s": 269.1,
+          "sample_errors": [],
+          "seconds": 21.97,
+          "server_errors": 0,
+          "slowest": [
+            [
+              2418.5,
+              "/v1/leaderboard?limit=25"
+            ],
+            [
+              2415.2,
+              "/v1/leaderboard?limit=25"
+            ],
+            [
+              2389.8,
+              "/v1/leaderboard?limit=25"
+            ]
+          ],
+          "straggler_threads": 0,
+          "users": 500
+        }
+      ],
+      "throughput_peak_req_s": 277.1,
+      "workers_needed_for_500": 0.9
+    },
+    "books": {
+      "books": 2000,
+      "cap": 2000,
+      "cpu_pct": 96.9,
+      "events": 11782400,
+      "events_per_s": 98186,
+      "modelled_bytes_per_book": 8240,
+      "resyncs": 0,
+      "rss_delta_mb": 2.9,
+      "rss_mb": 29.6
+    },
+    "budget": {
+      "by_source": {
+        "clob.book": {
+          "budget_10s": 800,
+          "capacity": 200,
+          "peak_10s": 62,
+          "per_sec": 60,
+          "rate_per_s": 1.03,
+          "sends": 62
+        },
+        "data.trades": {
+          "budget_10s": 110,
+          "capacity": 60,
+          "peak_10s": 60,
+          "per_sec": 5,
+          "rate_per_s": 0.99,
+          "sends": 60
+        },
+        "gamma.markets": {
+          "budget_10s": 300,
+          "capacity": 100,
+          "peak_10s": 62,
+          "per_sec": 20,
+          "rate_per_s": 1.03,
+          "sends": 62
+        }
+      },
+      "demand": 29704,
+      "dropped_by_backpressure": 27516,
+      "note": "user demand is dropped by the bounded queue, never queued for minutes; what reaches the venue is the bucket's business, and that is the assertion",
+      "seconds": 60.4,
+      "served": 184,
+      "straggler_threads": 4,
+      "users": 100,
+      "workers": 4
+    },
+    "fanout": {
+      "cycles": 625,
+      "delivered": 10000,
+      "deliveries_per_s": 177.3,
+      "drain_seconds": 56.42,
+      "send_ms": 80.0,
+      "slo_seconds": 300.0,
+      "subscribers": 10000,
+      "workers": 16
+    }
+  },
+  "verdict": "FAIL"
+}
