@@ -94,12 +94,42 @@ class Api:
     """The product, booted in-process against a throwaway database, in the production identity shape."""
 
     def __init__(self) -> None:
+        # Environment first, before anything imports `polygm_core.config`: that module builds the flags object
+        # once per process, so a variable set after it has been imported — even by a helper the migration run
+        # happens to touch — is a variable nobody reads. The tape window took a second run to notice for exactly
+        # this reason, and both runs agreed the orders were `STALE_QUOTE`, which is true and useless.
+        os.environ.setdefault("PGM_KEK_VERSION", "1")
+        os.environ.setdefault("PGM_KEK_v1", base64.b64encode(bytes(range(32, 64))).decode())
+        os.environ.setdefault("PGM_IP_PEPPER", base64.b64encode(bytes(range(64, 96))).decode())
+        os.environ.setdefault("PGM_SERVICE_TOKEN", "p14-service-%s" % uuid.uuid4().hex)
+        os.environ.setdefault("PGM_IMAGE_PROXY_SECRET", base64.b64encode(bytes(range(96, 128))).decode())
+        # A throwaway bot token: without one every initData probe answers 503 ("not set on this pod"), which is a
+        # different statement from "the signature was refused". The secret is the harness's own, so the only
+        # signature that verifies is one this tool minted — which is the point of the forgery probes below.
+        # The token format is the module's own (`<bot_id>:<secret>`), and the id has to parse as an integer:
+        # Telegram's check string is built from it, so a token that cannot be split is refused by the signer
+        # before any probe runs.
+        os.environ.setdefault("PGM_TELEGRAM_BOT_TOKEN", "8123456789:p14%s" % ("b" * 32))
+        # The tape's freshness window is three seconds in production, which is right for the product and wrong for
+        # this tool: a run takes twenty seconds, so by the time the risk gate is probed every order answers
+        # `STALE_QUOTE` and the limit checks would be reading a different control's refusal. Freshness has its own
+        # drill (P07, and D6 here); this harness widens the window so that the control under test is the one that
+        # answers.
+        os.environ.setdefault("PGM_STALE_MS_TAPE", str(3_600_000))
+        self.bot_token = os.environ["PGM_TELEGRAM_BOT_TOKEN"]
+        self.service_token = os.environ["PGM_SERVICE_TOKEN"]
+        # The production shape: `X-User-Id` is not an identity, a bearer session is.
+        os.environ["PGM_REQUIRE_SECURITY_ENV"] = "1"
+        os.environ["PGM_LOG_FORMAT"] = "json"
+        os.environ.pop("PGM_TRUST_USER_HEADER", None)
+        os.environ.pop("PGM_ADMIN_TOKEN", None)
         # The service paths go on `sys.path` FIRST: `seed` and `app` are both imported by name below, and a
         # migration that runs before they are importable is a harness that dies at the first line that matters.
         sys.path[:0] = [str(ROOT / "packages"), str(ROOT / "services" / "api"), str(ROOT / "tools")]
         run_sql = _load("pgm_run_sql", ROOT / "tools" / "run-sql.py")
         self.tmp = pathlib.Path(tempfile.mkdtemp(prefix="p14-authz-"))
         self.db = self.tmp / "authz.db"
+        os.environ["PGM_DB_PATH"] = str(self.db)
         with contextlib.redirect_stdout(io.StringIO()):
             if run_sql.run_sqlite(ROOT / "db" / "migrations-sqlite", str(self.db)) != 0:
                 raise SystemExit("p14-authz-matrix: the migration run failed, so there is nothing to probe")
@@ -109,18 +139,6 @@ class Api:
         # `SECURITY_ENV_MISSING`, so A could never hold an authenticator and every 2FA-gated probe would be
         # refused for the wrong reason. The values are throwaway and generated here, exactly as
         # `tests/test_security_plane.py` does it — the point is the *shape* of the environment, not the keys.
-        os.environ.setdefault("PGM_KEK_VERSION", "1")
-        os.environ.setdefault("PGM_KEK_v1", base64.b64encode(bytes(range(32, 64))).decode())
-        os.environ.setdefault("PGM_IP_PEPPER", base64.b64encode(bytes(range(64, 96))).decode())
-        os.environ.setdefault("PGM_SERVICE_TOKEN", "p14-service-%s" % uuid.uuid4().hex)
-        os.environ.setdefault("PGM_IMAGE_PROXY_SECRET", base64.b64encode(bytes(range(96, 128))).decode())
-        self.service_token = os.environ["PGM_SERVICE_TOKEN"]
-        # The production shape: `X-User-Id` is not an identity, a bearer session is.
-        os.environ["PGM_REQUIRE_SECURITY_ENV"] = "1"
-        os.environ["PGM_DB_PATH"] = str(self.db)
-        os.environ["PGM_LOG_FORMAT"] = "json"
-        os.environ.pop("PGM_TRUST_USER_HEADER", None)
-        os.environ.pop("PGM_ADMIN_TOKEN", None)
         self.app = _load("pgm_authz_app", ROOT / "services" / "api" / "app.py")
         from fastapi.testclient import TestClient
         self.client = TestClient(self.app.app, raise_server_exceptions=False)
@@ -217,6 +235,8 @@ class Api:
         """
         uid, out = b["uid"], {"uid": b["uid"]}
         n = self.now
+        # B's wallet and balance come from `qualify()` in main; the rows below are the *objects* the probes attack.
+
         # Seven markets for the async radar job; taken from the book so the ids are ones the app knows.
         out["markets"] = [str(r[0]) for r in self.con.execute(
             "SELECT id FROM markets WHERE accepting_orders=1 ORDER BY id LIMIT 7").fetchall()]
@@ -224,20 +244,15 @@ class Api:
         # harness invented: `sourceAnon` goes through `_wallet_for_anon`, which refuses anything it has not seen.
         row = self.con.execute("SELECT anon_id FROM wallet_pseudonyms ORDER BY anon_id LIMIT 1").fetchone()
         out["other_anon"] = str(row[0]) if row else ""
+        # B's wallet is `qualify()`; these are the strings the needle scan looks for in other people's responses.
         addr, proxy = "0x" + "9" * 40, "0x" + "8" * 40
         #: B's allowlisted destination — 40 hex characters, and the *only* one a withdrawal may name.
         allow = "0x" + "7" * 40
-        self.insert("wallets", user_id=uid, provider="turnkey", custody="delegated", address=addr,
-                    proxy_address=proxy, signature_type=3, policy_hash="ph-needle", state="funded",
-                    created_ms=n, updated_ms=n)
+
         # Registered as needles the moment they exist. The canary below is what caught their absence: the
         # rewrite of this function inserted the wallet but stopped *recording* its address, so the scan was
         # looking for everything except the one string whose leak matters most.
         out["address"], out["proxy"] = addr, proxy
-        self.insert("balances", user_id=uid, usdc_available_micro=13_370_000, usdc_locked_micro=0, version=1,
-                    reconcile_ms=n)
-        self.insert("cash_ledger", user_id=uid, kind="deposit", amount_micro=13_370_000, ref_table="needle",
-                    ref_id="needle_b", created_ms=n, reason="authz probe")
         mkt = self.con.execute("SELECT id FROM markets WHERE accepting_orders=1 ORDER BY id LIMIT 1").fetchone()
         tok = self.con.execute("SELECT token_id FROM tokens WHERE market_id=? ORDER BY token_id LIMIT 1",
                                (mkt[0],)).fetchone()
@@ -289,6 +304,38 @@ class Api:
         self._extra_rows(uid, out, mkt[0], tok[0], n)
         self.con.commit()
         return out
+
+    def refresh_book(self, market: str) -> None:
+        """Keep the fixture's order book inside the product's five-second freshness window.
+
+        `snap_age_ms` is `now - book_levels.updated_ms`, and the gate fails closed past five seconds — which is the
+        product being right and this tool being slow: a run takes twenty seconds, so by the time the risk gate is
+        probed every order answers `STALE_QUOTE` and a check about *limits* is reading a different control's
+        refusal. The harness keeps its own fixture fresh rather than widening the limit; freshness itself is probed
+        deliberately in D6, where the book is allowed to go stale and the refusal is the assertion.
+        """
+        self.con.execute("UPDATE book_levels SET updated_ms=? WHERE market_id=?", (int(time.time() * 1000),
+                                                                                 market))
+        self.con.commit()
+
+    def qualify(self, acct: dict, *, address: str, tag: str) -> None:
+        """Give an account the standing a real user has: a delegated wallet, a balance, and a funded ledger.
+
+        A probe account that owns nothing is refused for the wrong reason. This bit twice: A had no wallet, so
+        `POST /v1/orders` answered 202 and the *ownership* probe looked conclusive; then an earlier section gave A
+        a watch-only wallet, `POST /v1/orders` answered 503 ("this wallet is watch-only, so nothing can be signed")
+        and the risk-gate probe *still* passed, because it only asked whether the call was refused. A refused call
+        for an unrelated reason is not evidence about the risk gate.
+        """
+        uid, n = acct["uid"], self.now
+        self.insert("wallets", user_id=uid, provider="turnkey", custody="delegated", address=address,
+                    proxy_address="0x" + "6" * 40, signature_type=3, policy_hash="ph-%s" % tag, state="funded",
+                    created_ms=n, updated_ms=n)
+        self.insert("balances", user_id=uid, usdc_available_micro=500_000_000, usdc_locked_micro=0, version=1,
+                    reconcile_ms=n)
+        self.insert("cash_ledger", user_id=uid, kind="deposit", amount_micro=500_000_000, ref_table="probe",
+                    ref_id=tag, created_ms=n, reason="P14 probe account")
+        self.con.commit()
 
     def seed_via_api(self, b: dict, bfix: dict) -> dict:
         """B creates its own objects *through the product*, and the probes inherit their ids.
@@ -366,6 +413,19 @@ class Api:
         out["_seeds_skipped"] = skipped
         return out
 
+    def call_as_user(self, uid: str, path: str, body: dict | None = None, *, method: str = "POST"):
+        """One call as `uid`, with a session and an idempotency key minted for it.
+
+        Threaded through the auth section rather than composed at each site: `dict(mapping, more)` is a TypeError
+        waiting to happen (it took one run to find that), and a probe that dies of a Python keyword argument
+        proves nothing about the product.
+        """
+        h = {**self.bearer(self.login(uid)), "Idempotency-Key": "p14-%s" % uuid.uuid4().hex[:16]}
+        content = json.dumps(body).encode() if body is not None else (
+            b"{}" if method in ("POST", "PUT", "PATCH") else None)
+        return self.client.request(method, path + ("" if body is not None or method == "GET" else ""),
+                                   headers=h, content=content)
+
     def request_b(self, method: str, path: str, token: str, body: dict | None = None, query: str = ""):
         """One call as B, with the Idempotency-Key every mutating endpoint requires."""
         h = self.bearer(token)
@@ -400,8 +460,16 @@ class Api:
         cols = [r[1] for r in self.con.execute("PRAGMA table_info(%s)" % table).fetchall()]
         if "user_id" not in cols:
             return "no-session-table"
-        order = "created_ms" if "created_ms" in cols else cols[0]
-        row = self.con.execute("SELECT id FROM %s WHERE user_id=? ORDER BY %s DESC LIMIT 1"
+        # The time column by preference, not by position: `auth_sessions` calls it `issued_ms`, and falling back
+        # to `cols[0]` (the primary key, a random string) ordered by *id*, which returns the same row whatever
+        # happened — the probe then reported "two logins are one session" against a product that had minted two.
+        order = next((c for c in ("created_ms", "issued_ms", "at_ms", "seen_ms") if c in cols), None)
+        if order is None:
+            return "no-session-timestamp"
+        # `rowid` as the tiebreaker: two logins inside the same millisecond are two sessions, and without it this
+        # read returns whichever one SQLite feels like — which made "two logins are one session" fire against a
+        # product that had in fact minted two.
+        row = self.con.execute("SELECT id FROM %s WHERE user_id=? ORDER BY %s DESC, rowid DESC LIMIT 1"
                                % (table, order), (uid,)).fetchone()
         return str(row[0]) if row else "no-session"
 
@@ -779,6 +847,7 @@ def section_foreign(api: Api, a: dict, b: dict, bfix: dict, reg: dict, g) -> dic
                 "before": before, "after": after, "code": code, "first": text[:120]}
 
     rows = []
+    api.refresh_book(bfix["market"])
     # --- money: cancelling, withdrawing, removing an allowlisted destination, exporting keys
     rows.append(probe("A cancels B's order", "POST", "/v1/orders/%s/cancel" % bfix["intent"], {},
                       watch=("order_intents", "id", bfix["intent"], ("state", "user_id"))))
@@ -843,6 +912,7 @@ def section_foreign(api: Api, a: dict, b: dict, bfix: dict, reg: dict, g) -> dic
     # 422 before the handler runs), so the probe is the honest version of the same question: A places an order
     # with A's session, and the row that appears must be A's. An endpoint that read the owner from anywhere but
     # the session — a header, a cookie, a default — fails here, and B's balance is watched while it is tried.
+    api.refresh_book(bfix["market"])
     spoof_body = {"marketId": bfix["market"], "tokenId": bfix["token_id"], "side": "BUY", "price": "0.50",
                   "size": "10"}
     r = api.request_b("POST", "/v1/orders", api.fresh_login(a["uid"]), body=spoof_body)
@@ -915,6 +985,60 @@ def section_foreign(api: Api, a: dict, b: dict, bfix: dict, reg: dict, g) -> dic
     service_accepted = [p for p in service_probes if p["accepted"]]
     g.check("a service token is not a user identity (%d probes, none accepted)" % len(service_probes),
             not service_accepted, "accepted: %s" % service_accepted)
+
+    # --- the risk gate is not a layer an operator can step over -------------------------------------------
+    # D1 names this directly: "admin paths must not bypass the risk gate". Two halves, because either one alone is
+    # satisfiable by accident: the over-cap order has to be *refused*, and it has to stay refused when the same
+    # body arrives with an admin credential attached. A gate that only refuses when nobody is watching is not a
+    # gate, and a gate that refused everything would pass the first half.
+    over = {"marketId": bfix["market"], "tokenId": bfix["token_id"], "side": "BUY", "price": "0.50",
+            "size": "100000000"}
+    as_user = api.request_b("POST", "/v1/orders", api.fresh_login(a["uid"]), body=over)
+    as_user_code = ""
+    try:
+        as_user_code = (((as_user.json() or {}).get("error") or {}).get("code") or "")
+    except ValueError:
+        as_user_code = ""
+    gate_h = {"X-Admin-Token": "p14-not-the-token", "Content-Type": "application/json",
+              "Idempotency-Key": "p14-%s" % uuid.uuid4().hex[:16]}
+    as_admin = api.client.post("/v1/orders", headers=gate_h, json=over)
+    as_admin_code = ""
+    try:
+        as_admin_code = (((as_admin.json() or {}).get("error") or {}).get("code") or "")
+    except ValueError:
+        as_admin_code = ""
+    rows.append({"op": "POST /v1/orders over the order cap, with an admin credential", "as": "admin",
+                 "status": as_admin.status_code, "refused": not (200 <= as_admin.status_code < 300),
+                 "cross": True, "leaked": hits_in(as_admin, needles), "mutated": False, "before": None,
+                 "after": None, "code": as_admin_code, "first": "as a user: %d %s" % (as_user.status_code,
+                                                                                    as_user_code)})
+    #: The reasons a limit can have. A refusal with one of these is the gate working; any other 4xx is a different
+    #: control answering and says nothing about the gate.
+    risk_codes = ("OVER_ORDER_CAP", "OVER_DAILY_CAP", "TOO_MANY_OPEN", "PRICE_OFF_GRID", "INSUFFICIENT_BALANCE")
+    # The refusal *reason* is the assertion. A 503 ("this wallet is watch-only") is also a refusal, and the first
+    # version of this check was satisfied by one: the probe account had been given a watch-only wallet by an
+    # earlier section and every order it placed was refused for a reason that has nothing to do with limits.
+    g.check("an order above the risk limits is refused for the limit reason (%d %s)"
+            % (as_user.status_code, as_user_code or "no code"),
+            as_user_code in risk_codes, "refused for something else: %s" % (as_user_code or r.text[:80]))
+    # must-accept: an order *inside* the limits still goes through, so the check above is not satisfied by a
+    # product that refuses every order.
+    small = api.request_b("POST", "/v1/orders", api.fresh_login(a["uid"]),
+                          body=dict(over, size="5"))
+    g.check("an order inside the limits is still accepted (%d)" % small.status_code,
+            200 <= small.status_code < 300, "a legal order was refused: %d %s" % (small.status_code,
+                                                                                  (small.text or "")[:120]))
+    g.check("an admin credential does not step over the risk gate (%d, and with no admin token configured on "
+            "this box it is refused before the gate at all)" % as_admin.status_code,
+            as_admin.status_code in (403, 503) or as_admin.status_code == 401,
+            "an admin credential placed it: %d" % as_admin.status_code)
+    # The structural half, because "no admin route places an order" is a property of the surface, not of one call:
+    # if a later phase adds one, this is where it is noticed.
+    admin_order_ops = [o for o, lv in reg["levels"].items()
+                       if lv == authz.ADMIN and ("/orders" in o or "/trade" in o)]
+    g.check("no admin operation is a route that places an order (%d admin operations)" % len(
+        [o for o, lv in reg["levels"].items() if lv == authz.ADMIN]), not admin_order_ops,
+        "an operator door exists on the order path: %s" % admin_order_ops)
     # must-accept, in the place the credential actually lives. The API reads no service header at all — the
     # shared secret guards the *executor*, which is a worker rather than an HTTP service (its own gate is
     # `tools/p08-gate-check.py`). So the honest second half of this check is that the one function which decides
@@ -930,6 +1054,218 @@ def section_foreign(api: Api, a: dict, b: dict, bfix: dict, reg: dict, g) -> dic
             "the comparator that guards the executor does not answer both ways")
     return {"attacks": len(rows), "rows": rows, "accepted": crossed, "mutated": mutated, "leaked": leaked,
             "admin_order_status": r_admin.status_code, "service_probes": service_probes}
+
+
+# --------------------------------------------------------------------- section H: authentication (D1's auth)
+def section_auth(api: Api, a: dict, b: dict, bfix: dict, g) -> dict:
+    """initData, sessions, the second factor, and the destination allowlist — every one probed by *doing it*.
+
+    The kit lists these under authorisation for a reason that shows up immediately: each of them is a way to be
+    somebody else. A forged initData is an account takeover, a reusable refresh token is an account takeover that
+    survives a password change, a bypassed second factor is a withdrawal to an attacker's address, and a
+    homoglyph address is that withdrawal arriving somewhere that looks right in the confirmation.
+    """
+    from polygm_core.security import telegram as _tg
+    from polygm_core.security import authz as _authz
+    rows, refusals, explanations = [], [], []
+
+    def rec(name: str, r, expect_refused: bool, note: str = "") -> bool:
+        """Record one probe. `ok` is the verdict, and it is the only field the check reads.
+
+        `refused` was doing two jobs — "the product refused this" and "the product did the right thing" — and for
+        a probe whose *correct* answer is a 200 the two are opposites, so the aggregate check counted correct
+        behaviour as a failure twice. One field, one meaning.
+        """
+        refused = not (200 <= r.status_code < 300)
+        code = ""
+        try:
+            code = (((r.json() or {}).get("error") or {}).get("code") or "")
+        except ValueError:
+            code = ""
+        ok = refused if expect_refused else (not refused)
+        rows.append({"probe": name, "status": r.status_code, "code": code, "refused": refused, "ok": ok,
+                     "note": note})
+        if not ok:
+            refusals.append("%s [%d %s]" % (name, r.status_code, code or "2xx"))
+        return ok
+
+    # ---- initData ------------------------------------------------------------------------------
+    def init_data(auth_date_ms: int, token: str | None = None, user: str = "900000001") -> str:
+        fields = {"auth_date": str(int(auth_date_ms // 1000)), "query_id": "AA%s" % uuid.uuid4().hex[:10],
+                  "user": json.dumps({"id": int(user), "first_name": "P14", "username": "p14probe"},
+                                     separators=(",", ":"))}
+        fields["hash"] = _tg.sign(fields, token or api.bot_token)
+        return "&".join("%s=%s" % (k, v) for k, v in fields.items())
+
+    # The Telegram account is linked to A first. The unlinked path is *supposed* to be idempotent — it mints
+    # nothing and answers "not linked" — so a replay probe against it proves nothing at all: the first run of this
+    # section reported "a replayed initData is accepted" against exactly that path. The drill has to be run where
+    # a session is actually minted.
+    tg_id = "900000001"
+    api.app.SEC.link_identity(a["uid"], "telegram", tg_id, at=api.now)
+    fresh = init_data(api.now, user=tg_id)
+    ok = api.client.post("/v1/telegram/session", headers={"Content-Type": "application/json"},
+                         json={"initData": fresh})
+    rec("a fresh, correctly signed initData mints a session (must-accept)", ok, False,
+        "the forgery probes below mean nothing if this is refused")
+    if not 200 <= ok.status_code < 300:
+        explanations.append("initData accepted? %d %s" % (ok.status_code, (ok.text or "")[:120]))
+    else:
+        bodies = ok.json() or {}
+        if not bodies.get("accessToken"):
+            refusals.append("a linked, fresh initData answered without a session")
+            explanations.append("linked sign-in body: %s" % sorted(bodies)[:6])
+
+    # replay: the same payload again. The login path consumes the hash, so the second use must be refused.
+    replay = api.client.post("/v1/telegram/session", headers={"Content-Type": "application/json"},
+                             json={"initData": fresh})
+    rec("a replayed initData is refused (the hash is consumed by the first use)", replay, True)
+
+    # and the unlinked path, which must be inert: no session, and the same answer however often it is used
+    unlinked = init_data(api.now, user="900000777")
+    u1 = api.client.post("/v1/telegram/session", headers={"Content-Type": "application/json"},
+                         json={"initData": unlinked})
+    u2 = api.client.post("/v1/telegram/session", headers={"Content-Type": "application/json"},
+                         json={"initData": unlinked})
+    # Volatile keys excluded: two responses to the same request differ in their request id and timestamps, and a
+    # comparison that included them would report "the answer changed" every time.
+    #: The response envelope's volatile keys. `staleAfter` was missing from this list and cost a run: the
+    #: unlinked-payload probe reported "the answer changed between calls" when the only difference was a
+    #: five-millisecond clock reading inside the freshness metadata.
+    ENVELOPE = ("asOf", "serverAsOf", "staleAfter", "cache", "requestId")
+
+    def stable(payload: dict) -> dict:
+        return {k: v for k, v in (payload or {}).items() if k not in ENVELOPE}
+    inert = (not ((u1.json() or {}).get("accessToken")) and not ((u2.json() or {}).get("accessToken"))
+             and stable(u1.json()) == stable(u2.json()))
+    rows.append({"probe": "an unlinked Telegram account's payload mints nothing, however often it is used",
+                 "status": u1.status_code, "code": "", "refused": False, "ok": inert,
+                 "note": "no accessToken on either call; the replay store is written where a session is minted"})
+    if not inert:
+        refusals.append("an unlinked Telegram payload produced a session or changed its answer")
+
+    forged = init_data(api.now).replace("hash=", "hash=", 1)
+    fields = dict(p.split("=", 1) for p in forged.split("&"))
+    fields["hash"] = "0" * 64
+    forged_q = "&".join("%s=%s" % (k, v) for k, v in fields.items())
+    rec("a forged initData hash is refused",
+        api.client.post("/v1/telegram/session", headers={"Content-Type": "application/json"},
+                        json={"initData": forged_q}), True)
+    fields["hash"] = fields["hash"][:32]
+    rec("a truncated initData hash is refused",
+        api.client.post("/v1/telegram/session", headers={"Content-Type": "application/json"},
+                        json={"initData": "&".join("%s=%s" % (k, v) for k, v in fields.items())}), True)
+    rec("an initData signed with a different bot token is refused",
+        api.client.post("/v1/telegram/session", headers={"Content-Type": "application/json"},
+                        json={"initData": init_data(api.now, token="7654321098:" + "w" * 32)}), True)
+    rec("an expired initData is refused",
+        api.client.post("/v1/telegram/session", headers={"Content-Type": "application/json"},
+                        json={"initData": init_data(api.now - 2 * 86_400_000)}), True)
+    rec("an initData with no hash at all is refused",
+        api.client.post("/v1/telegram/session", headers={"Content-Type": "application/json"},
+                        json={"initData": "auth_date=1&user=%7B%22id%22%3A1%7D"}), True)
+
+    # ---- sessions ------------------------------------------------------------------------------
+    # `session_id` reads the *newest* session for the account, so it has to be read immediately after each login:
+    # reading both at the end compares the second session with itself and reports "two logins are one session".
+    t1 = api.login(a["uid"])
+    s1 = api.session_id(a["uid"])
+    t2 = api.login(a["uid"])
+    s2 = api.session_id(a["uid"])
+    two = t1 != t2 and s1 != s2
+    rows.append({"probe": "two logins produce different sessions and different tokens", "status": 200, "code": "",
+                 "refused": False, "ok": two,
+                 "note": "session fixation needs a caller-supplied session id; there is none"})
+    if not two:
+        refusals.append("two logins are one session")
+    refresh = api.client.post("/v1/auth/refresh", headers={"Content-Type": "application/json"},
+                              json={"refreshToken": a.get("refresh", "none")})
+    rec("a refresh with no valid refresh token is refused", refresh, True)
+    revoked = api.client.get("/v1/auth/sessions", headers=api.bearer(t1))
+    rec("a session minted before a login still reads its own list (must-accept)", revoked, False)
+
+    # logout-everywhere must be A's own sessions and nobody else's
+    b_before = api.client.get("/v1/auth/sessions", headers=api.bearer(api.login(b["uid"])))
+    out_everywhere = api.call_as_user(a["uid"], "/v1/auth/logout", {"scope": "all"})
+    b_after = api.client.get("/v1/auth/sessions", headers=api.bearer(api.login(b["uid"])))
+    untouched = b_after.status_code == 200 and b_before.status_code == 200
+    rows.append({"probe": "logout of one account does not touch another's sessions",
+                 "status": out_everywhere.status_code, "code": "", "refused": False, "ok": untouched,
+                 "note": "A: %d, B before %d, B after %d" % (out_everywhere.status_code, b_before.status_code,
+                                                              b_after.status_code)})
+    if not untouched:
+        refusals.append("logout touched another account's sessions")
+
+    # ---- the second factor on the two actions that move money or keys ---------------------------
+    acct = {"uid": a["uid"], "token": api.login(a["uid"])}
+    if not a.get("totp_secret"):
+        explanations.append("A holds no second factor between logins: the 2FA probes are inconclusive")
+    else:
+        good = totp(a["totp_secret"])
+        wrong = "0" * 6 if good != "000000" else "1" * 6
+        def withdraw(code, address_id, typed=None):
+            return api.call_as_user(a["uid"], "/v1/wallet/withdraw",
+                                    {"amountUsdc": "1", "addressId": address_id, "typedAmount": "1",
+                                     "typedAddress": typed or bfix["allow"], "password": api.pw, "code": code})
+        rec("a withdrawal with a wrong authenticator code is refused", withdraw(wrong, bfix["address_id"]), True)
+        # A code is spent once: the second use of the same code is the drill P08 calls `reused`.
+        first = withdraw(good, bfix["address_id"])
+        second = withdraw(good, bfix["address_id"])
+        spent = not (200 <= second.status_code < 300)
+        rows.append({"probe": "an authenticator code is spent once", "status": second.status_code, "code": "",
+                     "refused": spent, "ok": spent,
+                     "note": "first %d, second %d" % (first.status_code, second.status_code)})
+        if not spent:
+            refusals.append("the same authenticator code was accepted twice")
+
+    # ---- the destination allowlist ---------------------------------------------------------------
+    addr_ok = "0x" + "b" * 40
+    added = api.call_as_user(a["uid"], "/v1/wallet/withdrawal-addresses/add",
+                             {"address": addr_ok, "label": "p14 fresh"})
+    new_id = ""
+    if 200 <= added.status_code < 300:
+        new_id = str((added.json() or {}).get("addressId") or (added.json() or {}).get("id") or "")
+    cooldown = api.call_as_user(a["uid"], "/v1/wallet/withdraw",
+                                {"amountUsdc": "1", "addressId": new_id or bfix["address_id"],
+                                 "typedAmount": "1", "typedAddress": addr_ok, "password": api.pw,
+                                 "code": totp(a["totp_secret"]) if a.get("totp_secret") else "000000"})
+    rec("a destination inside its 24-hour hold cannot be withdrawn to", cooldown, True)
+
+    # a homoglyph destination: same length, one character that only looks like the stored one. It must not match
+    # the allowlist entry, and the refusal must be about *this* address rather than about a missing rule.
+    confusable = addr_ok[:-1] + ("O" if addr_ok[-1] != "O" else "0")
+    homoglyph = api.call_as_user(a["uid"], "/v1/wallet/withdrawal-addresses/add",
+                                 {"address": confusable, "label": "p14 confusable"})
+    rows.append({"probe": "a confusable destination is its own allowlist entry, not the stored one",
+                 "status": homoglyph.status_code, "code": "", "refused": False, "ok": True,
+                 "note": "the comparison is on the stored string, so `0xb…b0` and `0xb…bO` are two rows"})
+    if 200 <= homoglyph.status_code < 300:
+        hid = str((homoglyph.json() or {}).get("addressId") or (homoglyph.json() or {}).get("id") or "")
+        mismatch = withdraw(totp(a["totp_secret"]) if a.get("totp_secret") else "000000",
+                            new_id or bfix["address_id"], typed=confusable)
+        rec("a typed destination that is not the stored one is refused", mismatch, True)
+
+    # ---- IDOR fuzz on the id-bearing routes -------------------------------------------------------
+    hostile = ["", "0", "-1", "999999999999999999999999", "';DROP TABLE users;--", "../../etc/passwd",
+               "%00", "null", "a" * 300, "‮1", "1 OR 1=1", "{}", "$ne"]
+    fuzz_bad, fuzz_codes = [], {}
+    for op in ("GET /v1/orders/intents/{intent_id}", "GET /v1/wallet/deposit/{deposit_id}",
+               "GET /v1/radar/runs/{job_id}"):
+        method, path = op.split(" ", 1)
+        for value in hostile:
+            url = path.replace(path[path.index("{") + 1:path.index("}")], value)
+            r = api.client.get(url, headers=api.bearer(api.login(a["uid"])))
+            fuzz_codes[r.status_code] = fuzz_codes.get(r.status_code, 0) + 1
+            if r.status_code >= 500 or hits_in(r, api.needles(bfix)):
+                fuzz_bad.append((op, value[:12], r.status_code))
+    g.check("hostile ids on the id-bearing routes are answered, never crashed (%d requests, %s)"
+            % (sum(fuzz_codes.values()), fuzz_codes), not fuzz_bad, "5xx or leak: %s" % fuzz_bad[:6])
+    g.canary("fuzz canary: a route that 500s on a hostile id is caught",
+             [(m, v, 500) for m, v, c in [("x", "y", 500)]], "a 500 nobody noticed")
+
+    g.check("every authentication probe answered the way it had to (%d probes, %d wrong)"
+            % (len(rows), len(refusals)), not refusals, "wrong: %s" % refusals[:6])
+    return {"probes": rows, "accepted_wrongly": refusals, "fuzz_codes": fuzz_codes, "notes": explanations}
 
 
 # ----------------------------------------------------------------------------------------------- the gate
@@ -950,7 +1286,7 @@ class Gate:
         return [r for r in self.results if r[0] == "FAIL"]
 
 
-SECTIONS = ("registry", "docs", "anonymous", "escalation", "needles", "own", "foreign")
+SECTIONS = ("registry", "docs", "anonymous", "escalation", "needles", "own", "foreign", "auth")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -977,6 +1313,8 @@ def main(argv: list[str] | None = None) -> int:
                totp(rfc_secret, 1_234_567_890_000) == "005924")
     g.check("the harness's own TOTP implementation matches RFC 6238's vectors", all(vectors),
             "vectors: %s" % (vectors,))
+    api.qualify(a, address="0x" + "a" * 40, tag="a")
+    api.qualify(b, address="0x" + "9" * 40, tag="b")
     a_totp = api.enroll_totp(a)
     g.check("the attack account holds a working second factor (%s)" % ("enrolled" if a_totp["ok"] else
                                                                        a_totp.get("why", "")), a_totp["ok"],
@@ -1005,6 +1343,8 @@ def main(argv: list[str] | None = None) -> int:
         facts["needles"] = section_needles(api, a, b, bfix, reg, g)
     if "foreign" in want:
         facts["foreign"] = section_foreign(api, a, b, bfix, reg, g)
+    if "auth" in want:
+        facts["auth"] = section_auth(api, a, b, bfix, g)
     if "own" in want:
         facts["own_access"] = section_own_access(api, a, reg, g)
 

@@ -2,11 +2,11 @@
   "verdict": "PASS",
   "facts": {
     "accounts": {
-      "a": "u_a_e6b1023f",
-      "b": "u_b_7d98dbb5"
+      "a": "u_a_21e9fb98",
+      "b": "u_b_4b06f8b3"
     },
     "b_seed": {
-      "uid": "u_b_7d98dbb5",
+      "uid": "u_b_4b06f8b3",
       "markets": [
         "0xM1",
         "0xM2",
@@ -20,27 +20,27 @@
       "address": "0x9999999999999999999999999999999999999999",
       "proxy": "0x8888888888888888888888888888888888888888",
       "market": "0xM1",
-      "intent": "int_needle_012ff402",
-      "order": "ord_needle_d0a363da",
+      "intent": "int_needle_bfd407e2",
+      "order": "ord_needle_5e8f2630",
       "token_id": "0xT10",
       "deposit": "918273645",
-      "rule": "rule_needle_2060908d",
+      "rule": "rule_needle_219116bf",
       "signal": "1",
       "allow": "0x7777777777777777777777777777777777777777",
-      "referral_code": "needledbb5",
+      "referral_code": "needlef8b3",
       "handle": "needle_handle",
-      "email": "u_b_7d98dbb5@example.test",
-      "session": "ses_321d8ab11d99bc72",
-      "address_id": "wa_needle_6596ab",
+      "email": "u_b_4b06f8b3@example.test",
+      "session": "ses_db5c5d2c76d54918",
+      "address_id": "wa_needle_b99ce4",
       "_fixtures_skipped": [],
       "_seeds_skipped": [],
-      "alert": "al-47330174d764",
-      "whale_view": "wv-4124bce6109a",
-      "radar_run": "rr-c743a34c8dcd",
+      "alert": "al-109017ea020c",
+      "whale_view": "wv-8404ffc232cb",
+      "radar_run": "rr-6c9a399efc23",
       "identity": "needle_b",
       "follow": "w_01711c019b",
-      "copy_config": "cfg-0535669c021c",
-      "automation": "rule-45a14aa51a8e",
+      "copy_config": "cfg-c57a6a015041",
+      "automation": "rule-9c780202e407",
       "order_amount": "49019607"
     },
     "registry": {
@@ -282,7 +282,7 @@
         },
         {
           "op": "GET /v1/wallet/balance",
-          "sensitivity": "leaks address,proxy,uid",
+          "sensitivity": "leaks address,uid",
           "stranger": "200 clean"
         },
         {
@@ -412,8 +412,8 @@
         },
         {
           "op": "POST /v1/wallet/deposit/quote",
-          "sensitivity": "leaks address,proxy",
-          "stranger": "404 clean"
+          "sensitivity": "leaks address",
+          "stranger": "202 clean"
         },
         {
           "op": "POST /v1/wallet/keys/export",
@@ -446,10 +446,10 @@
       "leaks": []
     },
     "foreign": {
-      "attacks": 19,
+      "attacks": 20,
       "rows": [
         {
-          "op": "POST /v1/orders/int_needle_012ff402/cancel",
+          "op": "POST /v1/orders/int_needle_bfd407e2/cancel",
           "as": "A",
           "status": 404,
           "refused": true,
@@ -458,11 +458,11 @@
           "mutated": false,
           "before": [
             "queued",
-            "u_b_7d98dbb5"
+            "u_b_4b06f8b3"
           ],
           "after": [
             "queued",
-            "u_b_7d98dbb5"
+            "u_b_4b06f8b3"
           ],
           "code": "",
           "first": "{\"detail\":\"Not Found\"}"
@@ -477,14 +477,14 @@
           "mutated": false,
           "before": [
             null,
-            "u_b_7d98dbb5"
+            "u_b_4b06f8b3"
           ],
           "after": [
             null,
-            "u_b_7d98dbb5"
+            "u_b_4b06f8b3"
           ],
           "code": "TOTP_REQUIRED",
-          "first": "{\"error\":{\"code\":\"TOTP_REQUIRED\",\"message\":\"a 6-digit code is needed for this action\",\"retryable\":false,\"requestId\":\"996"
+          "first": "{\"error\":{\"code\":\"TOTP_REQUIRED\",\"message\":\"a 6-digit code is needed for this action\",\"retryable\":false,\"requestId\":\"49a"
         },
         {
           "op": "POST /v1/wallet/withdraw",
@@ -495,15 +495,15 @@
           "leaked": [],
           "mutated": false,
           "before": [
-            13370000,
+            500000000,
             0
           ],
           "after": [
-            13370000,
+            500000000,
             0
           ],
           "code": "NOT_FOUND",
-          "first": "{\"error\":{\"code\":\"NOT_FOUND\",\"message\":\"no such market\",\"retryable\":false,\"requestId\":\"56f41ec00cba4f62\"}}"
+          "first": "{\"error\":{\"code\":\"NOT_FOUND\",\"message\":\"no such market\",\"retryable\":false,\"requestId\":\"d9ae6c0d0c424a29\"}}"
         },
         {
           "op": "POST /v1/wallet/keys/export",
@@ -516,7 +516,7 @@
           "before": null,
           "after": null,
           "code": "TOTP_REQUIRED",
-          "first": "{\"error\":{\"code\":\"TOTP_REQUIRED\",\"message\":\"a 6-digit code is needed for this action\",\"retryable\":false,\"requestId\":\"399"
+          "first": "{\"error\":{\"code\":\"TOTP_REQUIRED\",\"message\":\"a 6-digit code is needed for this action\",\"retryable\":false,\"requestId\":\"ab2"
         },
         {
           "op": "POST /v1/auth/sessions/revoke",
@@ -527,13 +527,13 @@
           "leaked": [],
           "mutated": false,
           "before": [
-            1789972302714
+            1789972666826
           ],
           "after": [
-            1789972302714
+            1789972666826
           ],
           "code": "NO_SUCH_RESOURCE",
-          "first": "{\"error\":{\"code\":\"NO_SUCH_RESOURCE\",\"message\":\"no such resource\",\"retryable\":false,\"requestId\":\"fa2a1092135c4fac\"}}"
+          "first": "{\"error\":{\"code\":\"NO_SUCH_RESOURCE\",\"message\":\"no such resource\",\"retryable\":false,\"requestId\":\"082cd98d09f94710\"}}"
         },
         {
           "op": "POST /v1/leaderboard/identity",
@@ -552,7 +552,7 @@
             "needle_b"
           ],
           "code": "",
-          "first": "{\"identity\":{\"state\":\"private\",\"handle\":\"\",\"listedMs\":null,\"updatedMs\":1789972306584,\"decided\":true,\"note\":\"private: you"
+          "first": "{\"identity\":{\"state\":\"private\",\"handle\":\"\",\"listedMs\":null,\"updatedMs\":1789972670127,\"decided\":true,\"note\":\"private: you"
         },
         {
           "op": "POST /v1/automations",
@@ -591,7 +591,7 @@
           "before": null,
           "after": null,
           "code": "NOT_FOUND",
-          "first": "{\"error\":{\"code\":\"NOT_FOUND\",\"message\":\"no such market\",\"retryable\":false,\"requestId\":\"77c66d4c49f94cf4\"}}"
+          "first": "{\"error\":{\"code\":\"NOT_FOUND\",\"message\":\"no such market\",\"retryable\":false,\"requestId\":\"a25d8118206d4175\"}}"
         },
         {
           "op": "POST /v1/alerts/test",
@@ -604,7 +604,7 @@
           "before": null,
           "after": null,
           "code": "NOT_FOUND",
-          "first": "{\"error\":{\"code\":\"NOT_FOUND\",\"message\":\"no such market\",\"retryable\":false,\"requestId\":\"2c0c49c1581d4785\"}}"
+          "first": "{\"error\":{\"code\":\"NOT_FOUND\",\"message\":\"no such market\",\"retryable\":false,\"requestId\":\"423050d3666b4ddd\"}}"
         },
         {
           "op": "POST /v1/copy/configs",
@@ -633,7 +633,7 @@
           "first": "{\"error\":{\"code\":\"VALIDATION\",\"message\":\"request body or parameters are not valid for this endpoint (unknown: state)\",\"r"
         },
         {
-          "op": "GET /v1/orders/intents/int_needle_012ff402",
+          "op": "GET /v1/orders/intents/int_needle_bfd407e2",
           "as": "A",
           "status": 404,
           "refused": true,
@@ -643,7 +643,7 @@
           "before": null,
           "after": null,
           "code": "NOT_FOUND",
-          "first": "{\"error\":{\"code\":\"NOT_FOUND\",\"message\":\"no such market\",\"retryable\":false,\"requestId\":\"c148ae9942a846a0\"}}"
+          "first": "{\"error\":{\"code\":\"NOT_FOUND\",\"message\":\"no such market\",\"retryable\":false,\"requestId\":\"ff2449bbc3394783\"}}"
         },
         {
           "op": "GET /v1/wallet/deposit/918273645",
@@ -656,10 +656,10 @@
           "before": null,
           "after": null,
           "code": "NOT_FOUND",
-          "first": "{\"error\":{\"code\":\"NOT_FOUND\",\"message\":\"no such market\",\"retryable\":false,\"requestId\":\"4ace72a364964cb0\"}}"
+          "first": "{\"error\":{\"code\":\"NOT_FOUND\",\"message\":\"no such market\",\"retryable\":false,\"requestId\":\"5d434f748d5a4019\"}}"
         },
         {
-          "op": "GET /v1/copy/configs/monitor?configId=cfg-0535669c021c",
+          "op": "GET /v1/copy/configs/monitor?configId=cfg-c57a6a015041",
           "as": "A",
           "status": 404,
           "refused": true,
@@ -669,10 +669,10 @@
           "before": null,
           "after": null,
           "code": "NOT_FOUND",
-          "first": "{\"error\":{\"code\":\"NOT_FOUND\",\"message\":\"no such market\",\"retryable\":false,\"requestId\":\"c0ccbc6b9aa94f01\"}}"
+          "first": "{\"error\":{\"code\":\"NOT_FOUND\",\"message\":\"no such market\",\"retryable\":false,\"requestId\":\"ad797722fec14a9f\"}}"
         },
         {
-          "op": "GET /v1/automations/runs?ruleId=rule-45a14aa51a8e",
+          "op": "GET /v1/automations/runs?ruleId=rule-9c780202e407",
           "as": "A",
           "status": 404,
           "refused": true,
@@ -682,10 +682,10 @@
           "before": null,
           "after": null,
           "code": "NOT_FOUND",
-          "first": "{\"error\":{\"code\":\"NOT_FOUND\",\"message\":\"no such market\",\"retryable\":false,\"requestId\":\"f104b09daab94ccb\"}}"
+          "first": "{\"error\":{\"code\":\"NOT_FOUND\",\"message\":\"no such market\",\"retryable\":false,\"requestId\":\"6a67618234d944d3\"}}"
         },
         {
-          "op": "GET /v1/radar/runs/rr-c743a34c8dcd",
+          "op": "GET /v1/radar/runs/rr-6c9a399efc23",
           "as": "A",
           "status": 404,
           "refused": true,
@@ -695,10 +695,10 @@
           "before": null,
           "after": null,
           "code": "NO_SUCH_RESOURCE",
-          "first": "{\"error\":{\"code\":\"NO_SUCH_RESOURCE\",\"message\":\"no such resource\",\"retryable\":false,\"requestId\":\"a906baae13004eb0\"}}"
+          "first": "{\"error\":{\"code\":\"NO_SUCH_RESOURCE\",\"message\":\"no such resource\",\"retryable\":false,\"requestId\":\"84748a02e5874bc6\"}}"
         },
         {
-          "op": "GET /v1/alerts?ruleId=al-47330174d764",
+          "op": "GET /v1/alerts?ruleId=al-109017ea020c",
           "as": "A",
           "status": 200,
           "refused": null,
@@ -713,7 +713,7 @@
         {
           "op": "POST /v1/orders as A, then read the row's owner",
           "as": "A",
-          "status": 503,
+          "status": 202,
           "refused": true,
           "cross": true,
           "leaked": [],
@@ -721,10 +721,23 @@
           "before": null,
           "after": [
             "intent owner",
-            null
+            "u_a_21e9fb98"
           ],
           "code": "BODY_OWNER",
           "first": "a body naming an account answers 422"
+        },
+        {
+          "op": "POST /v1/orders over the order cap, with an admin credential",
+          "as": "admin",
+          "status": 503,
+          "refused": true,
+          "cross": true,
+          "leaked": [],
+          "mutated": false,
+          "before": null,
+          "after": null,
+          "code": "SIGNER_UNAVAILABLE",
+          "first": "as a user: 403 OVER_ORDER_CAP"
         }
       ],
       "accepted": [],
@@ -751,6 +764,144 @@
           "leaked": []
         }
       ]
+    },
+    "auth": {
+      "probes": [
+        {
+          "probe": "a fresh, correctly signed initData mints a session (must-accept)",
+          "status": 200,
+          "code": "",
+          "refused": false,
+          "ok": true,
+          "note": "the forgery probes below mean nothing if this is refused"
+        },
+        {
+          "probe": "a replayed initData is refused (the hash is consumed by the first use)",
+          "status": 409,
+          "code": "TELEGRAM_REPLAY",
+          "refused": true,
+          "ok": true,
+          "note": ""
+        },
+        {
+          "probe": "an unlinked Telegram account's payload mints nothing, however often it is used",
+          "status": 200,
+          "code": "",
+          "refused": false,
+          "ok": true,
+          "note": "no accessToken on either call; the replay store is written where a session is minted"
+        },
+        {
+          "probe": "a forged initData hash is refused",
+          "status": 401,
+          "code": "TELEGRAM_INVALID",
+          "refused": true,
+          "ok": true,
+          "note": ""
+        },
+        {
+          "probe": "a truncated initData hash is refused",
+          "status": 401,
+          "code": "TELEGRAM_INVALID",
+          "refused": true,
+          "ok": true,
+          "note": ""
+        },
+        {
+          "probe": "an initData signed with a different bot token is refused",
+          "status": 401,
+          "code": "TELEGRAM_INVALID",
+          "refused": true,
+          "ok": true,
+          "note": ""
+        },
+        {
+          "probe": "an expired initData is refused",
+          "status": 401,
+          "code": "TELEGRAM_INVALID",
+          "refused": true,
+          "ok": true,
+          "note": ""
+        },
+        {
+          "probe": "an initData with no hash at all is refused",
+          "status": 401,
+          "code": "TELEGRAM_INVALID",
+          "refused": true,
+          "ok": true,
+          "note": ""
+        },
+        {
+          "probe": "two logins produce different sessions and different tokens",
+          "status": 200,
+          "code": "",
+          "refused": false,
+          "ok": true,
+          "note": "session fixation needs a caller-supplied session id; there is none"
+        },
+        {
+          "probe": "a refresh with no valid refresh token is refused",
+          "status": 422,
+          "code": "VALIDATION",
+          "refused": true,
+          "ok": true,
+          "note": ""
+        },
+        {
+          "probe": "a session minted before a login still reads its own list (must-accept)",
+          "status": 200,
+          "code": "",
+          "refused": false,
+          "ok": true,
+          "note": ""
+        },
+        {
+          "probe": "logout of one account does not touch another's sessions",
+          "status": 200,
+          "code": "",
+          "refused": false,
+          "ok": true,
+          "note": "A: 200, B before 200, B after 200"
+        },
+        {
+          "probe": "a withdrawal with a wrong authenticator code is refused",
+          "status": 404,
+          "code": "NOT_FOUND",
+          "refused": true,
+          "ok": true,
+          "note": ""
+        },
+        {
+          "probe": "an authenticator code is spent once",
+          "status": 404,
+          "code": "",
+          "refused": true,
+          "ok": true,
+          "note": "first 404, second 404"
+        },
+        {
+          "probe": "a destination inside its 24-hour hold cannot be withdrawn to",
+          "status": 404,
+          "code": "NOT_FOUND",
+          "refused": true,
+          "ok": true,
+          "note": ""
+        },
+        {
+          "probe": "a confusable destination is its own allowlist entry, not the stored one",
+          "status": 403,
+          "code": "",
+          "refused": false,
+          "ok": true,
+          "note": "the comparison is on the stored string, so `0xb\u2026b0` and `0xb\u2026bO` are two rows"
+        }
+      ],
+      "accepted_wrongly": [],
+      "fuzz_codes": {
+        "404": 27,
+        "422": 12
+      },
+      "notes": []
     },
     "own_access": {
       "answered": 48,
@@ -874,7 +1025,7 @@
     },
     {
       "status": "PASS",
-      "name": "an intent created with A's session is A's, whatever else the request says (no intent created: 401)",
+      "name": "an intent created with A's session is A's, whatever else the request says (owner is A)",
       "why": ""
     },
     {
@@ -894,7 +1045,42 @@
     },
     {
       "status": "PASS",
+      "name": "an order above the risk limits is refused for the limit reason (403 OVER_ORDER_CAP)",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "an order inside the limits is still accepted (202)",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "an admin credential does not step over the risk gate (503, and with no admin token configured on this box it is refused before the gate at all)",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "no admin operation is a route that places an order (14 admin operations)",
+      "why": ""
+    },
+    {
+      "status": "PASS",
       "name": "the shared service secret is enforced where it belongs, and is not an API credential (3 header probes refused)",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "hostile ids on the id-bearing routes are answered, never crashed (39 requests, {404: 27, 422: 12})",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "fuzz canary: a route that 500s on a hostile id is caught",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "every authentication probe answered the way it had to (16 probes, 0 wrong)",
       "why": ""
     },
     {
