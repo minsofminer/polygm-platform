@@ -1,0 +1,916 @@
+{
+  "verdict": "PASS",
+  "facts": {
+    "accounts": {
+      "a": "u_a_e6b1023f",
+      "b": "u_b_7d98dbb5"
+    },
+    "b_seed": {
+      "uid": "u_b_7d98dbb5",
+      "markets": [
+        "0xM1",
+        "0xM2",
+        "0xM3",
+        "0xM4",
+        "0xM5",
+        "0xN000",
+        "0xN001"
+      ],
+      "other_anon": "w_01711c019b",
+      "address": "0x9999999999999999999999999999999999999999",
+      "proxy": "0x8888888888888888888888888888888888888888",
+      "market": "0xM1",
+      "intent": "int_needle_012ff402",
+      "order": "ord_needle_d0a363da",
+      "token_id": "0xT10",
+      "deposit": "918273645",
+      "rule": "rule_needle_2060908d",
+      "signal": "1",
+      "allow": "0x7777777777777777777777777777777777777777",
+      "referral_code": "needledbb5",
+      "handle": "needle_handle",
+      "email": "u_b_7d98dbb5@example.test",
+      "session": "ses_321d8ab11d99bc72",
+      "address_id": "wa_needle_6596ab",
+      "_fixtures_skipped": [],
+      "_seeds_skipped": [],
+      "alert": "al-47330174d764",
+      "whale_view": "wv-4124bce6109a",
+      "radar_run": "rr-c743a34c8dcd",
+      "identity": "needle_b",
+      "follow": "w_01711c019b",
+      "copy_config": "cfg-0535669c021c",
+      "automation": "rule-45a14aa51a8e",
+      "order_amount": "49019607"
+    },
+    "registry": {
+      "served": 95,
+      "declared": 109,
+      "undeclared": [],
+      "docs_ops": [],
+      "stale": [
+        "GET /v1/alerts/feed",
+        "GET /v1/books",
+        "GET /v1/copy/record",
+        "GET /v1/me/activity",
+        "GET /v1/me/positions",
+        "GET /v1/meta/status",
+        "GET /v1/orders",
+        "GET /v1/orders/{intentId}",
+        "GET /v1/search",
+        "POST /v1/admin/flags",
+        "POST /v1/admin/revoke-keys",
+        "POST /v1/automation/rules",
+        "POST /v1/orders/{intentId}/cancel"
+      ],
+      "planned": [
+        "GET /v1/alerts/feed",
+        "GET /v1/books",
+        "GET /v1/copy/record",
+        "GET /v1/me/activity",
+        "GET /v1/me/positions",
+        "GET /v1/meta/status",
+        "GET /v1/orders",
+        "GET /v1/orders/{intentId}",
+        "GET /v1/search",
+        "POST /v1/admin/flags",
+        "POST /v1/admin/revoke-keys",
+        "POST /v1/automation/rules",
+        "POST /v1/orders/{intentId}/cancel"
+      ],
+      "drift": [],
+      "levels": {
+        "GET /healthz": "public",
+        "GET /readyz": "public",
+        "GET /v1/admin/gaming": "admin",
+        "GET /v1/alerts": "user",
+        "GET /v1/alerts/deliveries": "user",
+        "GET /v1/auth/sessions": "user",
+        "GET /v1/automations": "user",
+        "GET /v1/automations/runs": "user",
+        "GET /v1/automations/templates": "user",
+        "GET /v1/copy/configs": "user",
+        "GET /v1/copy/configs/monitor": "user",
+        "GET /v1/copy/sources": "user",
+        "GET /v1/events/{event_id}": "public",
+        "GET /v1/leaderboard": "public",
+        "GET /v1/leaderboard/boards": "public",
+        "GET /v1/leaderboard/compare": "public",
+        "GET /v1/leaderboard/follows": "user",
+        "GET /v1/leaderboard/identity": "user",
+        "GET /v1/leaderboard/me": "user",
+        "GET /v1/leaderboard/methodology": "public",
+        "GET /v1/leaderboard/rank": "public",
+        "GET /v1/leaderboard/runs": "public",
+        "GET /v1/leaderboard/snapshots": "public",
+        "GET /v1/leaderboard/why": "public",
+        "GET /v1/markets": "public",
+        "GET /v1/markets/{market_id}": "public",
+        "GET /v1/markets/{market_id}/book": "public",
+        "GET /v1/markets/{market_id}/fills": "public",
+        "GET /v1/markets/{market_id}/history": "public",
+        "GET /v1/markets/{market_id}/holders": "public",
+        "GET /v1/me/portfolio": "user",
+        "GET /v1/orders/intents/{intent_id}": "user",
+        "GET /v1/public/blocks": "admin",
+        "GET /v1/public/leaderboard/{board}": "public",
+        "GET /v1/public/market/{slug}": "public",
+        "GET /v1/public/sitemap": "public",
+        "GET /v1/public/trader/{handle}": "public",
+        "GET /v1/radar/runs/{job_id}": "user",
+        "GET /v1/referrals/me": "user",
+        "GET /v1/referrals/review": "admin",
+        "GET /v1/referrals/terms": "public",
+        "GET /v1/tape": "public",
+        "GET /v1/tape/facets": "public",
+        "GET /v1/tape/fills": "public",
+        "GET /v1/telegram/commands": "public",
+        "GET /v1/telegram/metrics": "admin",
+        "GET /v1/telegram/ops": "admin",
+        "GET /v1/traders/{anon}": "public",
+        "GET /v1/wallet/balance": "user",
+        "GET /v1/wallet/deposit/{deposit_id}": "user",
+        "GET /v1/wallet/transactions": "user",
+        "GET /v1/wallet/withdrawal-addresses": "user",
+        "GET /v1/whale-views": "user",
+        "GET /v1/whales": "public",
+        "POST /v1/admin/gaming/decide": "admin",
+        "POST /v1/admin/kill-switch": "admin",
+        "POST /v1/admin/revoke-sessions": "admin",
+        "POST /v1/alerts": "user",
+        "POST /v1/alerts/settings": "user",
+        "POST /v1/alerts/test": "user",
+        "POST /v1/auth/login": "public",
+        "POST /v1/auth/logout": "user",
+        "POST /v1/auth/refresh": "public",
+        "POST /v1/auth/sessions/revoke": "user",
+        "POST /v1/auth/telegram": "public",
+        "POST /v1/auth/totp/enroll": "user",
+        "POST /v1/auth/totp/verify": "user",
+        "POST /v1/automations": "user",
+        "POST /v1/automations/guards": "user",
+        "POST /v1/automations/preview": "user",
+        "POST /v1/copy/configs": "user",
+        "POST /v1/copy/configs/guards": "user",
+        "POST /v1/leaderboard/follows": "user",
+        "POST /v1/leaderboard/identity": "user",
+        "POST /v1/leaderboard/recompute": "user",
+        "POST /v1/orders": "user",
+        "POST /v1/orders/amount": "user",
+        "POST /v1/public/blocks": "admin",
+        "POST /v1/radar/runs": "user",
+        "POST /v1/referrals/accrue": "admin",
+        "POST /v1/referrals/apply": "user",
+        "POST /v1/referrals/code": "user",
+        "POST /v1/referrals/review": "admin",
+        "POST /v1/telegram/broadcast": "admin",
+        "POST /v1/telegram/drain": "admin",
+        "POST /v1/telegram/kill": "admin",
+        "POST /v1/telegram/order": "user",
+        "POST /v1/telegram/session": "public",
+        "POST /v1/telegram/webhook": "public",
+        "POST /v1/wallet/deposit/quote": "user",
+        "POST /v1/wallet/keys/export": "user",
+        "POST /v1/wallet/withdraw": "user",
+        "POST /v1/wallet/withdrawal-addresses/add": "user",
+        "POST /v1/wallet/withdrawal-addresses/remove": "user",
+        "POST /v1/whale-views": "user"
+      }
+    },
+    "docs": {
+      "exposed": [],
+      "absent": [
+        "GET /docs",
+        "GET /redoc",
+        "GET /docs/oauth2-redirect",
+        "GET /openapi.json"
+      ]
+    },
+    "anonymous": {
+      "anonymous_refused": 62,
+      "anonymous_2xx_where_not_public": [],
+      "public_ok": 33,
+      "public_broken": []
+    },
+    "escalation": {
+      "admin_ops": 14,
+      "reached_by_user": [],
+      "wrong_token_accepted": [],
+      "unconfigured_503": 0
+    },
+    "needles": {
+      "rows": [
+        {
+          "op": "GET /v1/alerts",
+          "sensitivity": "leaks alert",
+          "stranger": "200 clean"
+        },
+        {
+          "op": "GET /v1/alerts/deliveries",
+          "sensitivity": "leaks rule",
+          "stranger": "200 clean"
+        },
+        {
+          "op": "GET /v1/auth/sessions",
+          "sensitivity": "leaks session",
+          "stranger": "200 clean"
+        },
+        {
+          "op": "GET /v1/automations",
+          "sensitivity": "leaks automation",
+          "stranger": "200 clean"
+        },
+        {
+          "op": "GET /v1/automations/runs",
+          "sensitivity": "leaks automation",
+          "stranger": "404 clean"
+        },
+        {
+          "op": "GET /v1/automations/templates",
+          "sensitivity": "200/0",
+          "stranger": "-"
+        },
+        {
+          "op": "GET /v1/copy/configs",
+          "sensitivity": "leaks copy_config",
+          "stranger": "200 clean"
+        },
+        {
+          "op": "GET /v1/copy/configs/monitor",
+          "sensitivity": "leaks copy_config",
+          "stranger": "404 clean"
+        },
+        {
+          "op": "GET /v1/copy/sources",
+          "sensitivity": "200/0",
+          "stranger": "-"
+        },
+        {
+          "op": "GET /v1/leaderboard/follows",
+          "sensitivity": "200/0",
+          "stranger": "-"
+        },
+        {
+          "op": "GET /v1/leaderboard/identity",
+          "sensitivity": "200/0",
+          "stranger": "-"
+        },
+        {
+          "op": "GET /v1/leaderboard/me",
+          "sensitivity": "200/0",
+          "stranger": "-"
+        },
+        {
+          "op": "GET /v1/me/portfolio",
+          "sensitivity": "leaks intent",
+          "stranger": "200 clean"
+        },
+        {
+          "op": "GET /v1/orders/intents/{intent_id}",
+          "sensitivity": "leaks intent",
+          "stranger": "404 clean"
+        },
+        {
+          "op": "GET /v1/radar/runs/{job_id}",
+          "sensitivity": "200/0",
+          "stranger": "-"
+        },
+        {
+          "op": "GET /v1/referrals/me",
+          "sensitivity": "200/0",
+          "stranger": "-"
+        },
+        {
+          "op": "GET /v1/wallet/balance",
+          "sensitivity": "leaks address,proxy,uid",
+          "stranger": "200 clean"
+        },
+        {
+          "op": "GET /v1/wallet/deposit/{deposit_id}",
+          "sensitivity": "leaks deposit,uid",
+          "stranger": "404 clean"
+        },
+        {
+          "op": "GET /v1/wallet/transactions",
+          "sensitivity": "leaks uid",
+          "stranger": "200 clean"
+        },
+        {
+          "op": "GET /v1/wallet/withdrawal-addresses",
+          "sensitivity": "leaks address_id",
+          "stranger": "200 clean"
+        },
+        {
+          "op": "GET /v1/whale-views",
+          "sensitivity": "leaks whale_view",
+          "stranger": "200 clean"
+        },
+        {
+          "op": "POST /v1/alerts",
+          "sensitivity": "200/0",
+          "stranger": "-"
+        },
+        {
+          "op": "POST /v1/alerts/settings",
+          "sensitivity": "200/0",
+          "stranger": "-"
+        },
+        {
+          "op": "POST /v1/alerts/test",
+          "sensitivity": "leaks alert",
+          "stranger": "404 clean"
+        },
+        {
+          "op": "POST /v1/auth/logout",
+          "sensitivity": "200/0",
+          "stranger": "-"
+        },
+        {
+          "op": "POST /v1/auth/sessions/revoke",
+          "sensitivity": "200/0",
+          "stranger": "-"
+        },
+        {
+          "op": "POST /v1/auth/totp/enroll",
+          "sensitivity": "leaks uid",
+          "stranger": "200 clean"
+        },
+        {
+          "op": "POST /v1/auth/totp/verify",
+          "sensitivity": "422/0",
+          "stranger": "-"
+        },
+        {
+          "op": "POST /v1/automations",
+          "sensitivity": "422/0",
+          "stranger": "-"
+        },
+        {
+          "op": "POST /v1/automations/guards",
+          "sensitivity": "leaks automation",
+          "stranger": "404 clean"
+        },
+        {
+          "op": "POST /v1/automations/preview",
+          "sensitivity": "422/0",
+          "stranger": "-"
+        },
+        {
+          "op": "POST /v1/copy/configs",
+          "sensitivity": "422/0",
+          "stranger": "-"
+        },
+        {
+          "op": "POST /v1/copy/configs/guards",
+          "sensitivity": "leaks copy_config",
+          "stranger": "404 clean"
+        },
+        {
+          "op": "POST /v1/leaderboard/follows",
+          "sensitivity": "422/0",
+          "stranger": "-"
+        },
+        {
+          "op": "POST /v1/leaderboard/identity",
+          "sensitivity": "200/0",
+          "stranger": "-"
+        },
+        {
+          "op": "POST /v1/leaderboard/recompute",
+          "sensitivity": "200/0",
+          "stranger": "-"
+        },
+        {
+          "op": "POST /v1/orders",
+          "sensitivity": "202/0",
+          "stranger": "-"
+        },
+        {
+          "op": "POST /v1/orders/amount",
+          "sensitivity": "202/0",
+          "stranger": "-"
+        },
+        {
+          "op": "POST /v1/radar/runs",
+          "sensitivity": "200/0",
+          "stranger": "-"
+        },
+        {
+          "op": "POST /v1/referrals/apply",
+          "sensitivity": "409/0",
+          "stranger": "-"
+        },
+        {
+          "op": "POST /v1/referrals/code",
+          "sensitivity": "200/0",
+          "stranger": "-"
+        },
+        {
+          "op": "POST /v1/telegram/order",
+          "sensitivity": "422/0",
+          "stranger": "-"
+        },
+        {
+          "op": "POST /v1/wallet/deposit/quote",
+          "sensitivity": "leaks address,proxy",
+          "stranger": "404 clean"
+        },
+        {
+          "op": "POST /v1/wallet/keys/export",
+          "sensitivity": "422/0",
+          "stranger": "-"
+        },
+        {
+          "op": "POST /v1/wallet/withdraw",
+          "sensitivity": "422/0",
+          "stranger": "-"
+        },
+        {
+          "op": "POST /v1/wallet/withdrawal-addresses/add",
+          "sensitivity": "403/0",
+          "stranger": "-"
+        },
+        {
+          "op": "POST /v1/wallet/withdrawal-addresses/remove",
+          "sensitivity": "403/0",
+          "stranger": "-"
+        },
+        {
+          "op": "POST /v1/whale-views",
+          "sensitivity": "422/0",
+          "stranger": "-"
+        }
+      ],
+      "conclusive": 19,
+      "inconclusive": 29,
+      "leaks": []
+    },
+    "foreign": {
+      "attacks": 19,
+      "rows": [
+        {
+          "op": "POST /v1/orders/int_needle_012ff402/cancel",
+          "as": "A",
+          "status": 404,
+          "refused": true,
+          "cross": true,
+          "leaked": [],
+          "mutated": false,
+          "before": [
+            "queued",
+            "u_b_7d98dbb5"
+          ],
+          "after": [
+            "queued",
+            "u_b_7d98dbb5"
+          ],
+          "code": "",
+          "first": "{\"detail\":\"Not Found\"}"
+        },
+        {
+          "op": "POST /v1/wallet/withdrawal-addresses/remove",
+          "as": "A",
+          "status": 403,
+          "refused": true,
+          "cross": true,
+          "leaked": [],
+          "mutated": false,
+          "before": [
+            null,
+            "u_b_7d98dbb5"
+          ],
+          "after": [
+            null,
+            "u_b_7d98dbb5"
+          ],
+          "code": "TOTP_REQUIRED",
+          "first": "{\"error\":{\"code\":\"TOTP_REQUIRED\",\"message\":\"a 6-digit code is needed for this action\",\"retryable\":false,\"requestId\":\"996"
+        },
+        {
+          "op": "POST /v1/wallet/withdraw",
+          "as": "A",
+          "status": 404,
+          "refused": true,
+          "cross": true,
+          "leaked": [],
+          "mutated": false,
+          "before": [
+            13370000,
+            0
+          ],
+          "after": [
+            13370000,
+            0
+          ],
+          "code": "NOT_FOUND",
+          "first": "{\"error\":{\"code\":\"NOT_FOUND\",\"message\":\"no such market\",\"retryable\":false,\"requestId\":\"56f41ec00cba4f62\"}}"
+        },
+        {
+          "op": "POST /v1/wallet/keys/export",
+          "as": "A",
+          "status": 403,
+          "refused": true,
+          "cross": true,
+          "leaked": [],
+          "mutated": false,
+          "before": null,
+          "after": null,
+          "code": "TOTP_REQUIRED",
+          "first": "{\"error\":{\"code\":\"TOTP_REQUIRED\",\"message\":\"a 6-digit code is needed for this action\",\"retryable\":false,\"requestId\":\"399"
+        },
+        {
+          "op": "POST /v1/auth/sessions/revoke",
+          "as": "A",
+          "status": 404,
+          "refused": true,
+          "cross": true,
+          "leaked": [],
+          "mutated": false,
+          "before": [
+            1789972302714
+          ],
+          "after": [
+            1789972302714
+          ],
+          "code": "NO_SUCH_RESOURCE",
+          "first": "{\"error\":{\"code\":\"NO_SUCH_RESOURCE\",\"message\":\"no such resource\",\"retryable\":false,\"requestId\":\"fa2a1092135c4fac\"}}"
+        },
+        {
+          "op": "POST /v1/leaderboard/identity",
+          "as": "A",
+          "status": 200,
+          "refused": null,
+          "cross": false,
+          "leaked": [],
+          "mutated": false,
+          "before": [
+            "listed",
+            "needle_b"
+          ],
+          "after": [
+            "listed",
+            "needle_b"
+          ],
+          "code": "",
+          "first": "{\"identity\":{\"state\":\"private\",\"handle\":\"\",\"listedMs\":null,\"updatedMs\":1789972306584,\"decided\":true,\"note\":\"private: you"
+        },
+        {
+          "op": "POST /v1/automations",
+          "as": "A",
+          "status": 422,
+          "refused": true,
+          "cross": true,
+          "leaked": [],
+          "mutated": false,
+          "before": null,
+          "after": null,
+          "code": "VALIDATION",
+          "first": "{\"error\":{\"code\":\"VALIDATION\",\"message\":\"request body or parameters are not valid for this endpoint (unknown: ruleId)\",\""
+        },
+        {
+          "op": "POST /v1/automations/guards",
+          "as": "A",
+          "status": 422,
+          "refused": true,
+          "cross": true,
+          "leaked": [],
+          "mutated": false,
+          "before": null,
+          "after": null,
+          "code": "VALIDATION",
+          "first": "{\"error\":{\"code\":\"VALIDATION\",\"message\":\"request body or parameters are not valid for this endpoint (state must be one o"
+        },
+        {
+          "op": "POST /v1/alerts",
+          "as": "A",
+          "status": 404,
+          "refused": true,
+          "cross": true,
+          "leaked": [],
+          "mutated": false,
+          "before": null,
+          "after": null,
+          "code": "NOT_FOUND",
+          "first": "{\"error\":{\"code\":\"NOT_FOUND\",\"message\":\"no such market\",\"retryable\":false,\"requestId\":\"77c66d4c49f94cf4\"}}"
+        },
+        {
+          "op": "POST /v1/alerts/test",
+          "as": "A",
+          "status": 404,
+          "refused": true,
+          "cross": true,
+          "leaked": [],
+          "mutated": false,
+          "before": null,
+          "after": null,
+          "code": "NOT_FOUND",
+          "first": "{\"error\":{\"code\":\"NOT_FOUND\",\"message\":\"no such market\",\"retryable\":false,\"requestId\":\"2c0c49c1581d4785\"}}"
+        },
+        {
+          "op": "POST /v1/copy/configs",
+          "as": "A",
+          "status": 422,
+          "refused": true,
+          "cross": true,
+          "leaked": [],
+          "mutated": false,
+          "before": null,
+          "after": null,
+          "code": "VALIDATION",
+          "first": "{\"error\":{\"code\":\"VALIDATION\",\"message\":\"request body or parameters are not valid for this endpoint (unknown: configId)\""
+        },
+        {
+          "op": "POST /v1/copy/configs/guards",
+          "as": "A",
+          "status": 422,
+          "refused": true,
+          "cross": true,
+          "leaked": [],
+          "mutated": false,
+          "before": null,
+          "after": null,
+          "code": "VALIDATION",
+          "first": "{\"error\":{\"code\":\"VALIDATION\",\"message\":\"request body or parameters are not valid for this endpoint (unknown: state)\",\"r"
+        },
+        {
+          "op": "GET /v1/orders/intents/int_needle_012ff402",
+          "as": "A",
+          "status": 404,
+          "refused": true,
+          "cross": true,
+          "leaked": [],
+          "mutated": false,
+          "before": null,
+          "after": null,
+          "code": "NOT_FOUND",
+          "first": "{\"error\":{\"code\":\"NOT_FOUND\",\"message\":\"no such market\",\"retryable\":false,\"requestId\":\"c148ae9942a846a0\"}}"
+        },
+        {
+          "op": "GET /v1/wallet/deposit/918273645",
+          "as": "A",
+          "status": 404,
+          "refused": true,
+          "cross": true,
+          "leaked": [],
+          "mutated": false,
+          "before": null,
+          "after": null,
+          "code": "NOT_FOUND",
+          "first": "{\"error\":{\"code\":\"NOT_FOUND\",\"message\":\"no such market\",\"retryable\":false,\"requestId\":\"4ace72a364964cb0\"}}"
+        },
+        {
+          "op": "GET /v1/copy/configs/monitor?configId=cfg-0535669c021c",
+          "as": "A",
+          "status": 404,
+          "refused": true,
+          "cross": true,
+          "leaked": [],
+          "mutated": false,
+          "before": null,
+          "after": null,
+          "code": "NOT_FOUND",
+          "first": "{\"error\":{\"code\":\"NOT_FOUND\",\"message\":\"no such market\",\"retryable\":false,\"requestId\":\"c0ccbc6b9aa94f01\"}}"
+        },
+        {
+          "op": "GET /v1/automations/runs?ruleId=rule-45a14aa51a8e",
+          "as": "A",
+          "status": 404,
+          "refused": true,
+          "cross": true,
+          "leaked": [],
+          "mutated": false,
+          "before": null,
+          "after": null,
+          "code": "NOT_FOUND",
+          "first": "{\"error\":{\"code\":\"NOT_FOUND\",\"message\":\"no such market\",\"retryable\":false,\"requestId\":\"f104b09daab94ccb\"}}"
+        },
+        {
+          "op": "GET /v1/radar/runs/rr-c743a34c8dcd",
+          "as": "A",
+          "status": 404,
+          "refused": true,
+          "cross": true,
+          "leaked": [],
+          "mutated": false,
+          "before": null,
+          "after": null,
+          "code": "NO_SUCH_RESOURCE",
+          "first": "{\"error\":{\"code\":\"NO_SUCH_RESOURCE\",\"message\":\"no such resource\",\"retryable\":false,\"requestId\":\"a906baae13004eb0\"}}"
+        },
+        {
+          "op": "GET /v1/alerts?ruleId=al-47330174d764",
+          "as": "A",
+          "status": 200,
+          "refused": null,
+          "cross": false,
+          "leaked": [],
+          "mutated": false,
+          "before": null,
+          "after": null,
+          "code": "",
+          "first": "{\"rules\":[],\"settings\":{\"quietStartMin\":-1,\"quietEndMin\":-1,\"tzOffsetMin\":0,\"digestMode\":\"off\",\"digestAtMin\":480,\"defaul"
+        },
+        {
+          "op": "POST /v1/orders as A, then read the row's owner",
+          "as": "A",
+          "status": 503,
+          "refused": true,
+          "cross": true,
+          "leaked": [],
+          "mutated": false,
+          "before": null,
+          "after": [
+            "intent owner",
+            null
+          ],
+          "code": "BODY_OWNER",
+          "first": "a body naming an account answers 422"
+        }
+      ],
+      "accepted": [],
+      "mutated": [],
+      "leaked": [],
+      "admin_order_status": 503,
+      "service_probes": [
+        {
+          "op": "/v1/orders",
+          "status": 503,
+          "accepted": false,
+          "leaked": []
+        },
+        {
+          "op": "/v1/wallet/balance",
+          "status": 401,
+          "accepted": false,
+          "leaked": []
+        },
+        {
+          "op": "/v1/automations",
+          "status": 401,
+          "accepted": false,
+          "leaked": []
+        }
+      ]
+    },
+    "own_access": {
+      "answered": 48,
+      "refused_owner": []
+    },
+    "sessions_alive": {
+      "A": 200,
+      "B": 200
+    }
+  },
+  "checks": [
+    {
+      "status": "PASS",
+      "name": "the harness's own TOTP implementation matches RFC 6238's vectors",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "the attack account holds a working second factor (enrolled)",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "every served operation has an authorisation decision (95 served, 109 declared)",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "every level in the registry is one of public, user, user-owns-resource, admin, service",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "registry canary: an admin operation declared public is caught",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "every declared-but-unserved operation is a written promise, and none is drift (13 stale, 13 planned)",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "every written promise is still unserved or has been collected (13)",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "registry canary: a route renamed out from under the table is caught as drift",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "the production identity shape serves no interactive API surface (4 of 4 paths are 404)",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "docs canary: a served schema is caught (the check must be asking a real path)",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "no non-public operation answers an anonymous caller (62 refused)",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "public operations are reachable anonymously (33 of 33 answered below 400)",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "a user session cannot reach any of the 14 admin operations",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "a wrong admin token is never accepted",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "with no admin token configured, admin operations answer 503 rather than looking like a refusal of an attack on a configured box",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "no operation leaks a stranger's identifiers to a signed-in user (19 conclusive probes, 29 inconclusive)",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "the needle probes are conclusive for the id-bearing operations (a probe where B's own call surfaces nothing proves nothing)",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "needle canary: a response containing a stranger's wallet address is caught",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "a stranger cannot act on another account (19 attacks, none accepted)",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "no refused attack changed the other account's row (19 watched rows)",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "no refused attack echoed the other account's private strings",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "write canary: a changed row is visible to the post-state read",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "an intent created with A's session is A's, whatever else the request says (no intent created: 401)",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "the order body has no field that names an account (a body with `userId` answers 422, so there is nothing to spoof)",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "an admin token is not a way around the user session on an order (status 503)",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "a service token is not a user identity (3 probes, none accepted)",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "the shared service secret is enforced where it belongs, and is not an API credential (3 header probes refused)",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "every user operation accepts its rightful owner's session (48 answered, none 401/403)",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "no user operation answers 5xx to its own owner (48 answered cleanly)",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "both accounts still hold a working session at the end of the run ({'A': 200, 'B': 200})",
+      "why": ""
+    }
+  ]
+}

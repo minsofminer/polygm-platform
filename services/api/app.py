@@ -495,9 +495,22 @@ def _require_schema(c: sqlite3.Connection) -> None:
             % (c.execute("PRAGMA database_list").fetchone()[2], ", ".join(missing)))
 
 
+#: FastAPI mounts `/docs`, `/redoc` and `/openapi.json` by default. On a laptop that is the friendliest thing
+#: about it; on the API's own origin it is 137 KB of schema naming every path, every parameter, every error code
+#: and every enum, served to anybody who asks — P14 D1 measured exactly that. The production identity shape
+#: (`PGM_REQUIRE_SECURITY_ENV=1`, which is what the deployed box runs) therefore turns the whole interactive
+#: surface off, and `PGM_DOCS=1` turns it back on for local work and for the tools that read the schema. The
+#: default follows the identity shape rather than a separate switch, because two switches is one too many for a
+#: decision that has to be right on the box.
+_DOCS_ON = (os.environ.get("PGM_DOCS", "").strip().lower() in ("1", "true", "yes")
+            or os.environ.get("PGM_REQUIRE_SECURITY_ENV", "").strip().lower() not in ("1", "true", "yes"))
+
 app = FastAPI(title="Openout API", version="1.0.0",
               description="Read endpoints are public or user-scoped. Every mutating endpoint requires an "
-                          "Idempotency-Key header (P04 rule 5) and is versioned under /v1/.")
+                          "Idempotency-Key header (P04 rule 5) and is versioned under /v1/.",
+              docs_url="/docs" if _DOCS_ON else None,
+              redoc_url="/redoc" if _DOCS_ON else None,
+              openapi_url="/openapi.json" if _DOCS_ON else None)
 def _thread_connection() -> sqlite3.Connection:
     """A new connection for a new thread, checked for the schema the boot check checks for the first one.
 
@@ -6689,7 +6702,7 @@ def _operator_subject() -> str:
     return _REF_OPERATOR_UID
 
 
-def _ref_link(uid: str, at: int | None = None) -> dict:
+def _ref_link(uid: str, at: int | None = None, rid: str = "") -> dict:
     """The account's link row, minted on first read.
 
     A GET that writes is a smell, and here it is the smaller one: the alternative is a POST whose only possible
@@ -6710,6 +6723,28 @@ def _ref_link(uid: str, at: int | None = None) -> dict:
         created = True
         row = (token, token)
     token = str(row[0])
+    if not _rc.is_link_token(token):
+        # A stored token that is not a link token used to be a 500 on `GET /v1/referrals/me` *and* on
+        # `POST /v1/referrals/code`, permanently, with `retryable: true` telling the client to keep asking —
+        # P14 D1 found it by seeding a referral row by hand. The row is ours and the token is unguessable
+        # either way, so the repair is to mint a working one and say so, not to answer an internal error to a
+        # referrer whose dashboard has no other way out. Retired rather than updated in place: a token somebody
+        # may already have pasted somewhere is a token we keep, and `link_for` never produced this one anyway.
+        fresh = _rc.make_token()
+        _db.execute("UPDATE referral_links SET state='retired', retired_ms=? WHERE user_id=? AND kind='link'"
+                    " AND state='active'", (now, str(uid)))
+        _db.execute("INSERT INTO referral_links (user_id, code, token, kind, state, created_ms, retired_ms)"
+                    " VALUES (?,?,?,'link','active',?,NULL)", (str(uid), fresh, fresh, now))
+        _db.execute("INSERT INTO audit_log (at_ms, actor_type, actor_id, action, target_table, target_id,"
+                    " request_id, detail_json) VALUES (?,?,?,?,?,?,?,?)",
+                    # `service`, not `system`: the actor vocabulary is a CHECK constraint and the service is what
+                    # is doing this — the user asked for their dashboard, they did not ask for a new token.
+                    (now, "service", str(uid), "referral.link_repaired", "referral_links", str(uid), str(rid),
+                     json.dumps({"reason": "stored token was not a link token",
+                                 "previous_len": len(token)}, sort_keys=True)))
+        _db.commit()
+        token = fresh
+        created = True
     short = _db.execute("SELECT code FROM referral_links WHERE user_id=? AND kind='short' AND state='active'",
                         (str(uid),)).fetchone()
     code = str(short[0]) if short else ""
@@ -6834,7 +6869,7 @@ def get_referral_me(request: Request):
         return e
     at = _now_ms()
     uid = str(uid)
-    link = _ref_link(uid, at)
+    link = _ref_link(uid, at, rid)
     clicks = _db.execute("SELECT COUNT(*) FROM referral_clicks WHERE referrer=?", (uid,)).fetchone()
     # `state<>'refused'` — a refused attempt is not shown to the referrer, and that is a privacy decision
     # rather than a tidiness one: telling a referrer "somebody tried your code and we refused them" tells them
@@ -6946,14 +6981,24 @@ def _ref_code_work(rid: str, uid: str, body: dict):
     if not code:
         return err("CODE_INVALID", rid, detail=why, where=["code"])
     at = _now_ms()
-    taken = _db.execute("SELECT user_id FROM referral_links WHERE code=?", (code,)).fetchone()
+    taken = _db.execute("SELECT user_id, kind, state FROM referral_links WHERE code=?", (code,)).fetchone()
     if taken is not None and str(taken[0]) != str(uid):
         return err("CODE_TAKEN", rid, where=["code"])
+    if taken is not None and str(taken[1]) == "short" and str(taken[2]) == "active":
+        # Claiming the code you already hold. The old code retired every other code first and then inserted the
+        # same primary key, which is a UNIQUE violation — a **500 INTERNAL with `retryable: true`**, repeating
+        # forever, found by P14 D1's matrix calling this route twice. It is the same request twice, so the right
+        # answer is the state it already has: the caller asked for a thing that is already true.
+        link_now = _ref_link(uid, _now_ms(), rid)
+        return _stamped({"code": code, "shortUrl": _rc.code_link(code), "previous": code, "link": link_now,
+                         "note": "that is already your active code, so nothing changed; a code is rotated by "
+                                 "claiming a different one"},
+                        ttl_ms=15_000, stale_ms=flags().stale_ms_tape, as_of_ms=_now_ms())
     previous = (_db.execute("SELECT code FROM referral_links WHERE user_id=? AND kind='short' AND state='active'",
                             (str(uid),)).fetchone() or [""])[0]
     _db.execute("UPDATE referral_links SET state='retired', retired_ms=? WHERE user_id=? AND kind='short'"
                 " AND state='active'", (at, str(uid)))
-    link = _ref_link(uid, at)
+    link = _ref_link(uid, at, rid)
     _db.execute("INSERT INTO referral_links (user_id, code, token, kind, state, created_ms, retired_ms)"
                 " VALUES (?,?,?,'short','active',?,NULL)", (str(uid), code, link["token"], at))
     _db.execute("INSERT INTO audit_log (at_ms, actor_type, actor_id, action, target_table, target_id,"

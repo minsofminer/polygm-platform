@@ -58,28 +58,19 @@ def init_data(user_id: int, *, at_s: int | None = None, token: str = BOT_TOKEN, 
     return "&".join("%s=%s" % (k, v) for k, v in fields.items())
 
 
-# Declared in `authz.LEVELS_TABLE` but not yet served, because a later phase builds them. This list is the
-# promise; the test asserts the table contains exactly this much foresight and no more.
-PLANNED_NOT_SERVED = [
-    "GET /openapi.json",
-    "GET /v1/alerts/feed",
-    "GET /v1/books",
-    "GET /v1/copy/record",
-    "GET /v1/me/activity",
-    "GET /v1/me/positions",
-    "GET /v1/meta/status",
-    "GET /v1/orders",
-    "GET /v1/orders/{intentId}",
-    "GET /v1/search",
-    "POST /v1/admin/flags",
-    "POST /v1/admin/revoke-keys",
-    "POST /v1/automation/rules",
-    "POST /v1/orders/{intentId}/cancel",
-]
-# P12 D6 served them, and both sides moved together: `withdraw` and the key export (renamed to
-# `/v1/wallet/keys/export`, which is what the route, the contract and the Mini App ledger call it) left this
-# list in the same commit that shipped the handlers. The list is empty of wallet rows on purpose — nothing
-# on this list is provisional, and a name kept here after the route exists would make the assertion vacuous.
+# Declared in `authz.LEVELS_TABLE` but not yet served, because a later phase builds them. The promise now lives
+# in `authz.PLANNED` — P14 D1 found that a list written inside a test file cannot notice a route being *renamed*
+# out from under the table, because both sides of that assertion were the test's own copies. This alias is kept
+# so the assertions below read the same, and the list is read from the product.
+#: The promise, read from the product: `authz.PLANNED` is declared in `authz.py` next to the table it describes,
+#: and the P14 matrix cross-checks the same set against the running router. It used to be a literal list inside
+#: this file, which could not notice a route being renamed out from under the table: both sides of the
+#: comparison were the test's own copy, so the assertion could only ever agree with itself.
+#:
+#: P12 D6 served `withdraw` and the key export (renamed to `/v1/wallet/keys/export`, which is what the route, the
+#: contract and the Mini App ledger call it), and they left this list in the same commit that shipped the
+#: handlers. Nothing on it is provisional, and a name kept after the route exists would make it vacuous.
+PLANNED_NOT_SERVED = sorted(__import__("polygm_core.security.authz", fromlist=["authz"]).PLANNED)
 
 
 class RouteBase(unittest.TestCase):
@@ -837,9 +828,14 @@ class TestAuthzTable(RouteBase):
         # The registry is deliberately ahead of the code (P08-P12 land routes it already classifies), so "stale"
         # is not a bug list - it is a promise about what is still to come. Naming it in full here is the point:
         # when `POST /v1/wallet/withdraw` ships, this assertion is where someone remembers to look.
-        self.assertEqual(sorted(rep["stale"]), sorted(PLANNED_NOT_SERVED),
+        # `GET /openapi.json` is excluded for a reason of its own: it is in the table and FastAPI only adds it to
+        # the router when the schema is first generated, so whether it is "served" depends on when you look. It is
+        # no longer served at all where it matters (`PGM_REQUIRE_SECURITY_ENV=1` turns the interactive surface off,
+        # which P14's matrix asserts as its own check), so it is not part of this promise list either.
+        stale = sorted(set(rep["stale"]) - {"GET /openapi.json"})
+        self.assertEqual(stale, sorted(PLANNED_NOT_SERVED),
                          "the table and the router disagree in a way nobody decided: %s"
-                         % sorted(set(rep["stale"]) ^ set(PLANNED_NOT_SERVED)))
+                         % sorted(set(stale) ^ set(PLANNED_NOT_SERVED)))
         self.assertEqual(rep["bad_level"], {})
         mirrored = self.SEC.route_levels()
         for op, (level, _why) in authz.LEVELS_TABLE.items():

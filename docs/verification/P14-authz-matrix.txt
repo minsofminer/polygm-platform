@@ -1,0 +1,38 @@
+P14 D1 — authorisation matrix (production identity shape: PGM_REQUIRE_SECURITY_ENV=1)
+================================================================================================
+
+PASS the harness's own TOTP implementation matches RFC 6238's vectors
+PASS the attack account holds a working second factor (enrolled)
+PASS every served operation has an authorisation decision (95 served, 109 declared)
+PASS every level in the registry is one of public, user, user-owns-resource, admin, service
+PASS registry canary: an admin operation declared public is caught
+PASS every declared-but-unserved operation is a written promise, and none is drift (13 stale, 13 planned)
+PASS every written promise is still unserved or has been collected (13)
+PASS registry canary: a route renamed out from under the table is caught as drift
+PASS the production identity shape serves no interactive API surface (4 of 4 paths are 404)
+PASS docs canary: a served schema is caught (the check must be asking a real path)
+PASS no non-public operation answers an anonymous caller (62 refused)
+PASS public operations are reachable anonymously (33 of 33 answered below 400)
+PASS a user session cannot reach any of the 14 admin operations
+PASS a wrong admin token is never accepted
+PASS with no admin token configured, admin operations answer 503 rather than looking like a refusal of an attack on a configured box
+PASS no operation leaks a stranger's identifiers to a signed-in user (19 conclusive probes, 29 inconclusive)
+PASS the needle probes are conclusive for the id-bearing operations (a probe where B's own call surfaces nothing proves nothing)
+PASS needle canary: a response containing a stranger's wallet address is caught
+PASS a stranger cannot act on another account (19 attacks, none accepted)
+PASS no refused attack changed the other account's row (19 watched rows)
+PASS no refused attack echoed the other account's private strings
+PASS write canary: a changed row is visible to the post-state read
+PASS an intent created with A's session is A's, whatever else the request says (no intent created: 401)
+PASS the order body has no field that names an account (a body with `userId` answers 422, so there is nothing to spoof)
+PASS an admin token is not a way around the user session on an order (status 503)
+PASS a service token is not a user identity (3 probes, none accepted)
+PASS the shared service secret is enforced where it belongs, and is not an API credential (3 header probes refused)
+PASS every user operation accepts its rightful owner's session (48 answered, none 401/403)
+PASS no user operation answers 5xx to its own owner (48 answered cleanly)
+PASS both accounts still hold a working session at the end of the run ({'A': 200, 'B': 200})
+
+findings by expected loss:
+     none
+
+P14 AUTHORISATION MATRIX: PASS — 30 checks passed, 0 failed

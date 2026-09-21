@@ -547,6 +547,53 @@ class TestTheReviewQueueAndTheClawback(ReferralBase):
                              expect=409)
         self.assertEqual(conflict["error"]["code"], "IDEM_CONFLICT")
 
+    def test_claiming_the_code_you_already_hold_is_not_an_error(self):
+        """P14 D1's second finding, re-tested here so it cannot come back.
+
+        The old path retired every one of the caller's short codes and then inserted the same primary key: a
+        UNIQUE violation answered as **500 INTERNAL with `retryable: true`**, which tells the client to retry a
+        request that can never succeed, for ever. Found by calling the route twice with one body, which is what a
+        flaky connection does.
+        """
+        first = self.call("post", "/v1/referrals/code", uid=self.REF, body={"code": "mikesame"}, key="same-1")
+        self.assertEqual(first["code"], "mikesame")
+        again = self.call("post", "/v1/referrals/code", uid=self.REF, body={"code": "mikesame"}, key="same-2")
+        self.assertEqual(again["code"], "mikesame")
+        self.assertIn("already your active code", again["note"])
+        self.assertEqual(again["shortUrl"], first["shortUrl"])
+        # Exactly one active short code for the account, and it is that one.
+        rows = self.db.execute("SELECT code FROM referral_links WHERE user_id=? AND kind='short'"
+                               " AND state='active'", (self.REF,)).fetchall()
+        self.assertEqual([str(r[0]) for r in rows], ["mikesame"])
+        # Rotating still works, and still says which code it replaced.
+        third = self.call("post", "/v1/referrals/code", uid=self.REF, body={"code": "mikeother"}, key="same-3")
+        self.assertEqual(third["previous"], "mikesame")
+
+    def test_a_stored_link_token_that_is_not_one_is_repaired_rather_than_a_500(self):
+        """P14 D1's first finding: a row we cannot turn into a URL must not brick the dashboard.
+
+        The row is ours and the replacement is unguessable either way, so the repair is to mint a working token,
+        retire the broken row, say so in the audit log, and hand the referrer a link — not to answer an internal
+        error to somebody whose only screen this is. Asserted on `GET /v1/referrals/me` *and*
+        `POST /v1/referrals/code`, because the first version of the bug took both down at once.
+        """
+        self.db.execute("INSERT INTO referral_links (user_id, code, token, kind, state, created_ms)"
+                        " VALUES (?,?,'not-a-token','link','active',?)", (self.REF, "brokenrow", self.app._now_ms()))
+        self.db.commit()
+        me = self.call("get", "/v1/referrals/me", uid=self.REF)
+        self.assertTrue(me["link"]["url"].startswith("https://openout.app/r/ref_"), me["link"])
+        again = self.call("get", "/v1/referrals/me", uid=self.REF)
+        self.assertEqual(again["link"]["url"], me["link"]["url"])
+        self.assertFalse(again["link"]["created"], "the second read must not mint a third token")
+        retired = self.db.execute("SELECT state FROM referral_links WHERE code='brokenrow'").fetchone()
+        self.assertEqual(str(retired[0]), "retired")
+        audited = self.db.execute("SELECT COUNT(*) FROM audit_log WHERE action='referral.link_repaired'"
+                                  " AND actor_id=?", (self.REF,)).fetchone()
+        self.assertEqual(int(audited[0]), 1)
+        code = self.call("post", "/v1/referrals/code", uid=self.REF, body={"code": "mikerepair"},
+                         key="repair-1")
+        self.assertEqual(code["link"]["url"], me["link"]["url"])
+
     def test_a_code_that_resolves_to_nobody_is_a_422_naming_the_field(self):
         got = self.apply(self.SUB, "nobodyhere", "unknown-1")
         self.assertEqual(got.status_code, 422)

@@ -135,6 +135,30 @@ def _matchers() -> list[tuple["re.Pattern[str]", str]]:
     return _MATCHERS
 
 
+#: Operations this table declares that the API does not serve *yet*. It is a promise with a name, and P14 D1
+#: found the difference: a row nobody prunes and a row that is a plan look identical to a scanner, so the plan is
+#: written down here instead. `tests/test_security_plane.py` asserts the table holds exactly this much foresight,
+#: and the P14 matrix asserts that the set of declared-but-unserved rows equals this set — in both directions, so
+#: neither a rename nor a phase that ships a route under a new name can pass unnoticed.
+#:
+#: A row that is neither served nor on this list is drift and the matrix reports it as a finding.
+PLANNED: frozenset = frozenset({
+    "GET /v1/alerts/feed",
+    "GET /v1/books",
+    "GET /v1/copy/record",
+    "GET /v1/me/activity",
+    "GET /v1/me/positions",
+    "GET /v1/meta/status",
+    "GET /v1/orders",
+    "GET /v1/orders/{intentId}",
+    "GET /v1/search",
+    "POST /v1/admin/flags",
+    "POST /v1/admin/revoke-keys",
+    "POST /v1/automation/rules",
+    "POST /v1/orders/{intentId}/cancel",
+})
+
+
 def lookup(operation: str) -> tuple[str, str, str] | None:
     """(the table's key, level, object check) for a served operation, or None when nothing declares it."""
     hit = LEVELS_TABLE.get(operation)

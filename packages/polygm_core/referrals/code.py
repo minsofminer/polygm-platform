@@ -23,6 +23,9 @@ import secrets
 
 #: Link tokens are generated, not chosen. The prefix keeps them greppable in logs and unmistakable in a URL.
 TOKEN_PREFIX = "ref_"
+#: 22 base32 characters of entropy after the prefix — the length is part of the format, not a coincidence, so
+#: `is_link_token` can reject a row that predates or postdates the format instead of building a URL from it.
+TOKEN_LEN = 22
 
 #: A short code: 4-16 characters, lower-case, digits and `_`. 4 because the space must be big enough to allocate
 #: without collisions at our scale (36^4 is 1.6M) and 16 because a code read aloud has to fit in a sentence.
@@ -85,16 +88,27 @@ def make_token(seed: str = "") -> str:
     alphabet = "abcdefghijklmnopqrstuvwxyz234567"
     bits = int.from_bytes(raw, "big")
     out = []
-    for _ in range(22):
+    for _ in range(TOKEN_LEN):
         out.append(alphabet[bits & 31])
         bits >>= 5
     return TOKEN_PREFIX + "".join(reversed(out))
 
 
+def is_link_token(token: str) -> bool:
+    """Whether a stored string is one of *our* link tokens.
+
+    Exists as a predicate rather than a `startswith` at each call site because the answer is used to decide
+    whether a row is usable at all: a `referral_links` row whose token is not a link token cannot be turned into
+    a shareable URL, and the caller has to be able to ask before `link_for` raises.
+    """
+    t = str(token or "")
+    return t.startswith(TOKEN_PREFIX) and len(t) == len(TOKEN_PREFIX) + TOKEN_LEN
+
+
 def link_for(token: str, base: str = "https://openout.app") -> str:
     """The shareable link. One place builds it, so the OG page (D6) and the dashboard cannot disagree."""
     t = str(token or "")
-    if not t.startswith(TOKEN_PREFIX):
+    if not is_link_token(t):
         raise ValueError("not a link token: %r" % t)
     return "%s/r/%s" % (str(base).rstrip("/"), t)
 
