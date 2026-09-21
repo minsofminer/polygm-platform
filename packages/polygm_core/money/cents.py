@@ -15,6 +15,7 @@ The one place a "cent" appears is the *displayed* dollar value, which is derived
 """
 from __future__ import annotations
 
+import re
 from decimal import ROUND_FLOOR, ROUND_HALF_EVEN, Decimal, localcontext
 
 # 1e-6 is USDC's and Polymarket's share precision; everything in this module is in those units.
@@ -39,6 +40,12 @@ class OverflowError_(MoneyError):
     pass
 
 
+#: The money-input grammar. Anchored and ASCII-only, and every string that does not match is refused with a
+#: `ScaleError` rather than being handed to `Decimal`, whose table of accepted forms is much wider than a money
+#: field's (exponents, underscores, Unicode digits, surrounding whitespace).
+_AMOUNT_RE = re.compile(r"[0-9]+(\.[0-9]{1,%d})?$" % SCALE)
+
+
 def parse_usdc(text: str | int | Decimal) -> int:
     """'0.51' | 51 (already micro) | Decimal -> integer micro-USDC. Non-negative amounts only.
 
@@ -53,6 +60,17 @@ def parse_usdc(text: str | int | Decimal) -> int:
     """
     if isinstance(text, bool) or isinstance(text, float):
         raise ScaleError("floats are not accepted as money input; pass a decimal string")
+    if isinstance(text, str):
+        # ASCII only, one dot, at most SCALE places, nothing around it. `Decimal` is far more permissive than a
+        # money field should be, and P13's fuzz suite walked straight into it: "1e6" parsed as a MILLION USDC,
+        # fullwidth "１２" and Arabic-Indic "١٢" parsed as twelve, "+1" and "1." and "0.5\n" and a non-breaking
+        # space all parsed happily. Two of those are a real attack rather than a curiosity — fullwidth and
+        # Arabic-Indic digits render like ASCII digits in most fonts, so a pasted amount can be a different
+        # amount from the one a person read. The grammar below is what a money field accepts, and everything
+        # else is refused by the same rule.
+        if not _AMOUNT_RE.fullmatch(text):
+            raise ScaleError("%r is not a plain decimal amount (ASCII digits, one dot, at most %d places)"
+                             % (text, SCALE))
     try:
         d = Decimal(str(text)) if not isinstance(text, Decimal) else text
     except Exception as e:                                   # noqa: BLE001 - reclassified, never swallowed

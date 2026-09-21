@@ -263,6 +263,9 @@ def c_p04_gate_order_through_the_executor(p: Plane) -> tuple[str, bool, str]:
             o = p.run("g-limit", size=6 * 10**6)
             # ...and the fixture must not leak into the next case: the delayed-market probe below has to be
             # refused for the delay, not for the six $5000 intents this case planted.
+            # Directives first: SQLite keeps a non-cascading FK here (a recorded PG-only drop), so the
+            # child rows go before the parent.
+            p.store.conn.execute("DELETE FROM order_directives WHERE intent_id LIKE 'i-hist-%'")
             p.store.conn.execute("DELETE FROM order_intents WHERE id LIKE 'i-hist-%'")
             p.store.conn.commit()
         if o.get("code") != want:

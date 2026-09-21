@@ -170,6 +170,33 @@ class Engine:
     state: dict = field(default_factory=dict)
     fired: int = 0
     suppressed: int = 0
+    #: Sweep the cooldown memory once it is bigger than this. See `prune()` for why the sweep is free.
+    PRUNE_AT: int = 50_000
+
+    def prune(self, now_ms: int, rules: list) -> int:
+        """Drop cooldown entries that can no longer suppress anything. Returns how many went.
+
+        This is a load finding, not a tidy-up. P13's 30-minute soak showed the tape flat (bounded ring,
+        bounded dedupe window) and the books flat while `state` grew for the whole run: the key carries the
+        rule id and the dedupe key, and a `large_fill` key includes a notional bucket, so a liquid market
+        mints a new entry per bucket and never removes one. At 200 fills/s that is unbounded RAM in the
+        process that must not fall over.
+
+        The sweep cannot change behaviour. Suppression is decided by `now_ms - last < rule.cooldown * 1000`,
+        so an entry whose own rule's cooldown has already elapsed is a value nothing will ever read again.
+        A rule that is no longer in the list is kept for an hour rather than assumed gone: a rule that is
+        missing from one evaluation (a user edited it, a page of rules failed to load) must not silently
+        un-suppress an alert.
+        """
+        horizon = {r.id: max(0, int(r.cooldown)) * 1000 for r in rules}
+        dropped = 0
+        for key, ts in list(self.state.items()):
+            rid = key.rsplit("|", 1)[-1]
+            keep_ms = horizon.get(rid, 3_600_000)
+            if now_ms - int(ts) >= keep_ms:
+                del self.state[key]
+                dropped += 1
+        return dropped
 
     @staticmethod
     def matches(rule: Rule, event: dict) -> bool:
@@ -190,6 +217,8 @@ class Engine:
 
     def evaluate(self, rules: list[Rule], event: dict, now_ms: int) -> list[Alert]:
         out: list[Alert] = []
+        if len(self.state) > self.PRUNE_AT:
+            self.prune(now_ms, rules)
         for rule in rules:
             if not self.matches(rule, event):
                 continue

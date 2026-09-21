@@ -48,8 +48,17 @@ class TelegramBase(unittest.TestCase):
     app = None
     client = None
 
+    #: The keys this class overwrites. Saved and RESTORED, not popped: another test module sets them at import
+    #: time (pytest imports every module before running any test), so a tearDown that popped them would leave
+    #: the *next* file running without a bot token and reporting `SECURITY_ENV_MISSING` — a fixture bug that
+    #: reads as a product bug in whichever file happens to run second. P13 added this after the money-matrix
+    #: file, which imports this harness, turned `test_security_plane` red by running before it.
+    ENV_KEYS = ("PGM_ADMIN_TOKEN", "PGM_TELEGRAM_BOT_TOKEN", "PGM_TELEGRAM_WEBHOOK_SECRET",
+                "PGM_TELEGRAM_BOT_USERNAME")
+
     @classmethod
     def setUpClass(cls):
+        cls._env_saved = {k: os.environ.get(k) for k in cls.ENV_KEYS}
         os.environ["PGM_ADMIN_TOKEN"] = ADMIN
         os.environ["PGM_TELEGRAM_BOT_TOKEN"] = BOT_TOKEN
         os.environ["PGM_TELEGRAM_WEBHOOK_SECRET"] = SECRET
@@ -62,8 +71,11 @@ class TelegramBase(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls):
-        for key in ("PGM_TELEGRAM_BOT_TOKEN", "PGM_TELEGRAM_WEBHOOK_SECRET", "PGM_TELEGRAM_BOT_USERNAME"):
-            os.environ.pop(key, None)
+        for key, was in getattr(cls, "_env_saved", {}).items():
+            if was is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = was
 
     def setUp(self):
         refresh_flags(self.app)
@@ -73,6 +85,10 @@ class TelegramBase(unittest.TestCase):
         # slate for *its* chat and update ids rather than from a wiped database.
         for table in ("telegram_updates", "telegram_sessions", "telegram_outbox", "telegram_commands"):
             self.db.execute("DELETE FROM %s" % table)
+        # Directives first: the SQLite harness keeps a non-cascading foreign key (the transpiler drops
+        # `ALTER TABLE ... ON DELETE CASCADE` and records it in DROPPED.json), so a delete that removes an
+        # intent has to remove the intent's instructions with it. Postgres cascades.
+        self.db.execute("DELETE FROM order_directives WHERE intent_id IN (SELECT id FROM order_intents WHERE user_id=?)", (UID,))
         self.db.execute("DELETE FROM order_intents WHERE user_id=?", (UID,))
         self.db.execute("DELETE FROM user_identities WHERE user_id=?", (UID,))
         # `auth_events` is append-only on purpose (the trigger refuses the DELETE, which is the product working), so

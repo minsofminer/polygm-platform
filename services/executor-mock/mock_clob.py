@@ -11,7 +11,8 @@ It is deliberately NOT a fake that always says yes:
     instead of a silent fill;
   * it rejects a price/size float that cannot round-trip to the integer we sent — the only way to test the
     `to_float_for_sdk` assertion end-to-end instead of trusting it;
-  * it has scenarios: `timeout_after_accept`, `reject`, `partial_fill`, `rate_limit`, `unreachable`;
+  * it has scenarios: `timeout_after_accept`, `reject`, `partial_fill`, `rate_limit`, `unreachable`,
+    `builder_disabled` (P13 D7.7);
     P06 added `ghost_order` (a cancel that says success and changes nothing) and `cancel_races_fill` (a
     cancel that loses to a fill), because D3's reconciliation cases are only testable if the venue can be
     *wrong* in those specific ways;
@@ -80,6 +81,12 @@ class MockClob:
         err = self._validate(signed)
         if err:
             return err
+        if scen == "builder_disabled":
+            # A disabled builder code is the venue's refusal, not ours: the order is well-formed and the account
+            # is funded, and the code the order carries has been switched off. P13 D7.7 needs it to be legible
+            # ("orders rejected, users informed, alarm fired, revenue dashboard shows the drop").
+            return {"success": False, "code": "builder_code_not_allowed",
+                    "message": "mock: builder code %s is disabled" % (str(signed.get("b") or "")[:18])}
         if scen == "reject":
             return {"success": False, "code": "not_enough_balance_or_allowance",
                     "message": "mock: rejection for the specified reason"}

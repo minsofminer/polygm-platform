@@ -242,6 +242,8 @@ export function plainRefusal(code: string, detail?: string): string {
     IDEM_IN_PROGRESS: "That order is already on its way — no second one was sent.",
     IDEM_KEY_REQUIRED: "That order arrived without a way to tell a retry from a new order, so I did not send it.",
     RATE_LIMITED: "That is more requests than can be sent for you at once. Give it a second.",
+    BUILDER_DISABLED: "The venue refused the order because the builder code on it is disabled, so nothing was "
+      + "placed. The code is marked off and its attribution has stopped.",
     UNAUTHENTICATED: "Nothing was placed: this view is read-only. Open the bot and tap Trade to place an order.",
     REFUSED: "The venue refused the order. Nothing was placed.",
     // P12 D6's wallet ceremony. Same three keys as the Python table, checked key-for-key by the P12 gate.

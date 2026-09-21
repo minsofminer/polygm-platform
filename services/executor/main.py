@@ -231,6 +231,15 @@ class Executor:
         allowance = self.store.allowance_micro(it.user_id)
         fees = v2.estimate_fees(size_shares_micro=it.size_micro, price_micro=it.price_micro,
                                fee_rate_bps=it.fee_rate_bps, builder_bps=it.builder_bps)
+        # The all-in cap, checked here because it is the last place before signing and the first place that knows
+        # the fees. `notional + fees` and not the notional: what leaves the user's balance is the all-in number,
+        # and an order that fits on one and not the other is exactly the order the venue refuses after we have
+        # signed it.
+        all_in = notional_floor(it.size_micro, it.price_micro) + fees.total_micro
+        if it.all_in_limit_micro and all_in > it.all_in_limit_micro:
+            return self._reject(o, it, code="OVER_ORDER_CAP",
+                                msg="the all-in cost %d is above this order's cap of %d"
+                                    % (all_in, it.all_in_limit_micro), at=at, t0=t0)
         pf = v2.preflight(order_type=it.order_type, audience=it.audience, side=it.side,
                           price_micro=it.price_micro, size_shares_micro=it.size_micro,
                           usdc_available_micro=self.store.balance_available_micro(it.user_id),
@@ -377,6 +386,14 @@ class Executor:
                 return o
             self.stats["rejected"] += 1
             mapped = v2.BATCH_ITEM_CODES.get(code, "VENUE_REJECTED")
+            if mapped == "BUILDER_DISABLED":
+                # The one rejection that is not about this order: the venue has switched the code off, so every
+                # order under it will be refused until someone acts. Recorded at the code, in the table an
+                # operator already reads, and counted — see `Store.record_builder_rejection`.
+                self.store.record_builder_rejection(code=str(getattr(it, "builder_code", "") or ""),
+                                                    reason=str((resp or {}).get("message") or "builder code "
+                                                                                            "disabled at the venue"),
+                                                    at=at)
             return self._reject(o, it, code=mapped, msg=str((resp or {}).get("message") or "")[:180], at=at,
                                 t0=t0, venue_code=code)
 

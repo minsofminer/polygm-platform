@@ -33,6 +33,7 @@ from pathlib import Path
 from polygm_core.automation import facts as _facts
 from polygm_core.config.flags import FlagStore
 from polygm_core.ledger.ledger import VENUE_ORDER_STATUS, venue_status_to_state
+from polygm_core.venue import clob_v2 as v2
 from polygm_core.wallets import lifecycle as wl
 from polygm_core.money.cents import SCALE, fmt_usdc, notional_floor
 
@@ -73,6 +74,10 @@ class IntentRow:
     audience: str = "user"
     max_slippage_bps: int = 0
     rule_id: str = ""
+    #: Ceiling on `notional + estimated fees` for this intent. It is on the row because the executor is the
+    #: only place that can refuse *before* signing, and a cap that lives in the producer's process is a cap the
+    #: executor cannot enforce (D2's all-in spending cap, and the reason P06's `OVER_ORDER_CAP` has a subject).
+    all_in_limit_micro: int = 0
 
     @property
     def is_automation(self) -> bool:
@@ -199,14 +204,14 @@ class Store:
             "i.state,i.idempotency_key,COALESCE(i.venue_order_id,''),COALESCE(i.client_order_hash,''),"
             "COALESCE(d.order_type,'GTC'),COALESCE(d.expiration_ts,0),COALESCE(d.builder_bps,0),"
             "COALESCE(d.fee_rate_bps,0),COALESCE(d.audience,'user'),COALESCE(d.max_slippage_bps,0),"
-            "COALESCE(d.rule_id,'') "
+            "COALESCE(d.rule_id,''),COALESCE(d.all_in_limit_micro,0) "
             "FROM order_intents i LEFT JOIN order_directives d ON d.intent_id = i.id WHERE i.id=?",
             (intent_id,)).fetchone()
         if r is None:
             return None
         return IntentRow(*r[:12], order_type=r[12], expiration_ts=r[13] or 0, builder_bps=r[14] or 0,
                          fee_rate_bps=r[15] or 0, audience=r[16] or "user", max_slippage_bps=r[17] or 0,
-                         rule_id=r[18] or "")
+                         rule_id=r[18] or "", all_in_limit_micro=r[19] or 0)
 
     def set_intent_state(self, intent_id: str, state: str, *, at: int | None = None, risk_code: str = "",
                          venue_order_id: str = "", client_order_hash: str = "") -> None:
@@ -237,7 +242,8 @@ class Store:
                        size_micro: int, idempotency_key: str, order_type: str = "GTC",
                        audience: str = "automation", rule_id: str = "", config_id: str = "",
                        builder_bps: int = 0, fee_rate_bps: int = 0, max_slippage_bps: int = 0,
-                       expiration_ts: int = 0, at: int | None = None) -> dict:
+                       expiration_ts: int = 0, at: int | None = None,
+                       all_in_limit_micro: int = 0) -> dict:
         """Queue an order for execution, from copy or from automation.
 
         There is deliberately no path from `copy` or `automation` to the venue that skips this function: both
@@ -248,6 +254,18 @@ class Store:
         """
         t = at or now_ms()
         notional = notional_floor(size_micro, price_micro)
+        # The cap is derived here unless the producer named one, and it is a *real* ceiling: notional, plus the
+        # estimated fees, plus the slippage the order is allowed to take. The value used to be `notional * 2` —
+        # a number nothing could exceed, i.e. a check that read as if it were protecting something. (A MARKET
+        # order fills at a price the quote only bounds, so its cap must include that bound; a limit order cannot
+        # exceed its price at all, and pays no slippage into the venue's hands.)
+        if all_in_limit_micro:
+            cap = int(all_in_limit_micro)
+        else:
+            fees = v2.estimate_fees(size_shares_micro=size_micro, price_micro=price_micro,
+                                    fee_rate_bps=fee_rate_bps, builder_bps=builder_bps)
+            slip = (notional * max(int(max_slippage_bps), 0)) // 10_000
+            cap = notional + fees.total_micro + slip
         iid = "i-" + hashlib.sha256(("%s|%s" % (user_id, idempotency_key)).encode()).hexdigest()[:20]
         cur = self.execute("INSERT INTO order_intents (id,user_id,market_id,token_id,side,price_micro,"
                            "size_micro,notional_micro,state,idempotency_key,created_ms,updated_ms) "
@@ -264,7 +282,7 @@ class Store:
                      "fee_rate_bps,audience,rule_id,config_id,max_slippage_bps,all_in_limit_micro,"
                      "created_ms) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                      (iid, order_type, expiration_ts, builder_bps, fee_rate_bps, audience, rule_id, config_id,
-                      max_slippage_bps, notional * 2, t))
+                      max_slippage_bps, cap, t))
         return {"created": True, "intent_id": iid, "state": "queued", "notional_micro": notional}
 
     # ------------------------------------------------------------------- lifecycle trail (D7 writes)
@@ -336,6 +354,26 @@ class Store:
         except Exception:
             self._rollback(outer)
             raise
+
+    def record_builder_rejection(self, *, code: str, reason: str, at: int) -> dict:
+        """The venue said no because the builder code is disabled. Write it where it can be seen.
+
+        `builder_code_status` is the table P06 built for exactly this ("the P06 table the venue's own rejections
+        write to"), and until P13 D7.7 **nothing wrote it from a venue rejection**: the only writer was the
+        manual self-referral revocation. A code the venue had switched off therefore looked healthy on our side
+        while every order under it was refused — the drop would have shown up as a mystery dip in revenue with
+        no row explaining it. `reject_count` is incremented rather than set, so a code that keeps being refused
+        reads as a code that keeps being refused.
+        """
+        if not str(code or ""):
+            return {"recorded": False, "reason": "no builder code on the order"}
+        self.execute("INSERT INTO builder_code_status (code, state, last_seen_ms, changed_ms, reject_count,"
+                     " source, note) VALUES (?,?,?,?,1,'venue',?)"
+                     " ON CONFLICT(code) DO UPDATE SET state='disabled', last_seen_ms=excluded.last_seen_ms,"
+                     " changed_ms=excluded.changed_ms, reject_count=builder_code_status.reject_count + 1,"
+                     " source='venue', note=excluded.note",
+                     (str(code), "disabled", int(at), int(at), str(reason)[:400]))
+        return {"recorded": True, "code": str(code)}
 
     def record_fee_estimate(self, *, order_id: str, intent: IntentRow, platform_micro: int,
                             builder_micro: int, fee_rate_bps: int, builder_bps: int, at: int) -> None:

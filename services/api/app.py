@@ -51,6 +51,7 @@ from polygm_core.telegrambot import ops as _tgb_ops
 from polygm_core.telegrambot import menu as _tgb_menu
 from polygm_core.telegrambot import outbox as _tgb_outbox
 from polygm_core.telegrambot import render as _tgb_render
+from polygm_core.venue import clob_v2 as v2
 from polygm_core.telegrambot import router as _tgb_router
 from polygm_core.telegrambot import sessions as _tgb_sessions
 from polygm_core.telegrambot import updates as _tgb_updates
@@ -159,6 +160,11 @@ CODES = {
     "TOTP_INVALID": ("that code did not work", 403, False),
     "TOTP_LOCKED": ("the authenticator is locked after too many tries", 429, True),
     "ADDRESS_COOLDOWN": ("this destination is still in its 24 hour hold", 409, True),
+    # P13 D7.7. The venue's own refusal of a disabled builder code. Its own code because the sentence is the
+    # action: the user learns the order will keep failing until the code is sorted, rather than receiving "the
+    # venue refused the order" for the tenth time.
+    "BUILDER_DISABLED": ("the builder code on this order is disabled at the venue, so no order can be placed "
+                         "with it; attribution has stopped", 409, False),
     "ADDRESS_LIMIT": ("too many saved destinations", 422, False),
     "REMOVE_DURING_COOLDOWN": ("a destination that has not finished its hold cannot be deleted", 409, False),
     "NO_SUCH_RESOURCE": ("no such resource", 404, False),
@@ -2306,6 +2312,16 @@ def _order_core(uid: str, body: dict, idempotency_key: str, rid: str):
         return err("UNAUTHENTICATED", rid, detail="no user context")
     if not idempotency_key or not _IDEM_RE.match(idempotency_key):
         return err("IDEM_KEY_REQUIRED", rid)
+    # A wallet we hold the keys for, or no order at all. A `read_only` (watch-only) wallet cannot sign anything,
+    # so an order queued against one can never be filled — the executor's pre-flight refuses it minutes later and
+    # the user sees "queued", then a refusal, for an order that was impossible when they tapped. Refusing at the
+    # door costs nothing and says the true thing while the person is still looking at the screen. A user with NO
+    # wallet row keeps today's behaviour: `/wallet` is where one is created, and the executor's pre-flight is the
+    # only component that can decide whether an absent row is "not provisioned yet" or "not allowed".
+    w = _wallet_row(str(uid))
+    if w is not None and str(w.get("custody")) != "delegated":
+        return err("SIGNER_UNAVAILABLE", rid,
+                   detail="this wallet is watch-only, so nothing can be signed from it")
     bad = _check_body(body, ORDER_REQUIRED, rid)
     if bad is not None:
         # BEFORE idem.begin: a request that cannot be valid must not occupy the key. If it did, the client's
@@ -8595,6 +8611,57 @@ def _tg_when(ts_ms: int) -> str:
     return time.strftime("%d %b %H:%M UTC", time.gmtime(int(ts_ms) / 1000.0))
 
 
+_FEE_RATE_CACHE: dict = {}
+
+
+def _measured_fee_rate_bps(market_id: str, *, at: int | None = None) -> int:
+    """The venue's own taker fee rate for this market, as *measured* off the tape rather than guessed.
+
+    P01's finding stands: nearly every market reports a zero rate, and the two 15-minute markets that do not are
+    the reason this is a lookup instead of a constant. `tape_fills.fee_rate_bps` is written by the ingest path
+    from the venue's trade rows, so the number the order path sizes against is the same number the venue will
+    charge — which is the entire point of an all-in cap. Cached for a minute: a fee rate is a property of the
+    market, not of the request, and this runs on the order path.
+    """
+    now = at or _now_ms()
+    hit = _FEE_RATE_CACHE.get(market_id)
+    if hit and now - hit[0] < 60_000:
+        return hit[1]
+    # `tape_fills` is keyed by the venue's condition id (the ingest path writes what the venue says), so the
+    # lookup goes through the market row rather than pretending the two ids are the same string.
+    cond = _db.execute("SELECT condition_id FROM markets WHERE id=?", (market_id,)).fetchone()
+    row = _db.execute("SELECT COALESCE(MAX(fee_rate_bps), 0) FROM tape_fills WHERE condition_id=? AND ts_ms > ?",
+                      (str(cond[0]) if cond else "", now - 7 * 24 * 3600 * 1000)).fetchone()
+    rate = int((row[0] if row else 0) or 0)
+    _FEE_RATE_CACHE[market_id] = (now, rate)
+    return rate
+
+
+def _write_order_directive(intent_id: str, market_id: str, *, order_type: str, audience: str,
+                           builder_bps: int, fee_rate_bps: int, max_slippage_bps: int,
+                           notional_micro: int, size_micro: int = 0, price_micro: int = 0) -> int:
+    """Write the directive row for an intent the API just queued, and return the all-in cap it carries.
+
+    The table existed (`order_directives`) and the API was the one producer that never filled it: every intent
+    this service wrote was read back by the executor with `COALESCE(...)` defaults — `order_type='GTC'`,
+    `audience='user'`, `fee_rate_bps=0` — which is fine for a limit order and a lie the moment the market has a
+    fee. The directive is what makes the all-in cap enforceable downstream: the executor checks it, and the
+    number it checks is the number this function derived from the same fee estimate the user's budget was sized
+    with.
+    """
+    fees = v2.estimate_fees(size_shares_micro=int(size_micro), price_micro=int(price_micro),
+                            fee_rate_bps=fee_rate_bps, builder_bps=builder_bps)
+    cap = (int(notional_micro) + fees.total_micro
+           + (int(notional_micro) * max(int(max_slippage_bps), 0)) // 10_000)
+    now = _now_ms()
+    _db.execute("INSERT OR REPLACE INTO order_directives (intent_id,order_type,expiration_ts,builder_bps,"
+                "fee_rate_bps,audience,rule_id,config_id,max_slippage_bps,all_in_limit_micro,created_ms)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                (intent_id, order_type, 0, builder_bps, fee_rate_bps, audience, "", "", max_slippage_bps, cap,
+                 now))
+    return cap
+
+
 def _order_from_card(uid: str, payload: dict, key: str) -> dict:
     """Turn an *amount-denominated* order card into an order through the SAME path `POST /v1/orders` uses.
 
@@ -8632,7 +8699,12 @@ def _order_from_card(uid: str, payload: dict, key: str) -> dict:
         usdc_micro = parse_usdc(str(payload.get("amount") or "0"))
     except (MoneyError, ScaleError) as exc:
         return {"ok": False, "code": "BAD_AMOUNT", "detail": str(exc)[:120]}
-    shares_micro = (usdc_micro * 1_000_000) // max(1, price_micro)
+    # Sized from the *amount*, fee included: `usdc_micro // price` is the notional-only answer, and an order
+    # that spends the user's whole budget on shares has nothing left for the fee, so the venue's balance check
+    # refuses an order the person believes they can afford. `size_for_all_in_spend` is the same integer
+    # arithmetic with the fee curve in it, and its result is maximal — one micro-share more does not fit.
+    fee_rate_bps = _measured_fee_rate_bps(market_id)
+    shares_micro = v2.size_for_all_in_spend(usdc_micro, price_micro, fee_rate_bps=fee_rate_bps)
     if shares_micro <= 0:
         return {"ok": False, "code": "BAD_AMOUNT", "detail": "that amount is too small to buy one share"}
     body = {"marketId": market_id, "tokenId": token_id, "side": side,
@@ -8645,6 +8717,14 @@ def _order_from_card(uid: str, payload: dict, key: str) -> dict:
         payload_out = json.loads(resp.body.decode("utf-8"))
     except Exception:                                        # a non-JSON body here would be a bug in the core
         payload_out = {}
+    if int(getattr(resp, "status_code", 500)) < 400:
+        # The directive goes in only for an intent that was actually queued, and it uses the fee rate this
+        # function just sized against: one number, two readers (the executor's pre-flight and this budget).
+        _write_order_directive(str(payload_out.get("intentId") or ""), market_id, order_type="GTC",
+                               audience="user", builder_bps=0, fee_rate_bps=fee_rate_bps,
+                               max_slippage_bps=0,
+                               notional_micro=int(payload_out.get("notionalMicro") or 0),
+                               size_micro=shares_micro, price_micro=price_micro)
     if int(getattr(resp, "status_code", 500)) >= 400:
         code = str((payload_out.get("error") or {}).get("code") or "ORDER_REFUSED")
         return {"ok": False, "code": code, "intent_id": "", "detail": str((payload_out.get("error") or {})
@@ -8884,6 +8964,8 @@ def _tg_plain_refusal(code: str, detail: str = "") -> str:
                         "the next one and try again.",
         "TOTP_LOCKED": "Too many wrong authenticator codes, so this is locked for a few minutes. Nothing was sent.",
         "REFUSED": "The venue refused the order. Nothing was placed.",
+        "BUILDER_DISABLED": "The venue refused the order because the builder code on it is disabled, so nothing "
+                            "was placed. The code is marked off and its attribution has stopped.",
     }
     if code in table:
         return table[code]

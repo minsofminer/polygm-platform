@@ -48,8 +48,14 @@ class OpsBase(unittest.TestCase):
     app = None
     client = None
 
+    ENV_KEYS = ("PGM_ADMIN_TOKEN", "PGM_TELEGRAM_BOT_TOKEN", "PGM_TELEGRAM_WEBHOOK_SECRET",
+                "PGM_TELEGRAM_BOT_USERNAME", "PGM_TELEGRAM_CHANNEL")
+
     @classmethod
     def setUpClass(cls):
+        # Saved and restored rather than popped — see the same fix in test_telegrambot_api: another module sets
+        # these at import time, so a tearDown that removed them breaks whichever file runs afterwards.
+        cls._env_saved = {k: os.environ.get(k) for k in cls.ENV_KEYS}
         os.environ["PGM_ADMIN_TOKEN"] = ADMIN
         os.environ["PGM_TELEGRAM_BOT_TOKEN"] = BOT_TOKEN
         os.environ["PGM_TELEGRAM_WEBHOOK_SECRET"] = SECRET
@@ -63,9 +69,11 @@ class OpsBase(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls):
-        for key in ("PGM_TELEGRAM_BOT_TOKEN", "PGM_TELEGRAM_WEBHOOK_SECRET", "PGM_TELEGRAM_BOT_USERNAME",
-                    "PGM_TELEGRAM_CHANNEL"):
-            os.environ.pop(key, None)
+        for key, was in getattr(cls, "_env_saved", {}).items():
+            if was is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = was
 
     def setUp(self):
         refresh_flags(self.app)
@@ -91,6 +99,10 @@ class OpsBase(unittest.TestCase):
         self.db.execute("DELETE FROM tape_fills WHERE condition_id LIKE '0xcond-p12-%'")
         self.db.execute("DELETE FROM market_stats WHERE condition_id LIKE '0xcond-p12-%'")
         self.db.execute("DELETE FROM market_meta WHERE market_id LIKE 'm-p12-%'")
+        # Directives first: the SQLite harness keeps a non-cascading foreign key (the transpiler drops
+        # `ALTER TABLE ... ON DELETE CASCADE` and records it in DROPPED.json), so a delete that removes an
+        # intent has to remove the intent's instructions with it. Postgres cascades.
+        self.db.execute("DELETE FROM order_directives WHERE intent_id IN (SELECT id FROM order_intents WHERE user_id=?)", (UID,))
         self.db.execute("DELETE FROM order_intents WHERE user_id=?", (UID,))
         self.db.execute("DELETE FROM user_identities WHERE user_id=?", (UID,))
         self.db.commit()

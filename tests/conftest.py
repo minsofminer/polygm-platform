@@ -7,6 +7,7 @@ still supported (it is in requirements-dev.txt) and discovers these files unchan
 from __future__ import annotations
 import os
 import re
+import shutil
 import sys
 import tempfile
 import unittest
@@ -23,7 +24,24 @@ for p in (str(ROOT / "packages"), str(ROOT / "services" / "api"), str(ROOT / "se
 # run's database file. Every symptom was a 409 IDEM_IN_PROGRESS on a brand-new idempotency key - the suite
 # reporting a bug in its own fixture as a bug in the product. Tests must not inherit state from a previous
 # process, and a test that mutates the dev database makes "works locally" meaningless for the next person.
-_TMP = Path(tempfile.mkdtemp(prefix="polygm-tests-%d-" % os.getpid()))
+#
+# P13 added the other half of that idea: the directory is REMOVED at the end of the run, and the runner
+# clears directories left behind by dead processes. A full run writes a migrated database per API module
+# (a few hundred megabytes in total), and `/tmp` on this box is a 1 GB tmpfs: without the cleanup the fifth
+# `make test` of a session starts failing in ways that look like product failures - pytest exits 120 with an
+# empty log, which is ENOSPC from `tempfile`, not a red test. `PGM_TEST_TMPDIR` moves the whole thing (CI sets
+# it to a scratch volume).
+def _tmp_root() -> Path:
+    base = Path(os.environ.get("PGM_TEST_TMPDIR") or tempfile.gettempdir())
+    base.mkdir(parents=True, exist_ok=True)
+    for stale in base.glob("polygm-tests-*"):
+        pid = stale.name.split("-")[2] if len(stale.name.split("-")) > 2 else ""
+        if not pid.isdigit() or not Path("/proc/%s" % pid).exists():
+            shutil.rmtree(stale, ignore_errors=True)
+    return base
+
+
+_TMP = Path(tempfile.mkdtemp(prefix="polygm-tests-%d-" % os.getpid(), dir=str(_tmp_root())))
 
 
 def tmp_db_path(name: str) -> str:
@@ -74,3 +92,8 @@ def refresh_flags(app_mod) -> None:
 class CoreTestCase(unittest.TestCase):
     def mk(self, *, now_ms: int = 1_700_000_000_000) -> int:
         return now_ms
+
+
+def pytest_sessionfinish(session, exitstatus):                      # pragma: no cover - runner plumbing
+    """Delete this run's database directory. The pid in the name makes it ours to remove."""
+    shutil.rmtree(_TMP, ignore_errors=True)

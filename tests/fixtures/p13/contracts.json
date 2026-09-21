@@ -1,0 +1,587 @@
+{
+ "generated_by": "tools/build-p13-contract-fixtures.py",
+ "normalised": {
+  "clob_book": {
+   "age_ms": "int",
+   "asks": [
+    "<0>"
+   ],
+   "bids": [
+    "<63>",
+    [
+     "<2>",
+     "int"
+    ]
+   ],
+   "hash": "str",
+   "last_trade_price": "str",
+   "market": "str",
+   "min_order_size": "str",
+   "neg_risk": "bool",
+   "tick_size": "str",
+   "token_id": "str",
+   "ts_ms": "int"
+  },
+  "clob_book_raw": {
+   "asks": [
+    "<1>",
+    "str"
+   ],
+   "asset_id": "str",
+   "bids": [
+    "<2>",
+    "str"
+   ],
+   "hash": "str",
+   "last_trade_price": "str",
+   "market": "str",
+   "min_order_size": "str",
+   "neg_risk": "str",
+   "tick_size": "str",
+   "timestamp": "str"
+  },
+  "clob_history": [
+   "<7>",
+   [
+    "<2>",
+    "int"
+   ]
+  ],
+  "data_trade_row": {
+   "is_updown": "bool",
+   "market": "str",
+   "outcome": "str",
+   "outcome_index": "null",
+   "price_micro": "int",
+   "side": "str",
+   "size_micro": "int",
+   "slug": "str",
+   "source": "str",
+   "title": "str",
+   "token_id": "str",
+   "trader": {
+    "name": "str",
+    "pseudonym": "str"
+   },
+   "ts_ms": "int",
+   "tx_hash": "str",
+   "usd_notional_micro": "int",
+   "wallet": "str"
+  },
+  "gamma_markets": {
+   "_gamma_row_version": "str",
+   "accepting_orders": "bool",
+   "archived": "bool",
+   "best_ask": "int",
+   "best_bid": "int",
+   "closed": "bool",
+   "condition_id": "str",
+   "enable_order_book": "bool",
+   "end_ts": "str",
+   "event_refs": [
+    "<1>",
+    {
+     "id": "str",
+     "neg_risk": "bool",
+     "slug": "str",
+     "title": "str"
+    }
+   ],
+   "event_slugs": [
+    "<1>",
+    "str"
+   ],
+   "fee_type": "str",
+   "fees_enabled": "bool",
+   "id": "str",
+   "is_updown": "bool",
+   "liquidity_micro": "int",
+   "min_order_size": "str",
+   "min_tick": "str",
+   "neg_risk": "bool",
+   "neg_risk_group_id": "null",
+   "outcome_price_micro": [
+    "<2>",
+    "int"
+   ],
+   "outcomes": [
+    "<2>",
+    "str"
+   ],
+   "question": "str",
+   "seconds_delay": "int",
+   "slug": "str",
+   "spread": "int",
+   "start_ts": "str",
+   "tokens": [
+    "<2>",
+    "str"
+   ],
+   "volume_24h_micro": "int"
+  }
+ },
+ "responses": {
+  "/healthz": {
+   "content_type": "application/json",
+   "shape": {
+    "ok": "bool"
+   },
+   "status": 200
+  },
+  "/readyz": {
+   "content_type": "application/json",
+   "shape": {
+    "problems": [
+     "<0>"
+    ],
+    "ready": "bool"
+   },
+   "status": 200
+  },
+  "/v1/alerts": {
+   "content_type": "application/json",
+   "shape": {
+    "error": {
+     "code": "str",
+     "message": "str",
+     "requestId": "str",
+     "retryable": "bool"
+    }
+   },
+   "status": 401
+  },
+  "/v1/leaderboard?limit=5": {
+   "content_type": "application/json",
+   "shape": {
+    "asOf": "int",
+    "board": "str",
+    "boards": [
+     "<6>",
+     {
+      "cadence": "str",
+      "cadenceMs": "int",
+      "categories": [
+       "<0>"
+      ],
+      "categoryBoard": "bool",
+      "formula": "str",
+      "gate": "str",
+      "id": "str",
+      "isDefault": "bool",
+      "kind": "str",
+      "label": "str",
+      "window": "str",
+      "windows": [
+       "<4>",
+       "str"
+      ]
+     }
+    ],
+    "cache": {
+     "immutable": "bool",
+     "key": "null",
+     "public": "bool",
+     "ttlMs": "int"
+    },
+    "cadence": "str",
+    "cadenceMs": "int",
+    "categories": [
+     "<0>"
+    ],
+    "category": "null",
+    "disclaimer": "str",
+    "excluded": "null",
+    "excludedTotal": "int",
+    "formula": "str",
+    "freshness": {
+     "ageMs": "null",
+     "board": "str",
+     "cadenceMs": "int",
+     "label": "str",
+     "note": "str",
+     "runs": "int",
+     "snapshotMs": "null",
+     "source": "str",
+     "stale": "bool"
+    },
+    "gate": "str",
+    "label": "str",
+    "methodologyPath": "str",
+    "note": "str",
+    "page": {
+     "filtered": "bool",
+     "hasMore": "bool",
+     "limit": "int",
+     "offset": "int",
+     "rankedTotal": "int",
+     "returned": "int",
+     "unrankedReturned": "int"
+    },
+    "readPlan": {
+     "atMs": "int",
+     "board": "str",
+     "fillsFromMs": "int",
+     "fillsRule": "str",
+     "settledFromMs": "int",
+     "settledRule": "str",
+     "window": "str",
+     "windowMs": "int"
+    },
+    "rows": [
+     "<1>",
+     {
+      "ageDays": "int",
+      "anon": "str",
+      "bestTradeShareBps": "int",
+      "board": "str",
+      "classifications": [
+       "<0>"
+      ],
+      "components": {
+       "formula": "str",
+       "scaleMicro": "int",
+       "trimRemovedMicro": "int",
+       "trimRule": "str",
+       "volatilityMultiple": "int"
+      },
+      "copiers": "int",
+      "disputedExcluded": "int",
+      "drawdown": "str",
+      "handle": "null",
+      "insufficientSample": "bool",
+      "labels": [
+       "<0>"
+      ],
+      "maxDrawdownMicro": "int",
+      "rank": "int",
+      "rankBadge": {
+       "rank": "int",
+       "rankedTotal": "int",
+       "text": "str"
+      },
+      "realised": "str",
+      "realisedMicro": "int",
+      "sampleNote": "str",
+      "scoreBps": "int",
+      "settledMarkets": "int",
+      "state": "str",
+      "trimmed": "str",
+      "trimmedMicro": "int",
+      "verifiedVolume": "str",
+      "verifiedVolumeMicro": "int",
+      "volatility": "str",
+      "volatilityMicro": "int",
+      "volumeWindow": "str",
+      "washNote": "str",
+      "washed": "str",
+      "washedMicro": "int",
+      "winRateBps": "int",
+      "wins": "int"
+     }
+    ],
+    "serverAsOf": "int",
+    "staleAfter": "int",
+    "summary": {
+     "blewUpCount": "int",
+     "disputedWithheld": "int",
+     "excludedTotal": "int",
+     "filteredTotal": "null",
+     "medianSettledMarkets": "int",
+     "note": "str",
+     "provisionalCount": "int",
+     "rankedTotal": "int",
+     "settledMarkets": "int",
+     "unrankedTotal": "int",
+     "washedMicro": "int"
+    },
+    "tieBreaks": "str",
+    "unranked": [
+     "<3>",
+     {
+      "anon": "str",
+      "classifications": [
+       "<0>"
+      ],
+      "note": "str",
+      "reasons": [
+       "<1>",
+       "str"
+      ],
+      "settledMarkets": "int",
+      "verifiedVolume": "str",
+      "verifiedVolumeMicro": "int",
+      "washNote": "str",
+      "washed": "str",
+      "washedMicro": "int"
+     }
+    ],
+    "window": "str",
+    "windows": [
+     "<4>",
+     "str"
+    ]
+   },
+   "status": 200
+  },
+  "/v1/markets/0xM1": {
+   "content_type": "application/json",
+   "shape": {
+    "asOf": "int",
+    "cache": {
+     "immutable": "bool",
+     "key": "str",
+     "public": "bool",
+     "ttlMs": "int"
+    },
+    "cacheKey": "str",
+    "market": {
+     "acceptingOrders": "bool",
+     "category": "str",
+     "change24h": "str",
+     "enableOrderBook": "bool",
+     "endDate": "int",
+     "eventId": "null",
+     "eventSlug": "null",
+     "eventTitle": "null",
+     "feeType": "str",
+     "holderCount": "int",
+     "id": "str",
+     "lastPrice": "str",
+     "liquidity": "str",
+     "minimumOrderSize": "str",
+     "minimumTickSize": "str",
+     "negRisk": "bool",
+     "openInterest": "str",
+     "outcomeCount": "int",
+     "price24hAgo": "str",
+     "question": "str",
+     "resolutionCriteria": "str",
+     "resolutionSource": "str",
+     "secondsDelay": "int",
+     "slug": "str",
+     "volume24h": "str",
+     "volume30d": "str",
+     "volume7d": "str"
+    },
+    "serverAsOf": "int",
+    "staleAfter": "int"
+   },
+   "status": 200
+  },
+  "/v1/markets/0xM1/book?depth=5": {
+   "content_type": "application/json",
+   "shape": {
+    "ageMs": "int",
+    "aggregate": "str",
+    "aggregateStep": "null",
+    "asOf": "int",
+    "asks": [
+     "<5>",
+     {
+      "cumShares": "str",
+      "levels": "int",
+      "price": "str",
+      "shares": "str"
+     }
+    ],
+    "bestAsk": "str",
+    "bestBid": "str",
+    "bids": [
+     "<5>",
+     {
+      "cumShares": "str",
+      "levels": "int",
+      "price": "str",
+      "shares": "str"
+     }
+    ],
+    "cache": {
+     "immutable": "bool",
+     "key": "str",
+     "public": "bool",
+     "ttlMs": "int"
+    },
+    "cacheKey": "str",
+    "market": "str",
+    "maxCumShares": "str",
+    "midPrice": "str",
+    "oneSided": "null",
+    "serverAsOf": "int",
+    "spreadTicks": "float",
+    "staleAfter": "int",
+    "tickSize": "str"
+   },
+   "status": 200
+  },
+  "/v1/markets/0xM1/fills?limit=5": {
+   "content_type": "application/json",
+   "shape": {
+    "asOf": "int",
+    "cache": {
+     "immutable": "bool",
+     "key": "str",
+     "public": "bool",
+     "ttlMs": "int"
+    },
+    "cacheKey": "str",
+    "conditionId": "str",
+    "market": "str",
+    "nextCursor": "int",
+    "rows": [
+     "<5>",
+     {
+      "anonWallet": "str",
+      "ingestMs": "int",
+      "labels": [
+       "<1>",
+       "str"
+      ],
+      "notional": "str",
+      "outcome": "str",
+      "price": "str",
+      "shares": "str",
+      "side": "str",
+      "source": "str",
+      "venueTs": "int"
+     }
+    ],
+    "serverAsOf": "int",
+    "staleAfter": "int"
+   },
+   "status": 200
+  },
+  "/v1/markets/zzz": {
+   "content_type": "application/json",
+   "shape": {
+    "error": {
+     "code": "str",
+     "message": "str",
+     "requestId": "str",
+     "retryable": "bool"
+    }
+   },
+   "status": 404
+  },
+  "/v1/markets?limit=5": {
+   "content_type": "application/json",
+   "shape": {
+    "asOf": "int",
+    "cache": {
+     "immutable": "bool",
+     "key": "str",
+     "public": "bool",
+     "ttlMs": "int"
+    },
+    "cacheKey": "str",
+    "categories": [
+     "<10>",
+     "str"
+    ],
+    "facets": {
+     "Crypto": "int",
+     "Economics": "int",
+     "Politics": "int"
+    },
+    "items": [
+     "<5>",
+     {
+      "acceptingOrders": "bool",
+      "category": "str",
+      "change24h": "str",
+      "enableOrderBook": "bool",
+      "endTs": "int",
+      "event": "null",
+      "eventId": "null",
+      "feeType": "str",
+      "id": "str",
+      "lastPrice": "str",
+      "liquidity": "str",
+      "minimumOrderSize": "str",
+      "minimumTickSize": "str",
+      "negRisk": "bool",
+      "openInterest": "str",
+      "outcomeCount": "int",
+      "price24hAgo": "str",
+      "question": "str",
+      "secondsDelay": "int",
+      "spreadMicro": "null",
+      "volume24h": "str"
+     }
+    ],
+    "longTail": {
+     "hiddenCount": "int",
+     "includeLongTail": "bool",
+     "thresholdMicro": "int"
+    },
+    "nextCursor": "str",
+    "pageSizeHardCap": "int",
+    "serverAsOf": "int",
+    "sortBy": "str",
+    "sortKeys": [
+     "<7>",
+     "str"
+    ],
+    "staleAfter": "int"
+   },
+   "status": 200
+  },
+  "/v1/referrals/terms": {
+   "content_type": "application/json",
+   "shape": {
+    "asOf": "int",
+    "cache": {
+     "immutable": "bool",
+     "key": "null",
+     "public": "bool",
+     "ttlMs": "int"
+    },
+    "note": "str",
+    "serverAsOf": "int",
+    "staleAfter": "int",
+    "terms": {
+     "builderCode": "str",
+     "clawbackMinMicro": "int",
+     "model": "str",
+     "modelSentence": "str",
+     "noReferrerLeaderboard": "str",
+     "paidFrom": "str",
+     "payoutMinMicro": "int",
+     "qualifyNotionalMicro": "int",
+     "rejectedModels": {
+      "Pro credit": "str",
+      "deposit-size reward": "str",
+      "flat bounty on a first funded trade": "str"
+     },
+     "reviewThresholdMicro": "int",
+     "rules": [
+      "<7>",
+      "str"
+     ],
+     "schedule": "str",
+     "settleHoldDays": "int",
+     "shareBps": "int",
+     "taxNote": "str",
+     "termDays": "int"
+    }
+   },
+   "status": 200
+  }
+ },
+ "venue_payload": {
+  "builder": "str",
+  "client_order_hash": "str",
+  "expiration": "int",
+  "fee_rate_bps": "int",
+  "maker": "str",
+  "market": "str",
+  "metadata": "str",
+  "price": "float",
+  "salt": "int",
+  "side": "str",
+  "size": "float",
+  "timestamp": "int",
+  "token_id": "str",
+  "version": "str"
+ },
+ "why": "shapes our contracts promise: normalised venue payloads, API response bodies, the order struct"
+}

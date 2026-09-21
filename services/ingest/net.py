@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import random
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -40,6 +41,15 @@ class Bucket:
 
     `wait()` blocks, deliberately. A queue of unsent requests would be worse for the venue than a slow
     consumer, and it would let a burst scheduled minutes ago still hit them at full speed.
+
+    **It is thread-safe, and that sentence was paid for.** P13 D5's rate-budget test ran 100 aggressive
+    callers through one Fetcher and sent 7,484 requests to `data.trades` inside a 10 s window against a
+    budget of 110: `reserve()` computed the shortfall from a stale token count and `wait()` slept once and
+    then sent whatever happened, so N blocked callers all woke together and all went out. The daemon's loops
+    are single-threaded today, which is exactly why nobody had noticed — the first second worker (P04's
+    B5 sharding puts four sockets behind one process) would have spent the company's per-IP budget in
+    minutes. The clock argument is re-read after every sleep for the same reason: a caller that passes the
+    instant it started waiting is asking about the past.
     """
     name: str
     capacity: float
@@ -48,32 +58,47 @@ class Bucket:
     last: float = field(init=False, default_factory=time.monotonic)
     waits: int = 0
     slept_s: float = 0.0
+    _lock: object = field(init=False, default_factory=threading.Lock, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         self.tokens = float(self.capacity)
 
     def _fill(self, now: float) -> None:
-        self.tokens = min(self.capacity, self.tokens + (now - self.last) * self.per_sec)
-        self.last = now
+        """Refill by the elapsed time. The elapsed time is clamped at zero because a caller that captured its
+        clock *before* another caller's — two threads entering `get()` a millisecond apart, the slower one
+        reaching the lock second — would otherwise hand the bucket a negative interval and drive `tokens`
+        below zero, which turns the next wait into seconds instead of a fraction of one."""
+        dt = now - self.last
+        if dt > 0:
+            self.tokens = min(self.capacity, self.tokens + dt * self.per_sec)
+            self.last = now
 
     def reserve(self, now: float | None = None) -> float:
-        """Seconds this caller must wait before it may send. 0 means go now."""
-        now = time.monotonic() if now is None else now
-        self._fill(now)
-        if self.tokens >= 1:
-            self.tokens -= 1
-            return 0.0
-        self.waits += 1
-        need = (1 - self.tokens) / self.per_sec
-        self.tokens = 0.0                    # consumed by the sleep, not by this bookkeeping
-        return need
+        """Seconds this caller must wait before it may send. 0 means go now. Atomic: the check and the debit
+        happen under the lock, so two callers can never both read `tokens = 1`."""
+        with self._lock:
+            now = time.monotonic() if now is None else now
+            self._fill(now)
+            if self.tokens >= 1:
+                self.tokens -= 1
+                return 0.0
+            self.waits += 1
+            need = (1 - self.tokens) / self.per_sec
+            self.tokens = 0.0                # consumed by the sleep, not by this bookkeeping
+            return need
 
     def wait(self, now: float | None = None) -> float:
-        d = self.reserve(now)
-        if d:
+        """Block until admitted, then return how long it took. Re-checks after every sleep: sleeping is not a
+        reservation, and a caller holding a token it never received is the over-admit bug above."""
+        total = 0.0
+        while True:
+            d = self.reserve(now)
+            if not d:
+                return total
             self.slept_s += d
             time.sleep(d)
-        return d
+            total += d
+            now = None                       # the instant that was passed in is in the past by now
 
 
 # The buckets, named, with the rate each source was measured to allow (docs/P01-product-spec.md, re-verified

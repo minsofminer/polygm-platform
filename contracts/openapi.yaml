@@ -5967,7 +5967,7 @@ components:
                      SECURITY_ENV_MISSING, KEYSTORE_TAMPER, BREAK_GLASS_DENIED, AUTHZ_UNDECLARED, BAD_FIELD,
                      QUOTA_EXCEEDED, RADAR_SCOPE, HANDLE_TAKEN, CODE_TAKEN, CODE_INVALID, ALREADY_REFERRED,
                      SELF_REFERRAL, RATE_LIMITED, INSUFFICIENT_BALANCE, PASSWORD_REQUIRED, PASSWORD_WRONG,
-                     ADDRESS_NOT_ALLOWED]
+                     ADDRESS_NOT_ALLOWED, BUILDER_DISABLED]
             message: {type: string, description: "user-safe by construction"}
             retryable: {type: boolean}
             requestId: {type: string}

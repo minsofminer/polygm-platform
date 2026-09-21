@@ -337,6 +337,13 @@
         "PG-only statement: DO $$"
       ],
       "check_clauses_reordered": []
+    },
+    "0020_intent_delete_cascade.sql": {
+      "dropped": [
+        "PG-only statement: ALTER TABLE order_directives",
+        "PG-only statement: ALTER TABLE order_directives"
+      ],
+      "check_clauses_reordered": []
     }
   }
 }

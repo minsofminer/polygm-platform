@@ -39,6 +39,10 @@ class ApiBase(unittest.TestCase):
         # One DB per class (the module-level app is imported once), so each test starts from a clean money
         # history: without this the 24h cap from an earlier test's orders denies the next test's order with
         # DAILY_CAP, and the failure looks like a product bug rather than a fixture one.
+        # Directives first: the SQLite harness keeps a non-cascading foreign key (the transpiler drops
+        # `ALTER TABLE ... ON DELETE CASCADE` and records it in DROPPED.json), so a delete that removes an
+        # intent has to remove the intent's instructions with it. Postgres cascades.
+        self.con.execute("DELETE FROM order_directives WHERE intent_id IN (SELECT id FROM order_intents)")
         self.con.execute("DELETE FROM order_intents")
         self.con.execute("DELETE FROM orders")
         self.con.execute("DELETE FROM idempotency_keys")

@@ -123,6 +123,47 @@ def estimate_fees(*, size_shares_micro: int, price_micro: int, fee_rate_bps: int
     return Fees(platform, builder)
 
 
+def size_for_all_in_spend(amount_micro: int, price_micro: int, *, fee_rate_bps: int = 0,
+                          builder_bps: int = 0) -> int:
+    """The largest size, in micro-shares, whose **all-in** cost fits inside `amount_micro`.
+
+    D2's row is "a market order with an all-in spending cap: the amount adjusts for the estimated fee", and the
+    word doing the work is *all-in*. An order that spends the user's whole budget on the notional has no room
+    left for the fee, so the venue's balance check refuses it — the user typed $50, meant "$50 of this market",
+    and gets a refusal that reads like a bug. The fix is to size from the cap, not from the notional, and to do
+    it before anything is signed.
+
+    Integer arithmetic throughout, and *maximal*: `size + 1` must not fit. That second property is why this is a
+    binary search over the exact integer cost rather than a division by an average price — the fee is a
+    quadratic in the price (`C x rate x p x (1-p)`), so there is no closed form that stays exact in micros, and
+    an approximate size would be either over the cap (unsafe) or needlessly small (a worse order for the user).
+
+    Returns 0 when even one share does not fit, which is a refusal the caller already has a code for
+    (`BAD_AMOUNT`); the helper's contract is arithmetic, not vocabulary.
+    """
+    amount_micro, price_micro = int(amount_micro), int(price_micro)
+    if amount_micro <= 0 or price_micro <= 0:
+        return 0
+
+    def all_in(size_micro: int) -> int:
+        return (notional_floor(size_micro, price_micro)
+                + estimate_fees(size_shares_micro=size_micro, price_micro=price_micro,
+                                fee_rate_bps=fee_rate_bps, builder_bps=builder_bps).total_micro)
+
+    # Two upper bounds, and the smaller one is what makes this a *reduction*: the notional-only answer
+    # (`amount / price`, floored) is the size a fee-free market gets, and the search may only come down from
+    # there. The fee can shrink an order; it must never let one in that the plain division already refused, or
+    # the same request would answer differently for arithmetic reasons a reader cannot see.
+    lo, hi = 0, (amount_micro * 10**SCALE) // price_micro
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        if all_in(mid) <= amount_micro:
+            lo = mid
+        else:
+            hi = mid - 1
+    return lo
+
+
 def fee_accuracy_bps(estimate_micro: int, actual_micro: int) -> int:
     """Signed error in basis points of the estimate: positive means we UNDER-estimated, which is the
     direction that hurts. Reported to the dashboard, and the metric the phase asked for."""
@@ -351,6 +392,10 @@ BATCH_ITEM_CODES: dict[str, str] = {
     "rate_limited": "THROTTLED",
     "malformed": "VALIDATION",
     "delayed_not_allowed": "DELAYED",
+    # P13 D7.7. The venue disables a builder code and then refuses every order carrying it. Without this entry
+    # the refusal arrives as a generic VENUE_REJECTED, which is exactly the case the kit asks to be legible:
+    # orders rejected, users informed, the code marked off, and the revenue dashboard showing the drop.
+    "builder_code_not_allowed": "BUILDER_DISABLED",
 }
 
 
