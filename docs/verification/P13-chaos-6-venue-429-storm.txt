@@ -1,5 +1,8 @@
 CHAOS 6 — venue 429 storm
 ==============================================================================
+expected outcome (written before the drill ran):
+  A sustained 429 storm: backoff holds, no order is submitted twice, none is silently dropped, and the user-visible state is uncertain-then-resolved rather than wrong.
+
 verdict: PASS
 elapsed: 0.1 s
 

@@ -1,0 +1,157 @@
+name: nightly
+
+# The tests that are real but too slow for a pull request: the chaos drills, the kit's full-size load clauses,
+# and the browser suite. Everything here also runs by hand (`make p13`, `tools/p13-chaos-suite.py`,
+# `tools/p13-load.py`); this file is what makes them run when nobody is watching.
+#
+# Why a schedule rather than only a merge gate: three of the failures this phase exists to catch are invisible
+# in a five-minute window. A leak needs half an hour, a reconnect storm needs a thousand clients, and a chaos
+# drill needs a kill at the wrong moment. A PR gate that runs them either lies about the sizes or takes an hour.
+#
+# The two jobs that matter are `chaos` (the ten drills; the live WebSocket kill really kills a socket for five
+# minutes) and `load-full` (200 fills/s for 30 minutes, 2,000 books, 500 concurrent users, 10,000 subscribers,
+# 1,000 clients through a SIGKILL, and the per-IP rate budget). `e2e` is the only job that needs a browser, and
+# it is here rather than on the PR path because `playwright install --with-deps` is a two-minute install.
+"on":
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: nightly-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  PGM_LOG_FORMAT: json
+  PYTHONDONTWRITEBYTECODE: "1"
+
+jobs:
+  chaos:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements.txt
+      - name: install the pinned set
+        run: pip install -r requirements.txt
+      - name: the ten chaos drills (drill 2 kills a live socket for five minutes)
+        run: |
+          python3 tools/p13-chaos-suite.py --execute-live \
+            --record docs/verification/P13-chaos-suite.txt \
+            --json docs/verification/P13-chaos-suite.json
+      - name: the 100x kill loop, on a fixed seed so a failure can be reproduced
+        run: python3 tools/p13-recovery-loop.py --runs 100 --seed 13 --json docs/verification/P13-chaos-recovery.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: chaos-records
+          path: docs/verification/P13-chaos-*.txt
+          if-no-files-found: warn
+
+  load-full:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements.txt
+      - name: install the pinned set
+        run: pip install -r requirements.txt
+      - name: the kit's own sizes, all six of them
+        run: |
+          python3 tools/p13-load.py --test all --pace \
+            --record docs/verification/P13-load.txt \
+            --json docs/verification/P13-load.json
+      - name: the soak's own record, named so the phase gate can find the clause it checks
+        run: |
+          python3 - <<'PY'
+          import json, pathlib
+          data = json.loads(pathlib.Path("docs/verification/P13-load.json").read_text())
+          soak = data.get("soak") or {}
+          pathlib.Path("docs/verification/P13-soak-1800s.json").write_text(json.dumps(soak, indent=2))
+          pathlib.Path("docs/verification/P13-soak-1800s.txt").write_text(
+              "P13 D5 soak, extracted from the full nightly run\n" + json.dumps(soak, indent=2) + "\n")
+          print("soak:", {k: soak.get(k) for k in ("seconds", "fills", "alerts_fired",
+                                                   "duplicate_deliveries", "rss_second_half_mb")})
+          PY
+      - name: the money matrix, run rather than checked
+        run: |
+          python3 tools/p13-money-matrix.py --run \
+            --record docs/verification/P13-money-matrix.txt \
+            --json docs/verification/P13-money-matrix.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: load-records
+          path: |
+            docs/verification/P13-load*.txt
+            docs/verification/P13-load*.json
+            docs/verification/P13-soak-1800s.*
+            docs/verification/P13-money-matrix.*
+          if-no-files-found: warn
+
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: install the pinned set
+        run: npm ci
+      - name: install chromium and its system libraries
+        run: npm run test:e2e:install
+      - name: the browser suite (buy flow, withdrawal ceremony, Telegram webview)
+        run: npm run test:e2e
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: web/playwright-report/
+          if-no-files-found: ignore
+
+  # The gate is the summary: it re-reads every artifact this workflow just wrote and refuses to pass a phase
+  # whose evidence is missing, stale or self-contradictory.
+  p13-gate:
+    needs: [chaos, load-full, e2e]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    if: always()
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements.txt
+      - name: install the pinned set
+        run: pip install -r requirements.txt
+      - name: the nightly jobs must have passed for the gate to mean anything
+        run: |
+          echo "chaos=${{ needs.chaos.result }} load=${{ needs.load-full.result }} e2e=${{ needs.e2e.result }}"
+          test "${{ needs.chaos.result }}" = "success"
+          test "${{ needs.load-full.result }}" = "success"
+      - name: the phase gate, reading the night's records
+        run: python3 tools/p13-gate-check.py --skip-heavy --record docs/verification/P13-gate-nightly.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: p13-gate
+          path: docs/verification/P13-gate-nightly.txt
+          if-no-files-found: warn

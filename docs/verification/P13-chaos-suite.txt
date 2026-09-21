@@ -2,32 +2,37 @@ P13 D7 — ten chaos tests
 ==============================================================================
 
  1. PASS     executor killed mid-submit
+     expected: 100 kills between signing and the response, at random points: zero duplicate orders, zero lost p…
      report: docs/verification/P13-chaos-1-executor-kill.txt
      artifact: docs/verification/P13-chaos-1-executor-kill.txt
      runs: 6
 
  3. PASS     ingest killed mid-write
+     expected: The ingest consumer killed mid-write: every fill that was acknowledged is on disk, the replay af…
      report: docs/verification/P13-chaos-3-ingest-killed-mid-write.txt
      distinct_keys: 4000
-     durable_at_kill: 3476
+     durable_at_kill: 3551
      rows_after_replay: 4000
 
  4. PASS     database killed mid-flight
+     expected: The database unavailable mid-flight: the write is REFUSED with a retryable 503 rather than accep…
      report: docs/verification/P13-chaos-4-database-killed-mid-flight.txt
      idem_rows_added_while_locked: 0
      recovered_status: 202
-     refusal_ms: 5309.6
+     refusal_ms: 5027.6
      refused_status: 503
      rows_added_while_locked: 0
 
  5. PASS     cache killed
+     expected: No cache at all: every read still answers from the source, no request 5xx-es for a cache miss, a…
      report: docs/verification/P13-chaos-5-cache-killed.txt
      cache_entries_cleared: 0
-     ms_each: 3.4
+     ms_each: 3.6
      ok: 25
      reads: 25
 
  6. PASS     venue 429 storm
+     expected: A sustained 429 storm: backoff holds, no order is submitted twice, none is silently dropped, and…
      report: docs/verification/P13-chaos-6-venue-429-storm.txt
      intents_with_two_orders: 0
      refusals: {'ORDER_RATE@preflight': 25, 'STALE_QUOTE@preflight': 15, 'THROTTLED@preflight': 8}
@@ -36,6 +41,7 @@ P13 D7 — ten chaos tests
      venue_requests_phase_b: 0
 
  7. PASS     builder code disabled by the venue
+     expected: The builder code disabled at the venue: every order refused with the venue's own reason (not a g…
      report: docs/verification/P13-chaos-7-builder-code-disabled-by-the-venue.txt
      first_code: BUILDER_DISABLED
      intent_state: rejected
@@ -45,16 +51,19 @@ P13 D7 — ten chaos tests
      status_state: disabled
 
  8. PASS     signer / wallet provider down
+     expected: The wallet provider unreachable: nothing is signed and nothing is placed, the refusal names the …
      report: docs/verification/P13-chaos-8-signer-down.txt
      book_status: 200
      code: SIGNATURE_REFUSED
      posts: 0
 
  9. PASS     kill switch during a copy-trade
+     expected: Kill switch engaged during a copy-trade: submission stops within 1 s, the already-queued intent …
      report: docs/verification/P13-chaos-9-kill-switch.txt
      artifact: docs/verification/P13-chaos-9-kill-switch.txt
 
 10. PASS     key compromise drill
+     expected: Key compromise: 10,000 keys inventoried and the compromised one revoked inside the P14 budget, w…
      report: docs/verification/P13-chaos-10-key-compromise.txt
      artifact: docs/verification/P13-chaos-10-key-compromise.txt
 

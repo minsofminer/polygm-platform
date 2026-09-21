@@ -1,0 +1,116 @@
+P13 D2 money-path matrix
+==============================================================================
+43 rows, 62 mapped tests, run in 14.9 s
+
+[PASS] OL-1   happy path: intent -> risk -> sign -> submit -> fill -> position -> attribution row
+        ok   test_executor_service.py::TestHappyPath::test_intent_becomes_exactly_one_order_with_a_trail
+        ok   test_executor_service.py::TestHappyPath::test_attribution_row_written_for_every_order
+        ok   test_executor_service.py::TestFillsAndLedger::test_fill_books_one_lot_one_cash_row_and_updates_matched
+[PASS] OL-2   rejected: insufficient balance, with the user-facing message
+        ok   test_executor_service.py::TestPreflightRefusals::test_balance_must_cover_notional_plus_fees
+[PASS] OL-3   rejected: off-tick
+        ok   test_executor.py::TestVenueValidation::test_off_tick_and_small_orders_are_rejected_by_the_mock
+[PASS] OL-4   rejected: below minimum_order_size
+        ok   test_executor.py::TestVenueValidation::test_off_tick_and_small_orders_are_rejected_by_the_mock
+[PASS] OL-5   rejected: market closed / not accepting orders
+        ok   test_executor_service.py::TestPreflightRefusals::test_blocklisted_market_refused
+[PASS] OL-6   rejected: a stale or missing book
+        ok   test_executor_service.py::TestPreflightRefusals::test_stale_or_missing_book_refuses
+[PASS] OL-7   rejected: the caller may not send a market order
+        ok   test_executor_service.py::TestPreflightRefusals::test_user_may_not_send_a_market_order
+[PASS] OL-8   partial fill, then remainder cancelled
+        ok   test_executor_service.py::TestCancellation::test_single_cancel_is_audited_and_updates_state
+        ok   test_executor.py::TestOverARealSocket::test_partial_fill_is_visible_through_the_trades_endpoint
+[PASS] OL-9   partial fill, then the market resolves
+        ok   test_reconciler.py::TestReconcileTaxonomy::test_lagging_fill_is_booked_and_the_case_closes
+[PASS] OL-10  FOK rejected: no fill, no partial
+        ok   test_p13_money_matrix.py::TestFillOrKill::test_a_rejected_fok_books_no_fill_and_no_partial
+[PASS] OL-11  market order with an all-in spending cap: the amount adjusts for the estimated fee
+        ok   test_p13_money_matrix.py::TestSpendingCap::test_the_amount_adjusts_for_the_estimated_fee
+        ok   test_p13_money_matrix.py::TestSpendingCap::test_a_higher_fee_rate_buys_strictly_fewer_shares_for_the_same_spend
+[PASS] OL-12  the venue fills at a price worse than our limit -> refused, cased, ledger untouched
+        ok   test_p13_money_matrix.py::TestTheVenueBehavesBadly::test_a_fill_worse_than_our_limit_is_refused_and_becomes_a_case
+[PASS] OL-13  price improvement is booked at the venue's better price (a limit is a bound, not an equality)
+        ok   test_p13_money_matrix.py::TestTheVenueBehavesBadly::test_a_better_price_than_our_limit_books_at_the_venue_price
+[PASS] AMB-1  executor killed after signing, before the HTTP response -> restart -> no duplicate order
+        ok   test_executor_service.py::TestCrashBetweenSignAndPost::test_signed_then_lost_recovers_without_a_second_post
+        ok   test_executor.py::TestCrashRecovery::test_sign_post_die_then_recover_in_a_new_process
+[PASS] AMB-2  HTTP timeout on submit, order WAS accepted -> discovered, never resubmitted
+        ok   test_executor.py::TestOverARealSocket::test_timeout_round_trips_as_504_and_becomes_uncertain
+        ok   test_reconciler.py::TestReconcileTaxonomy::test_submitted_unacked_is_repaired_from_the_venue_and_closed
+[PASS] AMB-3  HTTP timeout on submit, order was NEVER accepted -> discovered, resubmitted once
+        ok   test_reconciler.py::TestReconcileTaxonomy::test_no_ack_found_at_the_venue_is_adopted_without_a_second_post
+        ok   test_reconciler.py::TestReconcileTaxonomy::test_submitted_unacked_when_the_venue_has_nothing_is_a_case_not_a_deletion
+[PASS] AMB-4  fill event never arrives over the WebSocket -> the fallback poll finds it
+        ok   test_executor_service.py::TestFillsAndLedger::test_lagging_fill_case_closes_when_booked
+[PASS] AMB-5  WebSocket delivers the same fill twice -> deduplicated, position counted once
+        ok   test_executor_service.py::TestFillsAndLedger::test_replaying_the_same_venue_fill_changes_nothing
+        ok   test_executor_service.py::TestFillsAndLedger::test_replaying_the_same_venue_fill_records_no_second_notification
+[PASS] AMB-6  cancel from one surface while another is open -> single source of truth holds
+        ok   test_p13_money_matrix.py::TestOneSourceOfTruth::test_a_cancel_on_one_surface_is_the_state_every_surface_reads
+[PASS] AMB-8  the venue fills and the connection dies before we hear -> the fallback books it once, no resubmit
+        ok   test_p13_money_matrix.py::TestTheVenueBehavesBadly::test_a_fill_the_connection_never_reported_is_booked_once_and_never_resubmitted
+[PASS] AMB-7  position diverges from the venue -> reconciler detects, corrects, alarms, tells the truth
+        ok   test_reconciler.py::TestReconcileTaxonomy::test_ambiguous_settlement_opens_a_case_and_books_nothing
+        ok   test_executor_service.py::TestOrphansAndGhosts::test_ghost_order_stays_open_and_alarms
+        ok   test_executor_service.py::TestFillsAndLedger::test_unbookable_fill_keeps_a_case_open_and_the_ledger_untouched
+[PASS] RG-1   every limit in P6 D4 has a test that trips it
+        ok   test_gate.py::TestDenials::test_every_rule_denies
+        ok   test_gate.py::TestCompleteness::test_every_deny_code_in_the_source_is_covered_by_the_api_envelope
+[PASS] RG-2   risk service unavailable -> fails closed
+        ok   test_executor.py::TestUncertainSafety::test_risk_denial_never_reaches_the_venue
+        ok   test_executor_service.py::TestKillSwitch::test_kill_switch_read_failure_fails_closed
+[PASS] RG-3   kill switch engaged -> all submission stops within 1s
+        ok   test_executor_service.py::TestKillSwitch::test_engaged_switch_claims_nothing_and_halts_the_queue
+[PASS] RG-4   kill switch while a copy-trade is mid-execution
+        ok   test_p13_money_matrix.py::TestKillSwitchDuringCopy::test_a_copy_intent_already_queued_places_nothing_after_the_switch
+[PASS] RG-5   daily loss halt -> the user cannot trade until acknowledged
+        ok   test_executor_service.py::TestPreflightRefusals::test_daily_loss_halt_blocks_until_acknowledged
+[PASS] FEE-1  platform fee estimate matches C x feeRate x p x (1-p)
+        ok   test_executor_service.py::TestHappyPath::test_fee_estimate_is_persisted_and_comparable
+        ok   test_p13_money_matrix.py::TestFeeCurve::test_the_fee_formula_is_the_curve_it_says_it_is
+[PASS] FEE-2  fee at p=0.01 and p=0.99 (the curve's extremes)
+        ok   test_p13_money_matrix.py::TestFeeCurve::test_the_extremes_of_the_curve_are_the_extremes
+[PASS] FEE-3  builder fee at 0, 1, 50 and 100 bps
+        ok   test_p13_money_matrix.py::TestFeeCurve::test_builder_bps_are_charged_exactly_at_their_rate
+[PASS] FEE-4  realised fee reconciled against the estimate; the delta is stored
+        ok   test_executor_service.py::TestHappyPath::test_fee_estimate_is_persisted_and_comparable
+[PASS] FEE-5  no float anywhere: a price and a size round-trip without loss
+        ok   test_money.py::TestSdkBoundary::test_float_conversion_round_trips
+        ok   test_p13_properties.py::TestNumericParsingIsStrict::test_round_tripping_the_money_path_never_loses_precision
+        ok   test_money.py::TestSdkBoundary::test_the_top_of_the_range_raises_and_the_boundary_is_real
+[PASS] NEG-1  multi-outcome PnL across three legs, one YES and two NO
+        ok   test_ledger.py::TestNegriskPnl::test_resolve_payouts_and_realised
+[PASS] NEG-2  merge/split behaviour (or the explicit refusal), tested
+        ok   test_ledger.py::TestMergeSplit::test_six_legs_of_one_dollar_is_exact
+        ok   test_ledger.py::TestMergeSplit::test_rejects_a_mismatch
+        ok   test_ledger.py::TestNegriskPnl::test_merge_records_the_residual_and_keeps_the_book_balanced
+[PASS] NEG-3  outcome probabilities summing to != 1, and what the UI shows
+        ok   test_p13_money_matrix.py::TestNegriskDivergence::test_a_diverged_book_is_reported_with_the_edge_a_user_could_trade
+[PASS] WAL-1  deposit detected on each supported chain -> pUSD correct
+        ok   test_wallet_api.py::TestDepositProgress::test_credited_marks_every_leg_done_and_stamps_the_time
+        ok   test_wallet_api.py::TestDepositProgress::test_the_legs_are_states_and_exactly_one_is_active
+[PASS] WAL-2  allowance exhausted mid-session -> a clear error, not a failed order
+        ok   test_copy_automation.py::TestAutomationEngine::test_the_rule_intent_then_passes_the_venue_gate_like_any_other
+        ok   test_executor_service.py::TestPreflightRefusals::test_allowance_shortfall_is_a_park_not_a_rejection
+[PASS] WAL-3  withdrawal to a non-allowlisted address is blocked, incl. cooldown
+        ok   test_wallet_api.py::TestWithdrawCeremony::test_a_destination_nobody_allowlisted_is_refused_before_the_password_is_read
+        ok   test_wallet_api.py::TestWithdrawCeremony::test_a_fresh_address_is_still_inside_its_hold
+[PASS] WAL-4  key export writes an audit entry
+        ok   test_wallet_api.py::TestKeyExport::test_the_export_hands_over_wrapped_material_once_and_counts_it
+[PASS] WAL-5  wallet provider down: deposits/withdrawals degrade, positions stay readable, trading disabled
+        ok   test_p13_money_matrix.py::TestWalletProviderDown::test_signing_outage_stops_trading_and_leaves_the_book_readable
+[PASS] AUTH-1 initData HMAC: valid accepted
+        ok   test_security_core.py::TestTelegramInitData::test_a_valid_fresh_payload_verifies_and_names_the_user
+[PASS] AUTH-2 initData HMAC: tampered signature rejected
+        ok   test_telegrambot_api.py::TestMiniAppSession::test_a_tampered_init_data_is_rejected
+[PASS] AUTH-3 initData HMAC: stale auth_date rejected
+        ok   test_telegrambot_api.py::TestMiniAppSession::test_a_stale_payload_is_refused_even_with_a_perfect_signature
+[PASS] AUTH-4 initData HMAC: replay rejected
+        ok   test_telegrambot_api.py::TestMiniAppSession::test_a_replayed_payload_cannot_mint_a_second_session
+        ok   test_security_core.py::TestTelegramInitData::test_replay_is_refused_against_an_iterable_and_against_a_predicate
+
+MONEY MATRIX: PASS — 43 of 43 rows green (62 of 62 mapped tests ran)
+
+Matrix policy (D8): coverage is reported but not gated; THIS matrix is gated at 100%.
+A row that cannot name a passing test is a hole in the money path, not a coverage note.

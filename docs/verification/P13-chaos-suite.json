@@ -1,8 +1,9 @@
 {
-  "at": "2026-09-21T05:16:47+0000",
+  "at": "2026-09-21T05:45:12+0000",
   "drills": {
     "1": {
       "artifact": "docs/verification/P13-chaos-1-executor-kill.txt",
+      "expected": "100 kills between signing and the response, at random points: zero duplicate orders, zero lost positions, zero intents left in an impossible state. Every uncertain intent resolves to exactly one venue order or none, and the trail says why.",
       "facts": {
         "artifact": "docs/verification/P13-chaos-1-executor-kill.txt",
         "runs": 6
@@ -12,6 +13,7 @@
     },
     "10": {
       "artifact": "docs/verification/P13-chaos-10-key-compromise.txt",
+      "expected": "Key compromise: 10,000 keys inventoried and the compromised one revoked inside the P14 budget, with every signature from it refused afterwards and an audit trail that names the actor and the time.",
       "facts": {
         "artifact": "docs/verification/P13-chaos-10-key-compromise.txt"
       },
@@ -20,9 +22,10 @@
     },
     "3": {
       "artifact": "docs/verification/P13-chaos-3-ingest-killed-mid-write.txt",
+      "expected": "The ingest consumer killed mid-write: every fill that was acknowledged is on disk, the replay after restart adds each one exactly once (the durable cursor), and no alert fires twice for one event.",
       "facts": {
         "distinct_keys": 4000,
-        "durable_at_kill": 3476,
+        "durable_at_kill": 3551,
         "rows_after_replay": 4000
       },
       "title": "ingest killed mid-write",
@@ -30,10 +33,11 @@
     },
     "4": {
       "artifact": "docs/verification/P13-chaos-4-database-killed-mid-flight.txt",
+      "expected": "The database unavailable mid-flight: the write is REFUSED with a retryable 503 rather than accepted and lost, nothing is placed, no money moves, the read side keeps answering, and the same request succeeds once the store is back.",
       "facts": {
         "idem_rows_added_while_locked": 0,
         "recovered_status": 202,
-        "refusal_ms": 5309.6,
+        "refusal_ms": 5027.6,
         "refused_status": 503,
         "rows_added_while_locked": 0
       },
@@ -42,9 +46,10 @@
     },
     "5": {
       "artifact": "docs/verification/P13-chaos-5-cache-killed.txt",
+      "expected": "No cache at all: every read still answers from the source, no request 5xx-es for a cache miss, and the upstream call count stays inside the per-IP budget (a cold cache must not become a rate-limit ban).",
       "facts": {
         "cache_entries_cleared": 0,
-        "ms_each": 3.4,
+        "ms_each": 3.6,
         "ok": 25,
         "reads": 25
       },
@@ -53,6 +58,7 @@
     },
     "6": {
       "artifact": "docs/verification/P13-chaos-6-venue-429-storm.txt",
+      "expected": "A sustained 429 storm: backoff holds, no order is submitted twice, none is silently dropped, and the user-visible state is uncertain-then-resolved rather than wrong.",
       "facts": {
         "intents_with_two_orders": 0,
         "refusals": {
@@ -72,6 +78,7 @@
     },
     "7": {
       "artifact": "docs/verification/P13-chaos-7-builder-code-disabled-by-the-venue.txt",
+      "expected": "The builder code disabled at the venue: every order refused with the venue's own reason (not a generic error), the user told in words, an alarm raised, and the code's status recorded as the venue's refusal rather than ours.",
       "facts": {
         "first_code": "BUILDER_DISABLED",
         "intent_state": "rejected",
@@ -85,6 +92,7 @@
     },
     "8": {
       "artifact": "docs/verification/P13-chaos-8-signer-down.txt",
+      "expected": "The wallet provider unreachable: nothing is signed and nothing is placed, the refusal names the signer and is retryable, positions and books stay readable, and trading is disabled with an explanation.",
       "facts": {
         "book_status": 200,
         "code": "SIGNATURE_REFUSED",
@@ -95,6 +103,7 @@
     },
     "9": {
       "artifact": "docs/verification/P13-chaos-9-kill-switch.txt",
+      "expected": "Kill switch engaged during a copy-trade: submission stops within 1 s, the already-queued intent places nothing, and both surfaces read the same stopped state.",
       "facts": {
         "artifact": "docs/verification/P13-chaos-9-kill-switch.txt"
       },

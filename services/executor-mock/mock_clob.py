@@ -12,7 +12,8 @@ It is deliberately NOT a fake that always says yes:
   * it rejects a price/size float that cannot round-trip to the integer we sent — the only way to test the
     `to_float_for_sdk` assertion end-to-end instead of trusting it;
   * it has scenarios: `timeout_after_accept`, `reject`, `partial_fill`, `rate_limit`, `unreachable`,
-    `builder_disabled` (P13 D7.7);
+    `builder_disabled` (P13 D7.7), `fill_then_disconnect` and `wrong_price_fill` (P13 D1's list of the failure
+    modes the integration tests must be able to drive);
     P06 added `ghost_order` (a cancel that says success and changes nothing) and `cancel_races_fill` (a
     cancel that loses to a fill), because D3's reconciliation cases are only testable if the venue can be
     *wrong* in those specific ways;
@@ -75,6 +76,27 @@ class MockClob:
             if delay:
                 time.sleep(delay / 1000.0)
             raise TimeoutError("mock: read timeout after accept")
+        if scen == "fill_then_disconnect":
+            # Matched, and the connection died before we heard. Distinct from `timeout_after_accept` in the way
+            # that matters: there the order exists and has NOT filled, so "we may have an open order" is the
+            # whole reconciliation; here the money has already moved and every reader that treats a failed POST
+            # as "nothing happened" is wrong. The fill is written before the connection error so the venue's own
+            # /trades endpoint is the thing that proves it.
+            oid = self._accept(signed, acknowledged=True)
+            self.fill(oid, price=signed["price"], size=signed["size"])
+            delay = int(self.scenario_args.get("delay_ms") or 0)
+            if delay:
+                time.sleep(delay / 1000.0)
+            raise ConnectionError("mock: the connection closed after the fill")
+        if scen == "wrong_price_fill":
+            # A venue bug we have to survive rather than a plausible market: the match arrives at a price we did
+            # not ask for. `fill_price` lets a test choose an off-tick value; the default is a worse price one
+            # tick away, which is the shape a real "we filled you badly" report takes.
+            oid = self._accept(signed, acknowledged=True)
+            want = float(signed["price"])
+            at = float(self.scenario_args.get("fill_price") or round(want - 0.01, 6))
+            self.fill(oid, price=at, size=signed["size"])
+            return {"success": True, "orderID": oid, "status": "matched"}
         if scen == "rate_limit":
             return {"success": False, "code": "rate_limited",
                     "message": "mock: clob rate limit (read_timeout backoff path)"}

@@ -1,0 +1,20 @@
+{
+  "at": "2026-09-21T05:31:59+0000",
+  "failures": [],
+  "mode": "full",
+  "paced": false,
+  "quick": false,
+  "results": {
+    "fanout": {
+      "cycles": 625,
+      "delivered": 10000,
+      "deliveries_per_s": 182.8,
+      "drain_seconds": 54.7,
+      "send_ms": 80.0,
+      "slo_seconds": 300.0,
+      "subscribers": 10000,
+      "workers": 16
+    }
+  },
+  "verdict": "PASS"
+}

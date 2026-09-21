@@ -1,0 +1,20 @@
+# Quarantine — flaky tests that are known, owned, and on a clock.
+#
+# The kit's D8 policy: a test that flakes twice is quarantined and owned by a named person until it is fixed,
+# because a suite people do not trust is worse than no suite. The format is one test per line:
+#
+#     <file>::<Class>::<test>  <reason>  @<owner>  @<expiry YYYY-MM-DD>
+#
+# `tools/p13-gate-check.py` fails on an entry without an expiry, and fails when this file is missing: a
+# quarantine with nowhere to write is how a suite stops being trusted. Quarantined tests stay in the suite and
+# keep running — they are reported, not removed — and an entry past its expiry is a failure, not a note.
+#
+# What is NOT allowed here: a test that fails deterministically (that is a bug, and it belongs in the matrix or
+# in a chaos artifact), and a test that was never passing. Quarantine is for a test that proves the right thing
+# on a machine that behaves.
+#
+# Empty is the right size for this list. It has been empty since P13 opened: the two flaky-looking failures this
+# phase produced were both harness bugs with deterministic causes (the soak's signal ids, the storm's health
+# probe) and both were fixed rather than quarantined.
+#
+# file::test  reason  @owner  @expiry

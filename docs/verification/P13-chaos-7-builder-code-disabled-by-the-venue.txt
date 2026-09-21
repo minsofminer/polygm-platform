@@ -1,5 +1,8 @@
 CHAOS 7 — builder code disabled by the venue
 ==============================================================================
+expected outcome (written before the drill ran):
+  The builder code disabled at the venue: every order refused with the venue's own reason (not a generic error), the user told in words, an alarm raised, and the code's status recorded as the venue's refusal rather than ours.
+
 verdict: PASS
 elapsed: 0.6 s
 

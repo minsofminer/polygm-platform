@@ -10,6 +10,7 @@ ENVFILE := $(ROOT)/.env
 
 .DEFAULT_GOAL := help
 .PHONY: help dev dev-core down logs test test-verbose lint typecheck migrate seed seed-sql gate \
+        p13 p13-read p13-matrix p13-chaos p13-chaos-live p13-recovery p13-load-quick p13-load p13-soak \
         gate-mutate check sql-sqlite sql-sqlite-check openapi openapi-selftest clean doctor probe \
         p01 p02 p03 p04 p05 gate-p05 gate-p05-offline gate-p05-mutate chaos-p05 seed-rules envelope \
         p06 gate-p06 gate-p06-offline gate-p06-mutate chaos-p06 drill-p06 \
@@ -265,6 +266,39 @@ p12-live:                 ## also probe the two deployments over the network
 p12-selftest:             ## prove the P12 checks can fail, one planted breakage at a time
 	$(PY) tools/p12-gate-check.py --self-test
 
+# ------------------------------------------------------------------ P13 · the test phase
+# `make p13` is the phase gate. It reads the recorded evidence AND re-runs the heavy half (the drills and the
+# load suite), because P13's subject is the other gates and a gate that only reads transcripts is a gate a
+# transcript can fool. `p13-read` is the same gate with `--skip-heavy`, which is what the PR path runs: it
+# re-checks every recorded artifact without spending half an hour.
+p13: web-deps
+	$(PY) tools/p13-gate-check.py --record docs/verification/P13-gate.txt --json docs/verification/P13-gate.json
+
+p13-read:                 ## the phase gate reading the recorded evidence (no drills, no load re-run)
+	$(PY) tools/p13-gate-check.py --skip-heavy --record docs/verification/P13-gate-ci.txt
+
+p13-matrix:               ## D2: every money-path row must resolve to a test, and that test must pass
+	$(PY) tools/p13-money-matrix.py --check
+	$(PY) tools/p13-money-matrix.py --run --record docs/verification/P13-money-matrix.txt --json docs/verification/P13-money-matrix.json
+
+p13-chaos:                ## D7: the ten drills, each with a written expected outcome and its own artifact
+	$(PY) tools/p13-chaos-suite.py --record docs/verification/P13-chaos-suite.txt --json docs/verification/P13-chaos-suite.json
+
+p13-chaos-live:           ## D7 drill 2 for real: a five-minute WebSocket outage (needs network, ~7 minutes)
+	$(PY) tools/p13-chaos-suite.py --only 2 --execute-live --record docs/verification/P13-chaos-suite.txt --json docs/verification/P13-chaos-suite.json
+
+p13-recovery:             ## D7's headline loop: 100 kills between signing and the response
+	$(PY) tools/p13-recovery-loop.py --runs 100 --seed 13 --record docs/verification/P13-chaos-recovery.txt --json docs/verification/P13-chaos-recovery.json
+
+p13-load-quick:           ## D5 at CI sizes (seconds, not half-hours)
+	$(PY) tools/p13-load.py --test all --quick --record docs/verification/P13-load-quick.txt --json docs/verification/P13-load-quick.json
+
+p13-load:                 ## D5 at the kit's sizes: 30-minute soak, 2,000 books, 500 users, 10k fanout, 1k storm
+	$(PY) tools/p13-load.py --test all --pace --record docs/verification/P13-load.txt --json docs/verification/P13-load.json
+
+p13-soak:                 ## D5's 30-minute clause on its own, with the artifact the gate reads
+	$(PY) tools/p13-load.py --test soak --seconds 1800 --pace --record docs/verification/P13-soak-1800s.txt --json docs/verification/P13-soak-1800s.json
+
 web-deps:
 	@cd web && { [ -d node_modules ] || npm ci --no-audit --no-fund; }
 
@@ -279,7 +313,7 @@ p03:
 	$(PY) tools/p03-gate-check.py
 	$(PY) tools/p03-mutation-test.py
 
-check: test lint lint-canary openapi-selftest sql-sqlite-check gate gate-mutate p01 p02 p03 p04 p05 p06 p07 p08 p09 p10 p12 p12-selftest probe-fresh
+check: test lint lint-canary openapi-selftest sql-sqlite-check gate gate-mutate p01 p02 p03 p04 p05 p06 p07 p08 p09 p10 p12 p12-selftest p13-read probe-fresh
 	@echo "ALL GREEN"
 
 # ------------------------------------------------------------------ diagnostics

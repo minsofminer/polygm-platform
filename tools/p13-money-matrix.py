@@ -68,6 +68,17 @@ ROWS: list[dict] = [
      "tests": ["test_p13_money_matrix.py::TestSpendingCap::test_the_amount_adjusts_for_the_estimated_fee",
                "test_p13_money_matrix.py::TestSpendingCap::test_a_higher_fee_rate_buys_strictly_fewer_shares_for_the_same_spend"]},
 
+    # D1's list of the failure modes the mock must be able to drive. These two were in the list and had no
+    # test in any phase: both are ways for a *ledger* to end up wrong with the venue answering normally.
+    {"id": "OL-12", "group": "order lifecycle",
+     "need": "the venue fills at a price worse than our limit -> refused, cased, ledger untouched",
+     "tests": ["test_p13_money_matrix.py::TestTheVenueBehavesBadly"
+               "::test_a_fill_worse_than_our_limit_is_refused_and_becomes_a_case"]},
+    {"id": "OL-13", "group": "order lifecycle",
+     "need": "price improvement is booked at the venue's better price (a limit is a bound, not an equality)",
+     "tests": ["test_p13_money_matrix.py::TestTheVenueBehavesBadly"
+               "::test_a_better_price_than_our_limit_books_at_the_venue_price"]},
+
     # ---------------------------------------------------------------- the ambiguity cases (P6 D3)
     {"id": "AMB-1", "group": "ambiguity",
      "need": "executor killed after signing, before the HTTP response -> restart -> no duplicate order",
@@ -93,6 +104,10 @@ ROWS: list[dict] = [
     {"id": "AMB-6", "group": "ambiguity",
      "need": "cancel from one surface while another is open -> single source of truth holds",
      "tests": ["test_p13_money_matrix.py::TestOneSourceOfTruth::test_a_cancel_on_one_surface_is_the_state_every_surface_reads"]},
+    {"id": "AMB-8", "group": "ambiguity",
+     "need": "the venue fills and the connection dies before we hear -> the fallback books it once, no resubmit",
+     "tests": ["test_p13_money_matrix.py::TestTheVenueBehavesBadly"
+               "::test_a_fill_the_connection_never_reported_is_booked_once_and_never_resubmitted"]},
     {"id": "AMB-7", "group": "ambiguity",
      "need": "position diverges from the venue -> reconciler detects, corrects, alarms, tells the truth",
      "tests": ["test_reconciler.py::TestReconcileTaxonomy::test_ambiguous_settlement_opens_a_case_and_books_nothing",
@@ -220,29 +235,92 @@ def check(quiet: bool = False) -> int:
     return 0
 
 
+#: pytest's failure lines, and ONLY those: `FAILED tests/x.py::C::t - message`. The first version of this
+#: parser also matched any line beginning with a node id, which the warnings summary is full of — so a test
+#: that *passed* was read as a failure and its whole row went red in a run where nothing was wrong. The
+#: summary line's counts are the authority; this regex only names which tests failed.
+FAILED_RE = re.compile(r"^(?:FAILED|ERROR) (tests/[^\s]+?::[^\s]+)", re.M)
+#: `62 passed, 1 failed, 2 warnings in 14.90s` — the last line of a pytest run, and the thing that decides
+#: whether the mapped tests actually ran. A count that does not add up to the number of mapped tests is a
+#: refusal, not a rounding note.
+COUNT_RE = re.compile(r"(\d+) (passed|failed|error|errors|skipped|xfailed|xpassed|deselected)")
+
+
+def summarise(*, returncode: int, stdout: str, stderr: str, ids: list[str]) -> tuple[list[str], dict]:
+    """Turn one pytest invocation into (failing test ids, facts) — and REFUSE to call it green unless every
+    mapped test actually ran.
+
+    This function exists because of two false greens this tool shipped, both found by looking at a runtime that
+    was absurd rather than at the verdict:
+
+      1. the ids were passed to pytest without the `tests/` prefix, pytest answered `ERROR: file or directory
+         not found: test_executor.py::…` and `no tests ran in 0.00s`, the failure-set stayed empty, and the
+         matrix reported **43 of 43 rows green in 0.3 s**;
+      2. the parser then treated any node-id-shaped line as a failure, and the warnings summary supplied one
+         for a test that had passed.
+
+    So the rule is now: the return code must be 0, a parseable summary line must exist, the counts must add up
+    to exactly the number of mapped tests, and nothing may have failed. Pure, so `tools/p13-gate-check.py` can
+    feed it both of those transcripts and require a refusal.
+    """
+    text = stdout + stderr
+    lines = [ln.strip() for ln in text.strip().splitlines() if ln.strip()]
+    tail = lines[-1] if lines else ""
+    counts = {kind: int(n) for n, kind in COUNT_RE.findall(tail)}
+    counts["error"] = counts.get("error", 0) + counts.get("errors", 0)
+    passed = counts.get("passed", 0)
+    failed = counts.get("failed", 0) + counts["error"]
+    ran = sum(counts.get(k, 0) for k in ("passed", "failed", "error", "skipped", "xfailed", "xpassed"))
+    bad = sorted({m for m in FAILED_RE.findall(stdout)})
+    bad = [re.sub(r"^tests/", "", b) for b in bad]
+    why = ""
+    if returncode != 0:
+        why = "pytest exited %d" % returncode
+    elif "in " not in tail or not counts:
+        why = "pytest printed no summary line (it probably did not run): %s" % (tail[:160] or "no output")
+    elif ran != len(ids):
+        why = "only %d of %d mapped tests ran (%s)" % (ran, len(ids), tail[:160])
+    elif failed:
+        why = "%d mapped tests failed (%s)" % (failed, tail[:160])
+    elif counts.get("skipped", 0) or counts.get("xfailed", 0) or counts.get("xpassed", 0):
+        # A skipped test is not a passing test, and the matrix is a 100% gate: a row whose proof was skipped
+        # for an environment reason is a hole wearing a green badge. Refused, with the count named.
+        why = ("%d mapped tests did not run to a verdict (skipped/xfail: %s) — the matrix is gated at 100%%"
+               % (counts.get("skipped", 0) + counts.get("xfailed", 0) + counts.get("xpassed", 0), tail[:160]))
+    facts = {"returncode": returncode, "passed": passed, "failed": failed, "ran": ran, "expected": len(ids),
+             "skipped": counts.get("skipped", 0), "summary": tail[:160], "ok": not why, "why": why}
+    return bad, facts
+
+
 def run(record: str | None, json_path: str | None) -> int:
     if check(quiet=True) != 0:
         print("the matrix does not resolve; refusing to run it (a row whose test is missing is a false green)")
         return 1
     ids = sorted({t for row in ROWS for t in row["tests"]})
     started = time.time()
-    r = subprocess.run([PY, "-m", "pytest", "-q", "--no-header", "-p", "no:cacheprovider", *ids],
+    # `tests/` is not decoration: without it pytest finds no file by that name, runs nothing, and a runner that
+    # only inspects its own failure-pattern regex calls that a pass.
+    r = subprocess.run([PY, "-m", "pytest", "-q", "--no-header", "-p", "no:cacheprovider",
+                        *["tests/" + t for t in ids]],
                        cwd=str(ROOT), capture_output=True, text=True)
-    failed = set(re.findall(r"^(tests/[^\s:]+::[^\s]+)", r.stdout, re.M))
-    failed |= set(re.findall(r"^FAILED (tests/[^\s]+)", r.stdout, re.M))
+    bad, stats = summarise(returncode=r.returncode, stdout=r.stdout, stderr=r.stderr, ids=ids)
+    rows_pass = [row for row in ROWS if stats["ok"] and not any(t in bad for t in row["tests"])]
     out = r.stdout + r.stderr
-    bad = sorted({re.sub(r"^tests/", "", f) for f in failed})
-    rows_pass = [row for row in ROWS if not any(t in bad for t in row["tests"])]
     lines = ["P13 D2 money-path matrix", "=" * 78,
              "%d rows, %d mapped tests, run in %.1f s" % (len(ROWS), len(ids), time.time() - started), ""]
+    if not stats["ok"]:
+        # The loudest line in the file. A run that did not execute the mapped tests is not a matrix with a
+        # hole in it; it is a matrix that says nothing, and it may not borrow the word "green".
+        lines += ["*** THE MATRIX DID NOT RUN: %s" % stats["why"], ""]
     for row in ROWS:
         status = "PASS" if row in rows_pass else "FAIL"
         lines.append("[%s] %-6s %s" % (status, row["id"], row["need"]))
         for t in row["tests"]:
             mark = "FAIL" if t in bad else "ok"
             lines.append("        %-4s %s" % (mark, t))
-    lines += ["", "MONEY MATRIX: %s — %d of %d rows green" %
-              ("PASS" if len(rows_pass) == len(ROWS) else "FAIL", len(rows_pass), len(ROWS))]
+    lines += ["", "MONEY MATRIX: %s — %d of %d rows green (%d of %d mapped tests ran)" %
+              ("PASS" if len(rows_pass) == len(ROWS) else "FAIL", len(rows_pass), len(ROWS),
+               stats["ran"], len(ids))]
     if bad:
         lines += ["", "failing tests:"] + ["  - %s" % b for b in bad]
     lines += ["", "Matrix policy (D8): coverage is reported but not gated; THIS matrix is gated at 100%.",
@@ -252,7 +330,8 @@ def run(record: str | None, json_path: str | None) -> int:
         Path(record).write_text(text)
     if json_path:
         Path(json_path).write_text(json.dumps(
-            {"rows": [{"id": row["id"], "group": row["group"], "need": row["need"], "tests": row["tests"],
+            {"run": stats,
+             "rows": [{"id": row["id"], "group": row["group"], "need": row["need"], "tests": row["tests"],
                        "drill": row.get("drill"),
                        "status": "PASS" if row in rows_pass else "FAIL"} for row in ROWS],
              "rows_total": len(ROWS), "rows_green": len(rows_pass), "tests_run": len(ids),

@@ -49,6 +49,25 @@ No phase is reported as done on assertion. "It works" without a command that ran
 - Skills' paid-generation stages are skipped, not faked: if a tool is missing (`rsvg-convert` today),
   say so and leave the ledger slot unapproved rather than simulating success.
 
+## Testing rules (apply from P13 on)
+
+- **A gate that cannot fail is not a gate.** Every check added from here on ships with a canary — a
+  deliberately broken input the check must refuse — and canaries live beside the check rather than in a
+  comment. P13's own gate found two of its own false greens this way.
+- **The money matrix is the only coverage gate** (`tools/p13-money-matrix.py`, 100% of the enumerated rows).
+  Coverage elsewhere is reported, never enforced, and `.github/workflows/*` may not carry a global threshold.
+- **A matrix row must name a test that is collected AND run.** A row pointing at a renamed test is worse than a
+  missing row, because the matrix then reads as complete. A skipped test is not a passing test.
+- **A run that did not execute its tests may not borrow the word green.** Watch runtimes as well as verdicts: a
+  62-test matrix that finishes in 0.3 s has run nothing, whatever its exit code says.
+- **Every chaos drill carries its written expected outcome above its observations** (`EXPECT` in
+  `tools/p13-chaos-suite.py`), and the artifact records both, so the document cannot be edited to fit the result.
+- **Findings are fixed, not quarantined.** `tests/quarantine.txt` is for genuinely flaky tests with a named
+  owner and an expiry date; a deterministic failure is a bug and belongs in the matrix or in a chaos artifact.
+- **When the harness is wrong, say so.** Two of P13's three load failures were the harness's own bugs (a queue
+  keyed differently from the product's, and a health probe too short for its own load). Both are written into the
+  transcript and `docs/P13-testing.md` with the product's version of events.
+
 ## Code rules (apply from P04 on)
 
 - Money path: integers or `Decimal`, never `float`. Scale documented per field.

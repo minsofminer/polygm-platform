@@ -1,0 +1,103 @@
+name: release
+
+# A release of this product may not be cut on hope. The tag has to carry the same evidence a nightly carries —
+# the drills, the full-size load clauses and the money matrix — plus a container that has actually been started
+# and traded against. The `gate` job is the same `tools/p13-gate-check.py` the phase uses, so there is one
+# definition of "this phase is green" and a release that satisfies a different one is a release nobody built.
+#
+# The version in the tag is what the images are labelled with. `:latest` is refused by `tools/lint-rules.py`
+# (rule `no-latest-tag`), and the container job below tags by the release version for the same reason.
+"on":
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "version to label the images with (defaults to the tag, or 0.0.0-dev)"
+        required: false
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  PGM_LOG_FORMAT: json
+  PYTHONDONTWRITEBYTECODE: "1"
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    outputs:
+      version: ${{ steps.version.outputs.value }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: version
+        name: the version this release is labelled with
+        run: |
+          raw="${{ github.event.inputs.version }}"
+          [ -z "$raw" ] && raw="${GITHUB_REF_NAME}"
+          case "$raw" in v[0-9]*) echo "value=${raw#v}" >> "$GITHUB_OUTPUT" ;; *) echo "value=0.0.0-dev" >> "$GITHUB_OUTPUT" ;; esac
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements.txt
+      - name: install the pinned set
+        run: pip install -r requirements.txt
+      - name: lint, contract audit and the earlier phase gates
+        run: make check
+      - name: the phase gate, re-running the drills and the load clauses
+        run: |
+          python3 tools/p13-gate-check.py \
+            --record docs/verification/P13-gate.txt \
+            --json docs/verification/P13-gate.json
+      - name: the money matrix, run rather than checked
+        run: |
+          python3 tools/p13-money-matrix.py --run \
+            --record docs/verification/P13-money-matrix.txt \
+            --json docs/verification/P13-money-matrix.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: release-evidence-${{ steps.version.outputs.value }}
+          path: |
+            docs/verification/P13-gate.txt
+            docs/verification/P13-gate.json
+            docs/verification/P13-money-matrix.txt
+            docs/verification/P13-chaos-*.txt
+          if-no-files-found: warn
+
+  containers:
+    needs: gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: build the two images, labelled with the release version
+        run: |
+          V="${{ needs.gate.outputs.version }}"
+          docker build -f services/api/Dockerfile -t "openout-api:$V" .
+          docker build -f services/executor-mock/Dockerfile -t "openout-mock:$V" .
+      - name: the built stack starts and places one order
+        run: |
+          cp .env.example .env
+          docker compose up -d --wait postgres pgbouncer redis executor-mock
+          docker compose run --rm migrate
+          docker compose run --rm --profile devdata seed
+          docker compose up -d api
+          for i in $(seq 1 30); do curl -fsS localhost:8080/readyz && break || sleep 2; done
+          curl -fsS localhost:8080/healthz
+          curl -sS -o /tmp/order.json -w '%{http_code}\n' -X POST localhost:8080/v1/orders \
+            -H 'content-type: application/json' -H 'x-user-id: u-demo' \
+            -H 'Idempotency-Key: release-smoke-0001' \
+            -d '{"marketId":"0xM1","tokenId":"0xT1","side":"BUY","price":"0.50","size":"10"}' \
+            | grep -q '^202$'
+          grep -q '"state": *"queued"' /tmp/order.json
+      - name: logs on failure
+        if: failure()
+        run: docker compose logs --no-color | tail -n 200

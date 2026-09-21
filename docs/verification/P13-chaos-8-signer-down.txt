@@ -1,7 +1,10 @@
 CHAOS 8 — signer / wallet provider down
 ==============================================================================
+expected outcome (written before the drill ran):
+  The wallet provider unreachable: nothing is signed and nothing is placed, the refusal names the signer and is retryable, positions and books stay readable, and trading is disabled with an explanation.
+
 verdict: PASS
-elapsed: 0.8 s
+elapsed: 0.9 s
 
 executor with a watch-only wallet: state=rejected code=SIGNATURE_REFUSED posts=0
 reads during the outage: book -> 200, healthz -> 200

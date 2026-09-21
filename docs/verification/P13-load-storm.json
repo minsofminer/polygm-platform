@@ -1,0 +1,39 @@
+{
+  "at": "2026-09-21T05:45:33+0000",
+  "failures": [],
+  "mode": "full",
+  "paced": false,
+  "quick": false,
+  "results": {
+    "storm": {
+      "as_of_after": [
+        [
+          "1789969519513",
+          6
+        ],
+        [
+          "1789969519507",
+          3
+        ]
+      ],
+      "as_of_before": [
+        "1789969519507",
+        "1789969519513"
+      ],
+      "came_back": true,
+      "clients": 1000,
+      "err": 57827,
+      "note": "the transport is REST polling; the kill is SIGKILL of the API process",
+      "ok": 4268,
+      "outage_seconds": 10.37,
+      "recovered": 20,
+      "restart_log_bytes": 454926,
+      "restart_seconds": 6.09,
+      "slow_err": 60,
+      "status_after_restart": {
+        "URLError": 1385
+      }
+    }
+  },
+  "verdict": "PASS"
+}

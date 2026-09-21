@@ -1,0 +1,15 @@
+P13 D5 load tests — full
+==============================================================================
+
+[soak] starting
+[soak] FAIL — soak: 6000 duplicate deliveries (the idempotency key is supposed to make this zero)
+
+==============================================================================
+LOAD: FAIL — 0 of 1 tests passed in 302.1 s
+  - soak: soak: 6000 duplicate deliveries (the idempotency key is supposed to make this zero)
+
+Adaptations, stated rather than hidden:
+  * the API runs on SQLite (this box's engine); one writer, so its concurrency numbers are a floor
+  * the reconnect storm is over REST polling, because this deployment has no WebSocket server
+  * the fanout figures are a drain model (16 workers × 80 ms median send), not a live Telegram run
+  * no test here reaches Polymarket: the venue side is a counting transport and generated payloads

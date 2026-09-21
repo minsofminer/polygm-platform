@@ -1,0 +1,471 @@
+{
+  "at": "2026-09-21T05:52:35+0000",
+  "rows": [
+    {
+      "drill": null,
+      "group": "order lifecycle",
+      "id": "OL-1",
+      "need": "happy path: intent -> risk -> sign -> submit -> fill -> position -> attribution row",
+      "status": "PASS",
+      "tests": [
+        "test_executor_service.py::TestHappyPath::test_intent_becomes_exactly_one_order_with_a_trail",
+        "test_executor_service.py::TestHappyPath::test_attribution_row_written_for_every_order",
+        "test_executor_service.py::TestFillsAndLedger::test_fill_books_one_lot_one_cash_row_and_updates_matched"
+      ]
+    },
+    {
+      "drill": null,
+      "group": "order lifecycle",
+      "id": "OL-2",
+      "need": "rejected: insufficient balance, with the user-facing message",
+      "status": "PASS",
+      "tests": [
+        "test_executor_service.py::TestPreflightRefusals::test_balance_must_cover_notional_plus_fees"
+      ]
+    },
+    {
+      "drill": null,
+      "group": "order lifecycle",
+      "id": "OL-3",
+      "need": "rejected: off-tick",
+      "status": "PASS",
+      "tests": [
+        "test_executor.py::TestVenueValidation::test_off_tick_and_small_orders_are_rejected_by_the_mock"
+      ]
+    },
+    {
+      "drill": null,
+      "group": "order lifecycle",
+      "id": "OL-4",
+      "need": "rejected: below minimum_order_size",
+      "status": "PASS",
+      "tests": [
+        "test_executor.py::TestVenueValidation::test_off_tick_and_small_orders_are_rejected_by_the_mock"
+      ]
+    },
+    {
+      "drill": null,
+      "group": "order lifecycle",
+      "id": "OL-5",
+      "need": "rejected: market closed / not accepting orders",
+      "status": "PASS",
+      "tests": [
+        "test_executor_service.py::TestPreflightRefusals::test_blocklisted_market_refused"
+      ]
+    },
+    {
+      "drill": null,
+      "group": "order lifecycle",
+      "id": "OL-6",
+      "need": "rejected: a stale or missing book",
+      "status": "PASS",
+      "tests": [
+        "test_executor_service.py::TestPreflightRefusals::test_stale_or_missing_book_refuses"
+      ]
+    },
+    {
+      "drill": null,
+      "group": "order lifecycle",
+      "id": "OL-7",
+      "need": "rejected: the caller may not send a market order",
+      "status": "PASS",
+      "tests": [
+        "test_executor_service.py::TestPreflightRefusals::test_user_may_not_send_a_market_order"
+      ]
+    },
+    {
+      "drill": null,
+      "group": "order lifecycle",
+      "id": "OL-8",
+      "need": "partial fill, then remainder cancelled",
+      "status": "PASS",
+      "tests": [
+        "test_executor_service.py::TestCancellation::test_single_cancel_is_audited_and_updates_state",
+        "test_executor.py::TestOverARealSocket::test_partial_fill_is_visible_through_the_trades_endpoint"
+      ]
+    },
+    {
+      "drill": null,
+      "group": "order lifecycle",
+      "id": "OL-9",
+      "need": "partial fill, then the market resolves",
+      "status": "PASS",
+      "tests": [
+        "test_reconciler.py::TestReconcileTaxonomy::test_lagging_fill_is_booked_and_the_case_closes"
+      ]
+    },
+    {
+      "drill": null,
+      "group": "order lifecycle",
+      "id": "OL-10",
+      "need": "FOK rejected: no fill, no partial",
+      "status": "PASS",
+      "tests": [
+        "test_p13_money_matrix.py::TestFillOrKill::test_a_rejected_fok_books_no_fill_and_no_partial"
+      ]
+    },
+    {
+      "drill": null,
+      "group": "order lifecycle",
+      "id": "OL-11",
+      "need": "market order with an all-in spending cap: the amount adjusts for the estimated fee",
+      "status": "PASS",
+      "tests": [
+        "test_p13_money_matrix.py::TestSpendingCap::test_the_amount_adjusts_for_the_estimated_fee",
+        "test_p13_money_matrix.py::TestSpendingCap::test_a_higher_fee_rate_buys_strictly_fewer_shares_for_the_same_spend"
+      ]
+    },
+    {
+      "drill": null,
+      "group": "order lifecycle",
+      "id": "OL-12",
+      "need": "the venue fills at a price worse than our limit -> refused, cased, ledger untouched",
+      "status": "PASS",
+      "tests": [
+        "test_p13_money_matrix.py::TestTheVenueBehavesBadly::test_a_fill_worse_than_our_limit_is_refused_and_becomes_a_case"
+      ]
+    },
+    {
+      "drill": null,
+      "group": "order lifecycle",
+      "id": "OL-13",
+      "need": "price improvement is booked at the venue's better price (a limit is a bound, not an equality)",
+      "status": "PASS",
+      "tests": [
+        "test_p13_money_matrix.py::TestTheVenueBehavesBadly::test_a_better_price_than_our_limit_books_at_the_venue_price"
+      ]
+    },
+    {
+      "drill": "docs/verification/P13-chaos-recovery.txt",
+      "group": "ambiguity",
+      "id": "AMB-1",
+      "need": "executor killed after signing, before the HTTP response -> restart -> no duplicate order",
+      "status": "PASS",
+      "tests": [
+        "test_executor_service.py::TestCrashBetweenSignAndPost::test_signed_then_lost_recovers_without_a_second_post",
+        "test_executor.py::TestCrashRecovery::test_sign_post_die_then_recover_in_a_new_process"
+      ]
+    },
+    {
+      "drill": null,
+      "group": "ambiguity",
+      "id": "AMB-2",
+      "need": "HTTP timeout on submit, order WAS accepted -> discovered, never resubmitted",
+      "status": "PASS",
+      "tests": [
+        "test_executor.py::TestOverARealSocket::test_timeout_round_trips_as_504_and_becomes_uncertain",
+        "test_reconciler.py::TestReconcileTaxonomy::test_submitted_unacked_is_repaired_from_the_venue_and_closed"
+      ]
+    },
+    {
+      "drill": null,
+      "group": "ambiguity",
+      "id": "AMB-3",
+      "need": "HTTP timeout on submit, order was NEVER accepted -> discovered, resubmitted once",
+      "status": "PASS",
+      "tests": [
+        "test_reconciler.py::TestReconcileTaxonomy::test_no_ack_found_at_the_venue_is_adopted_without_a_second_post",
+        "test_reconciler.py::TestReconcileTaxonomy::test_submitted_unacked_when_the_venue_has_nothing_is_a_case_not_a_deletion"
+      ]
+    },
+    {
+      "drill": "docs/verification/P13-chaos-2-ws-kill.txt",
+      "group": "ambiguity",
+      "id": "AMB-4",
+      "need": "fill event never arrives over the WebSocket -> the fallback poll finds it",
+      "status": "PASS",
+      "tests": [
+        "test_executor_service.py::TestFillsAndLedger::test_lagging_fill_case_closes_when_booked"
+      ]
+    },
+    {
+      "drill": null,
+      "group": "ambiguity",
+      "id": "AMB-5",
+      "need": "WebSocket delivers the same fill twice -> deduplicated, position counted once",
+      "status": "PASS",
+      "tests": [
+        "test_executor_service.py::TestFillsAndLedger::test_replaying_the_same_venue_fill_changes_nothing",
+        "test_executor_service.py::TestFillsAndLedger::test_replaying_the_same_venue_fill_records_no_second_notification"
+      ]
+    },
+    {
+      "drill": null,
+      "group": "ambiguity",
+      "id": "AMB-6",
+      "need": "cancel from one surface while another is open -> single source of truth holds",
+      "status": "PASS",
+      "tests": [
+        "test_p13_money_matrix.py::TestOneSourceOfTruth::test_a_cancel_on_one_surface_is_the_state_every_surface_reads"
+      ]
+    },
+    {
+      "drill": null,
+      "group": "ambiguity",
+      "id": "AMB-8",
+      "need": "the venue fills and the connection dies before we hear -> the fallback books it once, no resubmit",
+      "status": "PASS",
+      "tests": [
+        "test_p13_money_matrix.py::TestTheVenueBehavesBadly::test_a_fill_the_connection_never_reported_is_booked_once_and_never_resubmitted"
+      ]
+    },
+    {
+      "drill": null,
+      "group": "ambiguity",
+      "id": "AMB-7",
+      "need": "position diverges from the venue -> reconciler detects, corrects, alarms, tells the truth",
+      "status": "PASS",
+      "tests": [
+        "test_reconciler.py::TestReconcileTaxonomy::test_ambiguous_settlement_opens_a_case_and_books_nothing",
+        "test_executor_service.py::TestOrphansAndGhosts::test_ghost_order_stays_open_and_alarms",
+        "test_executor_service.py::TestFillsAndLedger::test_unbookable_fill_keeps_a_case_open_and_the_ledger_untouched"
+      ]
+    },
+    {
+      "drill": "docs/verification/P06-drill.txt",
+      "group": "risk gate",
+      "id": "RG-1",
+      "need": "every limit in P6 D4 has a test that trips it",
+      "status": "PASS",
+      "tests": [
+        "test_gate.py::TestDenials::test_every_rule_denies",
+        "test_gate.py::TestCompleteness::test_every_deny_code_in_the_source_is_covered_by_the_api_envelope"
+      ]
+    },
+    {
+      "drill": null,
+      "group": "risk gate",
+      "id": "RG-2",
+      "need": "risk service unavailable -> fails closed",
+      "status": "PASS",
+      "tests": [
+        "test_executor.py::TestUncertainSafety::test_risk_denial_never_reaches_the_venue",
+        "test_executor_service.py::TestKillSwitch::test_kill_switch_read_failure_fails_closed"
+      ]
+    },
+    {
+      "drill": "docs/verification/P06-drill.txt",
+      "group": "risk gate",
+      "id": "RG-3",
+      "need": "kill switch engaged -> all submission stops within 1s",
+      "status": "PASS",
+      "tests": [
+        "test_executor_service.py::TestKillSwitch::test_engaged_switch_claims_nothing_and_halts_the_queue"
+      ]
+    },
+    {
+      "drill": "docs/verification/P13-chaos-9-kill-switch.txt",
+      "group": "risk gate",
+      "id": "RG-4",
+      "need": "kill switch while a copy-trade is mid-execution",
+      "status": "PASS",
+      "tests": [
+        "test_p13_money_matrix.py::TestKillSwitchDuringCopy::test_a_copy_intent_already_queued_places_nothing_after_the_switch"
+      ]
+    },
+    {
+      "drill": null,
+      "group": "risk gate",
+      "id": "RG-5",
+      "need": "daily loss halt -> the user cannot trade until acknowledged",
+      "status": "PASS",
+      "tests": [
+        "test_executor_service.py::TestPreflightRefusals::test_daily_loss_halt_blocks_until_acknowledged"
+      ]
+    },
+    {
+      "drill": null,
+      "group": "fees",
+      "id": "FEE-1",
+      "need": "platform fee estimate matches C x feeRate x p x (1-p)",
+      "status": "PASS",
+      "tests": [
+        "test_executor_service.py::TestHappyPath::test_fee_estimate_is_persisted_and_comparable",
+        "test_p13_money_matrix.py::TestFeeCurve::test_the_fee_formula_is_the_curve_it_says_it_is"
+      ]
+    },
+    {
+      "drill": null,
+      "group": "fees",
+      "id": "FEE-2",
+      "need": "fee at p=0.01 and p=0.99 (the curve's extremes)",
+      "status": "PASS",
+      "tests": [
+        "test_p13_money_matrix.py::TestFeeCurve::test_the_extremes_of_the_curve_are_the_extremes"
+      ]
+    },
+    {
+      "drill": null,
+      "group": "fees",
+      "id": "FEE-3",
+      "need": "builder fee at 0, 1, 50 and 100 bps",
+      "status": "PASS",
+      "tests": [
+        "test_p13_money_matrix.py::TestFeeCurve::test_builder_bps_are_charged_exactly_at_their_rate"
+      ]
+    },
+    {
+      "drill": null,
+      "group": "fees",
+      "id": "FEE-4",
+      "need": "realised fee reconciled against the estimate; the delta is stored",
+      "status": "PASS",
+      "tests": [
+        "test_executor_service.py::TestHappyPath::test_fee_estimate_is_persisted_and_comparable"
+      ]
+    },
+    {
+      "drill": null,
+      "group": "fees",
+      "id": "FEE-5",
+      "need": "no float anywhere: a price and a size round-trip without loss",
+      "status": "PASS",
+      "tests": [
+        "test_money.py::TestSdkBoundary::test_float_conversion_round_trips",
+        "test_p13_properties.py::TestNumericParsingIsStrict::test_round_tripping_the_money_path_never_loses_precision",
+        "test_money.py::TestSdkBoundary::test_the_top_of_the_range_raises_and_the_boundary_is_real"
+      ]
+    },
+    {
+      "drill": null,
+      "group": "negrisk",
+      "id": "NEG-1",
+      "need": "multi-outcome PnL across three legs, one YES and two NO",
+      "status": "PASS",
+      "tests": [
+        "test_ledger.py::TestNegriskPnl::test_resolve_payouts_and_realised"
+      ]
+    },
+    {
+      "drill": null,
+      "group": "negrisk",
+      "id": "NEG-2",
+      "need": "merge/split behaviour (or the explicit refusal), tested",
+      "status": "PASS",
+      "tests": [
+        "test_ledger.py::TestMergeSplit::test_six_legs_of_one_dollar_is_exact",
+        "test_ledger.py::TestMergeSplit::test_rejects_a_mismatch",
+        "test_ledger.py::TestNegriskPnl::test_merge_records_the_residual_and_keeps_the_book_balanced"
+      ]
+    },
+    {
+      "drill": null,
+      "group": "negrisk",
+      "id": "NEG-3",
+      "need": "outcome probabilities summing to != 1, and what the UI shows",
+      "status": "PASS",
+      "tests": [
+        "test_p13_money_matrix.py::TestNegriskDivergence::test_a_diverged_book_is_reported_with_the_edge_a_user_could_trade"
+      ]
+    },
+    {
+      "drill": null,
+      "group": "wallet",
+      "id": "WAL-1",
+      "need": "deposit detected on each supported chain -> pUSD correct",
+      "status": "PASS",
+      "tests": [
+        "test_wallet_api.py::TestDepositProgress::test_credited_marks_every_leg_done_and_stamps_the_time",
+        "test_wallet_api.py::TestDepositProgress::test_the_legs_are_states_and_exactly_one_is_active"
+      ]
+    },
+    {
+      "drill": null,
+      "group": "wallet",
+      "id": "WAL-2",
+      "need": "allowance exhausted mid-session -> a clear error, not a failed order",
+      "status": "PASS",
+      "tests": [
+        "test_copy_automation.py::TestAutomationEngine::test_the_rule_intent_then_passes_the_venue_gate_like_any_other",
+        "test_executor_service.py::TestPreflightRefusals::test_allowance_shortfall_is_a_park_not_a_rejection"
+      ]
+    },
+    {
+      "drill": null,
+      "group": "wallet",
+      "id": "WAL-3",
+      "need": "withdrawal to a non-allowlisted address is blocked, incl. cooldown",
+      "status": "PASS",
+      "tests": [
+        "test_wallet_api.py::TestWithdrawCeremony::test_a_destination_nobody_allowlisted_is_refused_before_the_password_is_read",
+        "test_wallet_api.py::TestWithdrawCeremony::test_a_fresh_address_is_still_inside_its_hold"
+      ]
+    },
+    {
+      "drill": "docs/verification/P07-key-drill.txt",
+      "group": "wallet",
+      "id": "WAL-4",
+      "need": "key export writes an audit entry",
+      "status": "PASS",
+      "tests": [
+        "test_wallet_api.py::TestKeyExport::test_the_export_hands_over_wrapped_material_once_and_counts_it"
+      ]
+    },
+    {
+      "drill": null,
+      "group": "wallet",
+      "id": "WAL-5",
+      "need": "wallet provider down: deposits/withdrawals degrade, positions stay readable, trading disabled",
+      "status": "PASS",
+      "tests": [
+        "test_p13_money_matrix.py::TestWalletProviderDown::test_signing_outage_stops_trading_and_leaves_the_book_readable"
+      ]
+    },
+    {
+      "drill": null,
+      "group": "auth",
+      "id": "AUTH-1",
+      "need": "initData HMAC: valid accepted",
+      "status": "PASS",
+      "tests": [
+        "test_security_core.py::TestTelegramInitData::test_a_valid_fresh_payload_verifies_and_names_the_user"
+      ]
+    },
+    {
+      "drill": null,
+      "group": "auth",
+      "id": "AUTH-2",
+      "need": "initData HMAC: tampered signature rejected",
+      "status": "PASS",
+      "tests": [
+        "test_telegrambot_api.py::TestMiniAppSession::test_a_tampered_init_data_is_rejected"
+      ]
+    },
+    {
+      "drill": null,
+      "group": "auth",
+      "id": "AUTH-3",
+      "need": "initData HMAC: stale auth_date rejected",
+      "status": "PASS",
+      "tests": [
+        "test_telegrambot_api.py::TestMiniAppSession::test_a_stale_payload_is_refused_even_with_a_perfect_signature"
+      ]
+    },
+    {
+      "drill": null,
+      "group": "auth",
+      "id": "AUTH-4",
+      "need": "initData HMAC: replay rejected",
+      "status": "PASS",
+      "tests": [
+        "test_telegrambot_api.py::TestMiniAppSession::test_a_replayed_payload_cannot_mint_a_second_session",
+        "test_security_core.py::TestTelegramInitData::test_replay_is_refused_against_an_iterable_and_against_a_predicate"
+      ]
+    }
+  ],
+  "rows_green": 43,
+  "rows_total": 43,
+  "run": {
+    "expected": 62,
+    "failed": 0,
+    "ok": true,
+    "passed": 62,
+    "ran": 62,
+    "returncode": 0,
+    "skipped": 0,
+    "summary": "62 passed, 29 warnings in 14.48s",
+    "why": ""
+  },
+  "tests_run": 62,
+  "verdict": "PASS"
+}

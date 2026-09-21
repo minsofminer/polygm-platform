@@ -1,9 +1,12 @@
 CHAOS 3 — ingest killed mid-write
 ==============================================================================
+expected outcome (written before the drill ran):
+  The ingest consumer killed mid-write: every fill that was acknowledged is on disk, the replay after restart adds each one exactly once (the durable cursor), and no alert fires twice for one event.
+
 verdict: PASS
 elapsed: 0.8 s
 
-killed pid 142925 after ~0.3 s; rows durable at the kill: 3476 of 4000
+killed pid 11688 after ~0.3 s; rows durable at the kill: 3551 of 4000
 restart exit: 0 (child wrote 4000)
 rows after the replay: 4000, distinct dedupe keys: 4000, notional: 2000000000
 the replay filled the gap and the unique key made the overlap harmless

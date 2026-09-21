@@ -1,0 +1,14 @@
+P13 D5 load tests — full
+==============================================================================
+
+[budget] starting
+[budget] PASS in 60.4 s
+
+==============================================================================
+LOAD: PASS — 1 of 1 tests passed in 60.4 s
+
+Adaptations, stated rather than hidden:
+  * the API runs on SQLite (this box's engine); one writer, so its concurrency numbers are a floor
+  * the reconnect storm is over REST polling, because this deployment has no WebSocket server
+  * the fanout figures are a drain model (16 workers × 80 ms median send), not a live Telegram run
+  * no test here reaches Polymarket: the venue side is a counting transport and generated payloads

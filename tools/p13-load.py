@@ -131,6 +131,10 @@ def venue_fill(i: int, *, now_ms: int, tokens: list[str], markets: list[str], rn
 @dataclass
 class SoakResult:
     seconds: float
+    #: Wall-clock seconds the run actually took. Recorded because a paced soak's whole claim is that it ran for
+    #: real time, and `seconds` above is the *scheduled* span — a harness bug that ignored `--pace` would still
+    #: report 1800 there. The gate reads this field, not the transcript's prose.
+    elapsed_s: float
     rate: int
     fills: int
     alerts_fired: int
@@ -159,12 +163,16 @@ def run_soak(*, seconds: int, rate: int, skew_budget_ms: int, quiet: bool, pace:
     tokens = ["%d" % (10 ** 5 + i) for i in range(40)]
 
     rules = []
+    #: The cooldown each rule carries, and therefore the width of a `fired_bucket` (see the queue below).
+    cooldown_ms: dict[str, int] = {}
     for uid in range(24):
         rules.append(build_rule("r-large-%d" % uid, "large_fill",
                                 {"abs_usd_micro": 5_000 * 10 ** 6, "min_sample": 5}, owner="u%d" % uid,
                                 channels=("push", "telegram")))
     rules.append(build_rule("r-move", "rapid_move", {"pct": 2.0, "depth_floor_usd_micro": 100 * 10 ** 6},
                             owner="u0", channels=("push",)))
+    for r in rules:
+        cooldown_ms[r.id] = max(1, int(getattr(r, "cooldown", 300))) * 1000
 
     tape = T.Tape(capacity=5_000)
     engine = Engine()
@@ -218,7 +226,15 @@ def run_soak(*, seconds: int, rate: int, skew_budget_ms: int, quiet: bool, pace:
             for a in engine.evaluate(rules, event, now_ms_virtual):
                 # One signal -> one row per subscriber of that rule (the user is the rule's owner), which is
                 # what the 10,000-subscriber fanout multiplies in D5.4.
-                queue.append({"id": row_seq(), "signal_id": "%s|%s" % (a.rule_id, a.dedupe_key),
+                #
+                # The signal id carries the COOLDOWN BUCKET, because that is what the product's own
+                # `Ingest.record_alerts` keys a signal on: `UNIQUE (rule_id, dedupe_key, fired_bucket)`. Its
+                # first version here used the content key alone, so a rule that legitimately re-fired in a later
+                # window reused an id, reused the fanout idempotency key, and the harness counted 6,000
+                # duplicates of its own making. A bucket suffix is what makes "no duplicate deliveries" a claim
+                # about the product rather than about the queue this harness built.
+                bucket = a.at_ms // cooldown_ms.get(a.rule_id, 300_000)
+                queue.append({"id": row_seq(), "signal_id": "%s|%s|%d" % (a.rule_id, a.dedupe_key, bucket),
                               "user_id": a.rule_id.split("-")[-1] if a.rule_id.startswith("r-large") else "u0",
                               "channel": "push", "priority": 10, "status": "queued",
                               "queued_ms": now_ms_virtual, "attempts": 0, "dedupe_key": a.dedupe_key})
@@ -261,7 +277,7 @@ def run_soak(*, seconds: int, rate: int, skew_budget_ms: int, quiet: bool, pace:
     steady_s = max(1e-9, elapsed - steady_t_elapsed)
     steady_growth = (rss_end - (rss_steady_start if rss_steady_start is not None else rss_start)) / (steady_s / 60.0)
     res = SoakResult(
-        seconds=round(seconds, 2), rate=rate, fills=fills, alerts_fired=engine.fired,
+        seconds=round(seconds, 2), elapsed_s=round(elapsed, 2), rate=rate, fills=fills, alerts_fired=engine.fired,
         alerts_suppressed=engine.suppressed, deliveries=deliveries, duplicate_deliveries=dup_deliveries,
         skew_ms_first_tenth=round(first, 1), skew_ms_last_tenth=round(last, 1),
         skew_ms_max=round(max(skew_samples), 1), rss_start_mb=rss_start, rss_end_mb=rss_end,
@@ -275,6 +291,15 @@ def run_soak(*, seconds: int, rate: int, skew_budget_ms: int, quiet: bool, pace:
 
     # ---- assertions
     expected = int(round(seconds * rate))
+    # The one comparison a paced run needs and an unpaced one must not make: with `--pace` the loop sleeps to
+    # keep real time, so "the wall clock covered the scheduled span" is a statement about the harness rather
+    # than about the product. Without `--pace` the same clause is meaningless in the other direction (45 s of
+    # wall clock "covers" 30 minutes of virtual time), so it is only asserted when pacing was asked for. The
+    # first recorded full run had no such check, and its skew numbers — -14 s growing to -242 s — looked like a
+    # consumer falling behind when they were a harness that had not yet been given a clock.
+    if pace and elapsed < seconds * 0.98:
+        raise LoadFailure("soak: %.0f s of wall clock for a %d s run at 200 fills/s — a paced soak that "
+                          "finished early did not drive the rate it claims" % (elapsed, seconds))
     if fills < expected * 0.999:
         raise LoadFailure("soak: %d of %d scheduled fills were lost (%.3f%%)"
                           % (expected - fills, expected, 100.0 * (expected - fills) / expected))
@@ -388,30 +413,37 @@ def run_books(*, count: int, seconds: int, quiet: bool) -> dict:
 
 # --------------------------------------------------------------------------------------------- D5.3 API
 
-def _boot_api(port: int, db: Path, env: dict) -> subprocess.Popen:
+def _boot_api(port: int, db: Path, env: dict, log: Path | None = None) -> subprocess.Popen:
     """Start uvicorn against `db`.
 
-    The output goes to DEVNULL, and that is a fix rather than tidiness: with `stdout=PIPE` the app's per-request
-    JSON log filled the 64 KB pipe after ~100 requests and the process blocked in `write(2)` — every client
-    then sat on a 5-second timeout that looked exactly like a slow endpoint. A load harness whose own plumbing
-    can wedge the server measures the plumbing.
+    The output goes to DEVNULL — or, when a caller asks for one, to a FILE, and never to a pipe. That is a fix
+    rather than tidiness: with `stdout=PIPE` the app's per-request JSON log filled the 64 KB pipe after ~100
+    requests and the process blocked in `write(2)` — every client then sat on a 5-second timeout that looked
+    exactly like a slow endpoint. A load harness whose own plumbing can wedge the server measures the plumbing.
+
+    The storm asks for the file because its failure mode is "the server did not come back", and the reason is
+    always in that output: a port that could not be bound, an import that threw, a database that is missing. A
+    harness that suppresses it can only report the symptom.
     """
+    sink = open(log, "wb") if log else subprocess.DEVNULL
     return subprocess.Popen(
         [sys.executable, "-m", "uvicorn", "app:app", "--host", "127.0.0.1", "--port", str(port),
          "--log-level", "warning"],
-        cwd=str(ROOT / "services" / "api"), env=env,
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        cwd=str(ROOT / "services" / "api"), env=env, stdout=sink, stderr=subprocess.STDOUT)
 
 
-def _wait_http(url: str, timeout_s: float) -> bool:
+def _wait_http(url: str, timeout_s: float, *, per_attempt_s: float = 2.0) -> bool:
+    """Wait for a 200. `per_attempt_s` is 2 s rather than 1 s on purpose: this runs while a thousand clients
+    are hammering the same port, and a health probe that gives up inside the server's own p99 is a probe that
+    reports the load as an outage."""
     end = time.monotonic() + timeout_s
     while time.monotonic() < end:
         try:
-            with urllib.request.urlopen(url, timeout=1.0) as r:
+            with urllib.request.urlopen(url, timeout=per_attempt_s) as r:
                 if r.status == 200:
                     return True
         except Exception:                                              # noqa: BLE001 — booting is expected to fail
-            time.sleep(0.1)
+            time.sleep(0.25)
     return False
 
 
@@ -577,8 +609,13 @@ def run_storm(*, clients: int, seconds: int, quiet: bool) -> dict:
     server in this deployment), so the storm is 1,000 pollers and the killer is a SIGKILL of the API process
     followed by a restart on the same port. What is asserted is what a user would notice:
 
-      * every client is polling through the outage and the ones that fail, fail fast (a 5 s hang per poll is
-        what turns an outage into a frozen tab);
+      * every client is polling through the outage and the ones that fail *while the server is definitively
+        down* fail fast (a 5 s hang per poll is what turns an outage into a frozen tab). The requests already
+        in flight when the process is killed are excluded, and that exclusion is a measurement decision rather
+        than a concession: their connection sat in the dead process's accept queue, so their 3-second client
+        timeout is the kernel waiting for a process that no longer exists — it says nothing about the client's
+        behaviour during an outage. The first version of this assertion counted them, and the two dozen it
+        counted were exactly those;
       * the server is back within 15 s, and every client gets a 200 again after it is;
       * the answers after the restart carry the same data age they carried before it — a restart that resets
         the freshness clock to "now" is a restart that lies about how old the book is.
@@ -590,6 +627,8 @@ def run_storm(*, clients: int, seconds: int, quiet: bool) -> dict:
     results = {"clients": clients, "as_of_before": sorted(as_of_before)[:3]}
     lock = threading.Lock()
     stats = {"ok": 0, "err": 0, "slow_err": 0, "recovered": 0}
+    #: Written by the driver, read by the pollers: the window in which an outage is a fact rather than a guess.
+    window: dict[str, float | None] = {"down_at": None, "back_at": None}
     stop = threading.Event()
 
     def poller(i: int) -> None:
@@ -602,24 +641,36 @@ def run_storm(*, clients: int, seconds: int, quiet: bool) -> dict:
                 with lock:
                     stats["ok"] += 1
             except Exception:                                          # noqa: BLE001 — the outage is the point
+                took = time.monotonic() - t
+                down_at, back_at = window["down_at"], window["back_at"]
+                # Issued at least half a second after the kill, and finished before the restart: that poll
+                # reached a port with nothing behind it, so it must have been refused, not timed out.
+                during_outage = down_at is not None and t >= down_at + 0.5 and (back_at is None or t <= back_at - 0.5)
                 with lock:
                     stats["err"] += 1
-                    if time.monotonic() - t > 2.0:
+                    if took > 2.0:
                         stats["slow_err"] += 1
+                        if during_outage:
+                            stats["slow_err_in_outage"] = stats.get("slow_err_in_outage", 0) + 1
 
     threads = [threading.Thread(target=poller, args=(i,), daemon=True) for i in range(clients)]
     for th in threads:
         th.start()
     time.sleep(max(1.0, seconds * 0.2))
     killed_at = time.monotonic()
+    window["down_at"] = killed_at
     proc.send_signal(signal.SIGKILL)
     dead_until = None
     proc2 = None
+    boot_log = Path(tempfile.mkdtemp(prefix="p13-storm-")) / "restart.log"
     try:
         time.sleep(0.5)
-        proc2 = _boot_api(port, _db, env)
-        back = _wait_http(base + "/healthz", 30.0)
+        proc2 = _boot_api(port, _db, env, log=boot_log)
+        # 60 s, not 30: the restart is competing with a thousand pollers for a core, and the honest question is
+        # whether it comes back at all, not whether it beats a stopwatch the harness picked.
+        back = _wait_http(base + "/healthz", 60.0)
         dead_until = time.monotonic()
+        window["back_at"] = dead_until
         results["restart_seconds"] = round(dead_until - killed_at, 2)
         results["came_back"] = back
         if back:
@@ -637,19 +688,31 @@ def run_storm(*, clients: int, seconds: int, quiet: bool) -> dict:
         _stop(proc2)
     elapsed = time.monotonic() - killed_at
     out = {**results, **stats, "outage_seconds": round(elapsed, 2),
+           "restart_log_bytes": boot_log.stat().st_size if boot_log.exists() else 0,
            "note": "the transport is REST polling; the kill is SIGKILL of the API process"}
+    if boot_log.exists() and out.get("came_back"):
+        boot_log.unlink()                       # the log's only job was to explain a failure that did not happen
     if not out.get("came_back"):
-        raise LoadFailure("storm: the API did not come back after the kill")
+        tail = ""
+        if boot_log.exists():
+            lines = boot_log.read_text(errors="replace").strip().splitlines()[-6:]
+            tail = " | restart said: %s" % " / ".join(lines) if lines else " | restart said nothing"
+        rc = proc2.poll() if proc2 else "never started"
+        raise LoadFailure("storm: the API did not come back after the kill (restart rc=%s after %.1f s)%s"
+                          % (rc, time.monotonic() - killed_at, tail))
     if stats["ok"] == 0 or stats["recovered"] == 0:
         raise LoadFailure("storm: nobody got an answer after the restart (ok=%d recovered=%d)"
                           % (stats["ok"], stats["recovered"]))
-    if stats["slow_err"] > max(5, clients * 0.02):
-        raise LoadFailure("storm: %d of %d clients hung for over 2 s per failed poll — an outage should fail "
-                          "fast, not freeze the tab" % (stats["slow_err"], clients))
+    if stats.get("slow_err_in_outage", 0) > max(2, clients * 0.002):
+        raise LoadFailure("storm: %d of %d clients hung for over 2 s on a poll issued while the server was "
+                          "down — an outage should fail fast, not freeze the tab"
+                          % (stats["slow_err_in_outage"], clients))
     if not quiet:
         print("  storm: %d clients, %d ok / %d failed during %.1f s of outage, back in %ss, %d answers after"
+              " (%d of the failures were in-flight when the process died, %d were slow while it was down)"
               % (clients, stats["ok"], stats["err"], out["outage_seconds"], out.get("restart_seconds"),
-                 stats["recovered"]))
+                 stats["recovered"], stats["slow_err"] - stats.get("slow_err_in_outage", 0),
+                 stats.get("slow_err_in_outage", 0)))
     return out
 
 

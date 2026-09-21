@@ -533,5 +533,80 @@ class TestWalletProviderDown(TelegramBase):
         self.assertIn("mid", str(mkt.json().get("market", {})).lower() + " mid")
 
 
+class TestTheVenueBehavesBadly(Harness):
+    """D1's list of the failure modes the mock must be able to drive, and the two that had no test: a venue
+    that fills an order and then loses the connection, and a venue that fills at a price we never agreed to.
+
+    Both are "a plausible venue, behaving badly" rather than random faults, and both are shapes that produce a
+    wrong *ledger* if nobody looks — which is why they belong in the money matrix rather than in a mock's
+    self-test.
+    """
+
+    def _one_order(self, *, price_micro: int = 500_000, side: str = "BUY") -> str:
+        iid = self.queue(size_micro=100 * 10**6, price_micro=price_micro, side=side)
+        self.ex.tick(at=self.at, reconcile=False)
+        return iid
+
+    def test_a_fill_the_connection_never_reported_is_booked_once_and_never_resubmitted(self) -> None:
+        self.mock.set_scenario("fill_then_disconnect")
+        iid = self._one_order()
+        # The POST died, so from our side nothing is known to exist — and the venue has both the order and a
+        # full fill for it. The fallback pass is the only thing standing between that and a lost position.
+        posts = self.tp.post_calls
+        self.assertEqual(1, len(self.mock.orders), "the scenario did not place a venue order")
+        self.assertEqual(1, len(self.mock.trades), "the scenario did not fill it")
+        self.assertEqual(0, len(self.fills()), "a fill was booked without the venue ever answering")
+        self.assertEqual("uncertain",
+                         self.rows("SELECT state FROM order_intents WHERE id=?", (iid,))[0]["state"])
+        # Reconciliation: the order is found by its client hash, the trade is booked through `book_fill`, and
+        # the whole thing costs exactly one order at the venue and zero extra posts.
+        self.ex.reconciler.run_pass(at=self.at + 60_000)
+        self.assertEqual(1, len(self.mock.orders), "the reconciler submitted a second order")
+        self.assertEqual(posts, self.tp.post_calls, "the reconciler posted instead of reading")
+        self.assertEqual(1, len(self.fills()), "the fill the venue reported was not booked")
+        self.assertEqual(100 * 10**6, self.fills()[0]["size_micro"])
+        self.assertEqual("filled", self.orders()[0]["state"])
+        # …and running it again changes nothing: the durable path is idempotent, which is what makes a
+        # reconciler safe to run on every pass forever.
+        self.ex.reconciler.run_pass(at=self.at + 90_000)
+        self.assertEqual(1, len(self.fills()))
+        self.assertEqual(1, len(self.cash()), "the same fill moved money twice")
+
+    def test_a_fill_worse_than_our_limit_is_refused_and_becomes_a_case(self) -> None:
+        self.mock.set_scenario("wrong_price_fill", fill_price=0.52)      # 2 ticks ABOVE our 0.50 BUY limit
+        self._one_order(price_micro=500_000)
+        self.assertEqual(1, len(self.mock.trades), "the scenario did not fill the order")
+        self.ex.reconciler.run_pass(at=self.at + 60_000)
+        self.assertEqual([], self.fills(), "a fill priced worse than the order's limit was booked")
+        self.assertEqual([], self.cash(), "money moved for a fill we did not accept")
+        self.assertEqual(0, self.orders()[0]["size_matched_micro"])
+        self.assertEqual("live", self.orders()[0]["state"], "our own row must not claim a fill we refused")
+        cases = [(r["case_name"], r["note"]) for r in self.rows("SELECT case_name,note FROM reconcile_open")]
+        ambiguous = [n for c, n in cases if c == "ambiguous_settlement"]
+        self.assertTrue(any("worse than our" in (n or "") for n in ambiguous),
+                        "no case explains why the venue's fill was not booked: %s" % cases)
+        # Idempotent: a second pass neither books it nor opens a second case for the same trade.
+        before = len(self.rows("SELECT * FROM reconcile_open"))
+        self.ex.reconciler.run_pass(at=self.at + 120_000)
+        self.assertEqual(before, len(self.rows("SELECT * FROM reconcile_open")))
+        self.assertEqual([], self.fills())
+
+    def test_a_better_price_than_our_limit_books_at_the_venue_price(self) -> None:
+        """The other half of the rule, and the reason the check above is a *bound* and not an equality.
+
+        A real matching engine fills a limit order at the maker's price, so a BUY can be filled below its
+        limit. Refusing that would throw away the user's money, and a rule written as "the fill must match
+        our price" would have done exactly that.
+        """
+        self.mock.set_scenario("wrong_price_fill", fill_price=0.48)      # 2 ticks BELOW our 0.50 BUY limit
+        self._one_order(price_micro=500_000)
+        self.ex.reconciler.run_pass(at=self.at + 60_000)
+        self.assertEqual(1, len(self.fills()), "price improvement was refused")
+        self.assertEqual(480_000, self.fills()[0]["price_micro"], "the fill was booked at our limit, not the venue's")
+        # Cost basis follows the price that actually traded: 100 shares at 0.48 is 48.00, not 50.00.
+        lots = self.rows("SELECT basis_micro FROM position_lots WHERE user_id=?", (self.user,))
+        self.assertEqual(48_000_000, lots[0]["basis_micro"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

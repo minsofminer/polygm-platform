@@ -1,0 +1,10 @@
+P13 D7 — ten chaos tests
+==============================================================================
+
+ 2. PASS     WebSocket killed for 5 minutes
+     report: docs/verification/P13-chaos-2-ws-kill.txt
+     artifact: docs/verification/P13-chaos-2-ws-kill.txt
+
+CHAOS SUITE: PASS — 1 of 1 drills reported
+The kit's ten rows are all represented; the substitutions (no Redis, SQLite in dev/CI) are stated
+in the artifact of the drill that hits them rather than left implicit.

@@ -1,13 +1,16 @@
 CHAOS 9 — kill switch during a copy-trade
 ==============================================================================
+expected outcome (written before the drill ran):
+  Kill switch engaged during a copy-trade: submission stops within 1 s, the already-queued intent places nothing, and both surfaces read the same stopped state.
+
 verdict: PASS
 elapsed: 2.2 s
 
 command: /usr/local/bin/python3 /home/user/polygm-platform/tools/p06-drill.py --record /home/user/polygm-platform/docs/verification/P13-chaos-9-kill-switch.txt
 exit: 0, artifact: docs/verification/P13-chaos-9-kill-switch.txt
-    copy       1 ms, 1 copier(s) answered, 0 new intent row(s): disabled:trading is halted by the kill switch; the sourc
-    automation 2 ms, armed=True outcome=skipped (trading is disabled (kill switch engaged)); 0 order(s) placed while engaged
-  sampled 5 of 5 components; worst 483 ms; budget 1000 ms; verdict pass
+    copy       0 ms, 1 copier(s) answered, 0 new intent row(s): disabled:trading is halted by the kill switch; the sourc
+    automation 1 ms, armed=True outcome=skipped (trading is disabled (kill switch engaged)); 0 order(s) placed while engaged
+  sampled 5 of 5 components; worst 435 ms; budget 1000 ms; verdict pass
   DRILL RESULT: PASS
   what this does NOT prove: that the venue saw no further fills. In-flight orders stay on the book; the switch stops NEW orders, and cancelling what is already live is `CANCEL ALL ORDERS` on the orders page, which is a different action with a different reason.
   recorded: /home/user/polygm-platform/docs/verification/P13-chaos-9-kill-switch.txt

@@ -1,11 +1,14 @@
 CHAOS 4 — database killed mid-flight
 ==============================================================================
+expected outcome (written before the drill ran):
+  The database unavailable mid-flight: the write is REFUSED with a retryable 503 rather than accepted and lost, nothing is placed, no money moves, the read side keeps answering, and the same request succeeds once the store is back.
+
 verdict: PASS
-elapsed: 6.2 s
+elapsed: 5.9 s
 
 before the lock: POST /v1/orders -> 202
-with the write lock held: POST /v1/orders -> 503 in 5310 ms, code SERVICE_UNAVAILABLE
-body: {"error": {"code": "SERVICE_UNAVAILABLE", "message": "a dependency is unavailable; nothing was placed - retry", "retryable": true, "requestId": "f18ed0752aba4251"}}
+with the write lock held: POST /v1/orders -> 503 in 5028 ms, code SERVICE_UNAVAILABLE
+body: {"error": {"code": "SERVICE_UNAVAILABLE", "message": "a dependency is unavailable; nothing was placed - retry", "retryable": true, "requestId": "6c2a05948fb74733"}}
 rows with the lock held (intents, cash, idem): (1, 0, 1)
 after the lock is released: GET /v1/markets/0xM1 -> 200
 and an order is accepted again: POST /v1/orders -> 202; rows now (intents, cash, idem) (2, 0, 2)

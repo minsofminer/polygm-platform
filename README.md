@@ -35,18 +35,26 @@ cd /home/user/polygm-platform
 | Phase | Deliverable | Gate | Status |
 |---|---|---|---|
 | P01 research & spec | `docs/P01-product-spec.md` | `python3 tools/p01-gate-check.py` | **done** ✅ |
-| P02 branding | `docs/P02-brand.md` | brand lock + asset inventory diff | pending |
-| P03 design system | `docs/P03-design-system.md` | tokens compile | pending |
-| P04 backend arch | `docs/P04-backend.md` | scaffold + migrations apply | pending |
-| P05 ingestion | `server/ingest/` | live tape freshness < 2 s | pending |
-| P06 trading engine | `server/engine/` | every order through the risk gate | pending |
-| P07 security | `docs/P07-security.md` | no secrets in code/logs | pending |
-| P08–P11 frontend | `web/` | animation review + no raw numbers | pending |
-| P12 Telegram bot | `server/bot/` | Mini App launches | pending |
-| P13 testing | `tests/` | money-path matrix green in CI | pending |
+| P02 branding | `docs/P02-brand.md` | `python3 tools/p02-gate-check.py` | **done** ✅ |
+| P03 design system | `docs/P03-design-system.md` | `python3 tools/p03-gate-check.py` | **done** ✅ |
+| P04 backend arch | `docs/P04-backend-architecture.md` | `python3 tools/p04-gate-check.py` | **done** ✅ |
+| P05 ingestion | `docs/P05-data-ingestion.md` | `python3 tools/p05-gate-check.py` | **done** ✅ |
+| P06 trading engine | `docs/P06-trading-plane.md` | `python3 tools/p06-gate-check.py` | **done** ✅ |
+| P07 security | `docs/P07-security.md` | `python3 tools/p07-gate-check.py` | **done** ✅ |
+| P08 frontend shell | `docs/P08-frontend-shell.md` | `python3 tools/p08-gate-check.py` | **done** ✅ |
+| P09 markets | `docs/P09-frontend-markets.md` | `python3 tools/p09-gate-check.py` | **done** ✅ |
+| P10 terminal | `docs/P10-frontend-terminal.md` | `python3 tools/p10-gate-check.py` | **done** ✅ |
+| P11 leaderboard | `docs/P11-leaderboard.md` | `python3 tools/p11-gate-check.py` | **done** ✅ |
+| P12 Telegram bot | `docs/P12-telegram-bot.md` | `python3 tools/p12-gate-check.py` | **done** ✅ |
+| P13 testing | `docs/P13-testing.md` | `make p13` (`python3 tools/p13-gate-check.py`) | **done** ✅ |
 | P14 security testing | `docs/P14-*.md` | dependency audit clean | pending |
 | P15 deploy | `docs/P15-*.md`, CI | staging → prod runbook | pending |
 | P16 launch/growth | `docs/P16-*.md` | — | pending |
+
+P13's gate is unusual: its subject is the other gates, so `make p13` re-runs the chaos drills and the load suite
+as well as reading every recorded artifact. `make p13-read` is the same gate without the half-hour, which is what
+the pull-request workflow runs. The money-path matrix (`make p13-matrix`) is the only coverage gate in the repo:
+43 rows, every one resolving to a test that exists and passes.
 
 ## Hard rules carried from the kit (not optional)
 

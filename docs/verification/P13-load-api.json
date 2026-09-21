@@ -1,0 +1,259 @@
+{
+  "at": "2026-09-21T05:31:04+0000",
+  "failures": [],
+  "mode": "full",
+  "paced": false,
+  "quick": false,
+  "results": {
+    "api": {
+      "basis": "500 concurrent users at the measured per-client rate, against one worker's peak",
+      "engine": "sqlite (single writer; a lower bound on Postgres)",
+      "knee_clients": 10,
+      "ramp": [
+        {
+          "as_of_top": [
+            [
+              "1789968540061",
+              1511
+            ],
+            [
+              "1789968540059",
+              758
+            ]
+          ],
+          "distinct_as_of": 1382,
+          "max_ms": 409.5,
+          "ok": 5294,
+          "other": {},
+          "p50_ms": 19.404,
+          "p95_ms": 160.433,
+          "p99_ms": 270.859,
+          "requests": 5294,
+          "requests_per_s": 263.0,
+          "sample_errors": [],
+          "seconds": 20.13,
+          "server_errors": 0,
+          "slowest": [
+            [
+              409.5,
+              "/v1/leaderboard?limit=25"
+            ],
+            [
+              399.2,
+              "/v1/leaderboard?limit=25"
+            ],
+            [
+              386.8,
+              "/v1/leaderboard?limit=25"
+            ]
+          ],
+          "straggler_threads": 0,
+          "users": 10
+        },
+        {
+          "as_of_top": [
+            [
+              "1789968540061",
+              1507
+            ],
+            [
+              "1789968540055",
+              755
+            ]
+          ],
+          "distinct_as_of": 1366,
+          "max_ms": 556.9,
+          "ok": 5278,
+          "other": {},
+          "p50_ms": 78.626,
+          "p95_ms": 224.656,
+          "p99_ms": 325.553,
+          "requests": 5278,
+          "requests_per_s": 262.8,
+          "sample_errors": [],
+          "seconds": 20.09,
+          "server_errors": 0,
+          "slowest": [
+            [
+              556.9,
+              "/v1/leaderboard?limit=25"
+            ],
+            [
+              487.8,
+              "/v1/leaderboard?limit=25"
+            ],
+            [
+              478.2,
+              "/v1/leaderboard?limit=25"
+            ]
+          ],
+          "straggler_threads": 0,
+          "users": 25
+        },
+        {
+          "as_of_top": [
+            [
+              "1789968540061",
+              1503
+            ],
+            [
+              "1789968540055",
+              755
+            ]
+          ],
+          "distinct_as_of": 1368,
+          "max_ms": 722.0,
+          "ok": 5280,
+          "other": {},
+          "p50_ms": 176.317,
+          "p95_ms": 332.65,
+          "p99_ms": 448.324,
+          "requests": 5280,
+          "requests_per_s": 261.7,
+          "sample_errors": [],
+          "seconds": 20.18,
+          "server_errors": 0,
+          "slowest": [
+            [
+              722.0,
+              "/v1/leaderboard?limit=25"
+            ],
+            [
+              587.1,
+              "/v1/leaderboard?limit=25"
+            ],
+            [
+              560.7,
+              "/v1/leaderboard?limit=25"
+            ]
+          ],
+          "straggler_threads": 0,
+          "users": 50
+        },
+        {
+          "as_of_top": [
+            [
+              "1789968540061",
+              1521
+            ],
+            [
+              "1789968540055",
+              766
+            ]
+          ],
+          "distinct_as_of": 1392,
+          "max_ms": 818.6,
+          "ok": 5339,
+          "other": {},
+          "p50_ms": 364.666,
+          "p95_ms": 554.823,
+          "p99_ms": 635.611,
+          "requests": 5339,
+          "requests_per_s": 262.7,
+          "sample_errors": [],
+          "seconds": 20.33,
+          "server_errors": 0,
+          "slowest": [
+            [
+              818.6,
+              "/v1/leaderboard?limit=25"
+            ],
+            [
+              811.9,
+              "/v1/leaderboard?limit=25"
+            ],
+            [
+              785.2,
+              "/v1/leaderboard?limit=25"
+            ]
+          ],
+          "straggler_threads": 0,
+          "users": 100
+        },
+        {
+          "as_of_top": [
+            [
+              "1789968540061",
+              1598
+            ],
+            [
+              "1789968540059",
+              805
+            ]
+          ],
+          "distinct_as_of": 1484,
+          "max_ms": 1466.0,
+          "ok": 5594,
+          "other": {},
+          "p50_ms": 925.595,
+          "p95_ms": 1085.227,
+          "p99_ms": 1181.701,
+          "requests": 5594,
+          "requests_per_s": 266.4,
+          "sample_errors": [],
+          "seconds": 21.0,
+          "server_errors": 0,
+          "slowest": [
+            [
+              1466.0,
+              "/v1/leaderboard?limit=25"
+            ],
+            [
+              1363.1,
+              "/v1/leaderboard?limit=25"
+            ],
+            [
+              1349.2,
+              "/v1/leaderboard?limit=25"
+            ]
+          ],
+          "straggler_threads": 0,
+          "users": 250
+        },
+        {
+          "as_of_top": [
+            [
+              "1789968540061",
+              1680
+            ],
+            [
+              "1789968540059",
+              844
+            ]
+          ],
+          "distinct_as_of": 1584,
+          "max_ms": 2298.6,
+          "ok": 5881,
+          "other": {},
+          "p50_ms": 1840.888,
+          "p95_ms": 1996.852,
+          "p99_ms": 2138.282,
+          "requests": 5881,
+          "requests_per_s": 268.4,
+          "sample_errors": [],
+          "seconds": 21.91,
+          "server_errors": 0,
+          "slowest": [
+            [
+              2298.6,
+              "/v1/leaderboard?limit=25"
+            ],
+            [
+              2298.4,
+              "/v1/leaderboard?limit=25"
+            ],
+            [
+              2289.5,
+              "/v1/leaderboard?limit=25"
+            ]
+          ],
+          "straggler_threads": 0,
+          "users": 500
+        }
+      ],
+      "throughput_peak_req_s": 268.4,
+      "workers_needed_for_500": 0.93
+    }
+  },
+  "verdict": "PASS"
+}

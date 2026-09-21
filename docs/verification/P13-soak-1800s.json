@@ -1,0 +1,11 @@
+{
+  "at": "2026-09-21T05:20:38+0000",
+  "failures": [
+    "soak: soak: 6000 duplicate deliveries (the idempotency key is supposed to make this zero)"
+  ],
+  "mode": "full",
+  "paced": false,
+  "quick": false,
+  "results": {},
+  "verdict": "FAIL"
+}

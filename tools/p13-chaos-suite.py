@@ -70,6 +70,38 @@ RUN_SQL = _load("pgm_run_sql_chaos", ROOT / "tools" / "run-sql.py")
 SEED = _load("pgm_seed_chaos", ROOT / "services" / "api" / "seed.py")
 
 
+#: The kit's constraint, made mechanical: "every chaos test has a written expected outcome before it is run".
+#: The text here is the outcome we are willing to be judged against — the state a user should be in afterwards —
+#: and it is written into the drill's artifact ABOVE the observations, so the artifact reads as an experiment
+#: rather than as a transcript that was interpreted after the fact. A drill that fails these is a FAIL regardless
+#: of whether its assertions happened to pass, which is how a suite avoids grading its own homework.
+EXPECT: dict[int, str] = {
+    1: "100 kills between signing and the response, at random points: zero duplicate orders, zero lost "
+       "positions, zero intents left in an impossible state. Every uncertain intent resolves to exactly one "
+       "venue order or none, and the trail says why.",
+    2: "Five minutes without the socket: no duplicate orders, no missed fills (the fallback poll finds each "
+       "one), every stale surface marked stale for the whole outage, and no alert delivered twice.",
+    3: "The ingest consumer killed mid-write: every fill that was acknowledged is on disk, the replay after "
+       "restart adds each one exactly once (the durable cursor), and no alert fires twice for one event.",
+    4: "The database unavailable mid-flight: the write is REFUSED with a retryable 503 rather than accepted "
+       "and lost, nothing is placed, no money moves, the read side keeps answering, and the same request "
+       "succeeds once the store is back.",
+    5: "No cache at all: every read still answers from the source, no request 5xx-es for a cache miss, and the "
+       "upstream call count stays inside the per-IP budget (a cold cache must not become a rate-limit ban).",
+    6: "A sustained 429 storm: backoff holds, no order is submitted twice, none is silently dropped, and the "
+       "user-visible state is uncertain-then-resolved rather than wrong.",
+    7: "The builder code disabled at the venue: every order refused with the venue's own reason (not a generic "
+       "error), the user told in words, an alarm raised, and the code's status recorded as the venue's refusal "
+       "rather than ours.",
+    8: "The wallet provider unreachable: nothing is signed and nothing is placed, the refusal names the signer "
+       "and is retryable, positions and books stay readable, and trading is disabled with an explanation.",
+    9: "Kill switch engaged during a copy-trade: submission stops within 1 s, the already-queued intent places "
+       "nothing, and both surfaces read the same stopped state.",
+    10: "Key compromise: 10,000 keys inventoried and the compromised one revoked inside the P14 budget, with "
+        "every signature from it refused afterwards and an audit trail that names the actor and the time.",
+}
+
+
 class Report:
     """One drill's write-up: the numbers are collected as they are measured, not remembered afterwards."""
 
@@ -80,6 +112,7 @@ class Report:
         self.verdict = "PASS"
         self.reason = ""
         self.t0 = time.time()
+        self.expect = EXPECT.get(number, "")
 
     def say(self, text: str = "") -> None:
         self.lines.append(text)
@@ -92,8 +125,13 @@ class Report:
 
     def save(self) -> None:
         head = ["CHAOS %d — %s" % (self.number, self.title), "=" * 78,
+                "expected outcome (written before the drill ran):",
+                "  " + (self.expect or "(none written for this drill — that is a bug in the suite)"),
+                "",
                 "verdict: %s%s" % (self.verdict, (" — " + self.reason) if self.reason else ""),
                 "elapsed: %.1f s" % (time.time() - self.t0), ""]
+        if not self.expect:
+            self.verdict, self.reason = "FAIL", "no expected outcome was written for this drill"
         self.path.write_text("\n".join(head + self.lines + [""]) + "\n")
         print("[chaos %d] %-4s %s (%.1f s)" % (self.number, self.verdict, self.title, time.time() - self.t0))
 
@@ -746,6 +784,7 @@ def main() -> int:
     lines = ["P13 D7 — ten chaos tests", "=" * 78, ""]
     for n, r in sorted(reports.items()):
         lines.append("%2d. %-8s %s" % (n, r.verdict, r.title))
+        lines.append("     expected: %s" % (r.expect[:96] + ("…" if len(r.expect) > 96 else "")))
         lines.append("     report: docs/verification/%s" % r.path.name)
         for k, v in sorted(r.facts.items()):
             lines.append("     %s: %s" % (k, v))
@@ -762,6 +801,7 @@ def main() -> int:
     if a.json_path:
         Path(a.json_path).write_text(json.dumps(
             {"drills": {str(n): {"title": r.title, "verdict": r.verdict, "facts": r.facts,
+                                 "expected": r.expect,
                                  "artifact": "docs/verification/%s" % r.path.name} for n, r in sorted(reports.items())},
              "failed": failed, "at": time.strftime("%Y-%m-%dT%H:%M:%S%z")}, indent=2, sort_keys=True) + "\n")
     print(text if not a.record else "\n".join(lines[-3:]) + "\n(written to %s)" % a.record)

@@ -1,4 +1,4 @@
-name: p04 gates
+name: pr gates
 
 # Everything this repo can prove without a paid account or a Docker daemon is in the `checks` job, and it is
 # the same set `make check` runs locally, so "green on CI" and "green on my laptop" are one claim.
@@ -87,12 +87,48 @@ jobs:
         run: |
           python3 tools/build-sqlite-migrations.py --check
           python3 tools/run-sql.py --check
+      # P13's money-path matrix is the ONE coverage gate this repo has (D8: coverage is reported, not gated).
+      # `--check` proves every row still names a test that exists; `--run` proves those tests pass. Both, in the
+      # pull-request path, because a row that rots is a hole in the money path that reads as complete.
+      - name: the money-path matrix (P13 D2) resoles and passes
+        run: |
+          python3 tools/p13-money-matrix.py --check
+          python3 tools/p13-money-matrix.py --run \
+            --record docs/verification/P13-money-matrix.txt \
+            --json docs/verification/P13-money-matrix.json
+      - name: the P13 phase gate, on the evidence in the tree
+        run: python3 tools/p13-gate-check.py --skip-heavy --record docs/verification/P13-gate-ci.txt
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
           name: gate-outputs
           path: docs/verification/
           if-no-files-found: ignore
+
+  # The frontend's own gate. It is a separate job because the four checks below need Node, and a job that
+  # installs a browser is a job that should not be holding the money path's timeout.
+  web:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: install the pinned set
+        run: npm ci
+      - name: the types, the generated contract and the shell's unit tests
+        run: |
+          npm run typecheck
+          npm run check:api
+          npm test
+      - name: the number layer and the surfaces P13 added, named explicitly so a rename cannot quietly drop them
+        run: npx vitest run src/num/p13-property.test.tsx src/screens/p13-a11y.test.tsx
 
   # The job that makes the compose claim real. `make dev` is unverifiable from the build sandbox (no docker),
   # so this is where "docker compose up works on a clean machine" is either proven or disproven.

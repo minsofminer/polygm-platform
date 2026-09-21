@@ -675,9 +675,28 @@ class Reconciler:
             if price_micro is None or size_micro is None or size_micro <= 0:
                 booked["refused"] += 1
                 continue
+            side = str(tr.get("side") or row.get("side") or "BUY")
+            limit = int(row.get("price_micro") or 0)
+            # A limit order may be filled BETTER than its limit — that is what a real matching engine does, and
+            # booking it is correct. It may not be filled WORSE: a BUY above our limit is money we did not agree
+            # to spend and a SELL below it is shares we did not agree to sell. Until P13 this booked silently at
+            # the venue's price, which is the exact "silent inconsistency" the phase forbids — the cost basis
+            # moved, the notification quoted the venue's number, and nothing said the fill was not ours to
+            # accept. It is refused, the difference becomes a case with a name, and the ledger stays untouched.
+            worse_than_limit = limit > 0 and ((side == "BUY" and price_micro > limit)
+                                              or (side == "SELL" and price_micro < limit))
+            if worse_than_limit:
+                booked["refused"] += 1
+                key = case_key(case + ":price", order_id, str(tr.get("tradeID") or ""))
+                self.store.open_case(case="ambiguous_settlement", intent_id=intent_id, order_id=order_id,
+                                     since_ms=at,
+                                     note="venue filled %d at %d, worse than our %s limit %d; not booked"
+                                          % (size_micro, price_micro, side, limit),
+                                     dedupe_key=key)
+                continue
             r = self.store.book_fill(order_id=order_id, intent_id=intent_id, user_id=user_id,
                                      token_id=row.get("token_id", ""), market_id=row.get("market_id", ""),
-                                     side=str(tr.get("side") or row.get("side") or "BUY"),
+                                     side=side,
                                      price_micro=price_micro, size_micro=size_micro,
                                      fee_micro=int(tr.get("fee_micro") or 0),
                                      trade_id=str(tr.get("tradeID") or ""),

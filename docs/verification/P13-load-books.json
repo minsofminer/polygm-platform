@@ -1,0 +1,21 @@
+{
+  "at": "2026-09-21T05:28:59+0000",
+  "failures": [],
+  "mode": "full",
+  "paced": false,
+  "quick": false,
+  "results": {
+    "books": {
+      "books": 2000,
+      "cap": 2000,
+      "cpu_pct": 96.9,
+      "events": 11955200,
+      "events_per_s": 99625,
+      "modelled_bytes_per_book": 8240,
+      "resyncs": 0,
+      "rss_delta_mb": 7.8,
+      "rss_mb": 34.6
+    }
+  },
+  "verdict": "PASS"
+}

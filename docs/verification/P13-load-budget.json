@@ -1,0 +1,46 @@
+{
+  "at": "2026-09-21T05:32:59+0000",
+  "failures": [],
+  "mode": "full",
+  "paced": false,
+  "quick": false,
+  "results": {
+    "budget": {
+      "by_source": {
+        "clob.book": {
+          "budget_10s": 800,
+          "capacity": 200,
+          "peak_10s": 62,
+          "per_sec": 60,
+          "rate_per_s": 1.03,
+          "sends": 62
+        },
+        "data.trades": {
+          "budget_10s": 110,
+          "capacity": 60,
+          "peak_10s": 60,
+          "per_sec": 5,
+          "rate_per_s": 0.99,
+          "sends": 60
+        },
+        "gamma.markets": {
+          "budget_10s": 300,
+          "capacity": 100,
+          "peak_10s": 62,
+          "per_sec": 20,
+          "rate_per_s": 1.03,
+          "sends": 62
+        }
+      },
+      "demand": 30000,
+      "dropped_by_backpressure": 27812,
+      "note": "user demand is dropped by the bounded queue, never queued for minutes; what reaches the venue is the bucket's business, and that is the assertion",
+      "seconds": 60.4,
+      "served": 184,
+      "straggler_threads": 4,
+      "users": 100,
+      "workers": 4
+    }
+  },
+  "verdict": "PASS"
+}
