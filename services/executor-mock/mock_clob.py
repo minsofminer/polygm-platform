@@ -248,12 +248,24 @@ class MockClob:
             for o in self.orders.values():
                 if scen == "partial_fill" and o["status"] == "live":
                     o["status"] = "matched"
+                    # The 40% is computed in MICRO units, not as a float: `size * 0.4` on 6 shares is
+                    # 2.4000000000000004 in binary floating point, and the reconciler's `_exact_micro` round-trips
+                    # every venue number on the money path by design, so the trade would be refused as
+                    # `ambiguous_settlement` and never booked. That made this mock — whose whole job is to model a
+                    # venue behaving *plausibly* — the one venue shape the product is built to refuse: P13's
+                    # recovery loop found 40% of its `booked` runs producing no fill at all, with an
+                    # `ambiguous_settlement` case sitting open next to them. `size_matched` was already clean here,
+                    # so the mock was printing the same fill two ways and only one of them was on the grid.
+                    sm = round(o["payload"]["size"] * 10**6 * 0.4)
+                    price_micro = round(o["payload"]["price"] * 10**6)
                     self.trades.append({"tradeID": "0x" + uuid.uuid4().hex[:16],
                                         "orderID": o["orderID"], "price": o["payload"]["price"],
-                                        "size": o["payload"]["size"] * 0.4, "side": o["side"],
+                                        "size": sm / 10**6, "size_micro": sm,
+                                        "notional_micro": price_micro * sm // 10**6,
+                                        "side": o["side"],
                                         "maker": True, "timestamp": _now_ms() // 1000,
                                         "status": "trade"})
-                    o["size_matched"] = round(o["payload"]["size"] * 10**6 * 0.4)
+                    o["size_matched"] = sm
 
     def snapshot(self) -> dict:
         with self.lock:

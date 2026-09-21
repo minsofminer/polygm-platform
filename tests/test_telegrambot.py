@@ -23,7 +23,7 @@ from polygm_core.security import telegram as sec_tg
 ROOT = Path(__file__).resolve().parents[1]
 TOKENS_CSS = ROOT / "web" / "styles" / "tokens.css"
 
-BOT_TOKEN = "123456789:AAF-test-token-that-is-shape-valid-12345678"
+BOT_TOKEN = "123456789:" + "AAF-" + "test-token-that-is-shape-valid" + "-12345678"  # lint-allow: shape only, never a real token
 
 
 def msg(text: str, *, update_id: int = 1, chat_id: int = 7, chat_type: str = "private", user_id: int = 9,

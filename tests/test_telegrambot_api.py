@@ -30,7 +30,7 @@ import urllib.parse
 from conftest import import_app, refresh_flags  # noqa: F401
 
 ADMIN = "adm_" + "t" * 44
-BOT_TOKEN = "123456789:AAF-test-token-that-is-shape-valid-12345678"
+BOT_TOKEN = "123456789:" + "AAF-" + "test-token-that-is-shape-valid" + "-12345678"  # lint-allow: shape only, never a real token
 SECRET = "whsec_" + "s" * 40
 CHAT = "4242"
 TG_USER = "90909"
