@@ -1,0 +1,57 @@
+P14 D3 — AppSec: SAST, DAST, history secrets, log redaction, dependencies, IaC, containers
+====================================================================================================
+
+  sast rule S608   61 finding(s), triaged in tools/sast-triage.json
+  sast rule S110   6 finding(s), triaged in tools/sast-triage.json
+  sast rule S105   4 finding(s), triaged in tools/sast-triage.json
+  sast rule S101   1 finding(s), triaged in tools/sast-triage.json
+  sast rule S104   2 finding(s), triaged in tools/sast-triage.json
+  sast rule S310   4 finding(s), triaged in tools/sast-triage.json
+  sast rule S107   1 finding(s), triaged in tools/sast-triage.json
+  sast rule S311   1 finding(s), triaged in tools/sast-triage.json
+
+PASS SAST ran and produced a rule set to triage (not an empty run: 80 findings across 8 rules)
+PASS canary: the planted violations are caught (S105, S310, S311, S324, S602, S608)
+PASS every SAST finding is either fixed or triaged with a written reason (20 triaged, 0 untriaged)
+PASS no triage entry is stale — a suppressed finding that no longer exists is deleted, not left behind (0 stale)
+PASS every triage entry carries a reason and a reviewer
+PASS the triage covers a minority of the rules in play (not a wholesale suppression)
+PASS the history scan read every commit on every branch (85 of 85, 195487 added lines)
+PASS no secret shape in any commit's added lines (0 findings)
+PASS canary: a token committed to a git history is found by this scanner (github_token)
+PASS canary: the same pipeline does not fire on a credential *reference* (nothing)
+PASS the CI log scanner passes its own self-test
+PASS no unexplained hard-coded secret shape in tracked source (2 documented exceptions)
+PASS the access log the API really printed carries no token (0 shape(s) survived)
+PASS P07's dependency scanner passes (pins, advisory feed or its honest absence, digest record)
+PASS every pinned requirement has a row in the dependency review (16 of 11 reviewed)
+PASS the dependency review is dated and current (14 dated rows)
+PASS the only literal password in the compose file is the dev database, with the exception written down
+PASS no database port is published beyond loopback (127.0.0.1:5432:5432, 127.0.0.1:6432:6432, 127.0.0.1:6379:6379, 127.0.0.1:8080:8080, 127.0.0.1:8090:8090, 127.0.0.1:5173:5173)
+PASS no service runs privileged
+PASS the api service drops all capabilities and forbids new privileges
+PASS the api's root filesystem is read-only
+PASS services/api/Dockerfile: runs as a non-root user
+PASS services/api/Dockerfile: copies no credential-shaped file into the image
+PASS services/api/Dockerfile: no `curl | sh` install step
+PASS services/executor-mock/Dockerfile: runs as a non-root user
+PASS services/executor-mock/Dockerfile: copies no credential-shaped file into the image
+PASS services/executor-mock/Dockerfile: no `curl | sh` install step
+OPEN CONTAINER IMAGE CONTENTS ARE UNSCANNED: no docker/scanner in this environment, so the Dockerfiles are read statically and no built image has been inspected for OS packages, layers or CVEs
+        — run trivy/grype against the built digests in CI (and record the digests) before the first production deploy; the static checks here do not cover base-image vulnerabilities
+PASS the security headers are on a normal response
+PASS the API does not disclose its server or framework version
+PASS no wildcard CORS on any response (absent)
+PASS the API's own framing is 'none' and nothing else frames it
+PASS the one surface that may frame us swaps in an allowlist rather than dropping the directive
+PASS error responses leak no traceback, path or driver name
+PASS no interactive API surface in the production shape ({'/docs': 404, '/redoc': 404, '/openapi.json': 404})
+PASS an unknown route answers the API's own envelope, not a framework default page
+PASS unexpected HTTP methods are refused, not executed ({'TRACE': 405, 'PUT': 405, 'DELETE': 405})
+PASS a hostile query string neither 500s nor is echoed back (422)
+
+P14 APPSEC: CONDITIONAL — 37 checks passed, 0 failed, 1 OPEN
+
+OPEN (not passes, not failures — measurements this environment cannot take):
+  * CONTAINER IMAGE CONTENTS ARE UNSCANNED: no docker/scanner in this environment, so the Dockerfiles are read statically and no built image has been inspected for OS packages, layers or CVEs
+      run trivy/grype against the built digests in CI (and record the digests) before the first production deploy; the static checks here do not cover base-image vulnerabilities

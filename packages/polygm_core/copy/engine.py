@@ -453,7 +453,10 @@ class EngineStats:
 
     def skip(self, reason: str) -> None:
         key = reason.split(":")[0]
-        assert key in SKIP_REASONS, "an undocumented skip reason: %r" % reason
+        if key not in SKIP_REASONS:
+            # Raised rather than asserted for the same reason as the deny table: a skip reason nobody documented
+            # is a copy that silently stopped, and `-O` must not be able to hide it.
+            raise ValueError("SKIP_REASON_UNKNOWN: an undocumented skip reason: %r" % reason)
         self.skipped[key] = self.skipped.get(key, 0) + 1
 
 

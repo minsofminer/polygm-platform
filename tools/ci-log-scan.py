@@ -60,6 +60,18 @@ SOURCE_RULES = tuple(r for r in EXTRA if r[0] in _HIGH_CONFIDENCE) + tuple(
     (name, pattern) for (name, pattern, _repl) in redact.PATTERNS if name in _HIGH_CONFIDENCE)
 RULES = LOG_RULES
 
+#: A matched value that is a *reference* to a secret rather than a secret: a shell variable, a template
+#: substitution, a format placeholder. `https://x-access-token:$TOKEN@github.com/...` is how a script is supposed
+#: to build that URL — it is the line somebody writes during an incident, and flagging it teaches the wrong
+#: lesson at the wrong moment. P14 D3 found this the first time the history scanner ran over the repo's own
+#: recovery script; the rule that follows from it is here rather than in an allowlist entry, because it is a fact
+#: about what a secret *is*, not about that one file.
+INTERPOLATED = re.compile(r"\$\{?[A-Za-z_]|%s|\{\{?\s*[A-Za-z_]")
+
+
+def _is_a_reference(matched: str) -> bool:
+    return bool(INTERPOLATED.search(matched))
+
 # Lines that are *about* a secret without being one. Kept short and named, because an allowlist nobody can read
 # is how a scanner gets ignored.
 ALLOW = (
@@ -91,6 +103,8 @@ def findings(text: str, rules=None, where: str = "") -> list[tuple[int, str, str
         for name, rx in (rules or RULES):
             m = rx.search(line)
             if not m:
+                continue
+            if _is_a_reference(m.group(0)):
                 continue
             # The excerpt is a *fingerprint*, not the line. A scanner that prints the secret it found has put
             # the secret somewhere new - usually the CI log, which is public on a public repo and retained for
@@ -136,6 +150,21 @@ def main() -> int:
             if findings(s):
                 print("  FALSE POSITIVE on: %s -> %s" % (s[:50], findings(s)[0][1]))
                 bad += 1
+        # A credential *reference* is not a credential, and the check runs under SOURCE_RULES because that is the
+        # rule set `--sources` and P14's history scan use — a log line is allowed to be read more loosely than a
+        # source file is. The shell form and the template form are both here because both appear in this repo,
+        # and the `$TOKEN@github.com` case is the one that made this rule necessary: it reads as an email to the
+        # log-strength heuristic, which is exactly why the source-strength list is the one that decides.
+        for s_ in ('git remote add origin "https://x-access-token:$TOKEN@github.com/o/r.git"',
+                   "connection string postgres://svc:${PGPASS}@db:5432/x",
+                   "url = f'https://api.example/v1?key={API_KEY}'"):
+            f = findings(s_, rules=SOURCE_RULES)
+            if f:
+                print("  FALSE POSITIVE (source rules) on: %s -> %s" % (s_[:44], f[0][1]))
+                bad += 1
+        if not findings("postgres://svc:hunter2@db:5432/x", rules=SOURCE_RULES):
+            print("  the interpolation exemption swallowed a REAL password in a URI")
+            bad += 1
         # And the two ways an allowlist is wrong, checked rather than asserted: an exemption that does not
         # match anything is a hiding place, so the path-scoped entries must actually silence the line they name.
         if findings("passphrase=hunter2xx", where="tests/test_x.py"):
