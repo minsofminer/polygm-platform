@@ -17,6 +17,12 @@ TOKENS = "brand/tokens.json"
 # --- D1.1 spacing: 4px base -------------------------------------------------------------
 # module-level constants are evaluated top-down: this is used by DENSITY below, so it must precede it
 DENSITY_NOTE = (
+    # rail_left/rail_right/book_max_block are P09 values that lived only in brand/tokens.json until P12: the shell
+    # laid out a three-column grid against `--pgm-rail-left`/`--pgm-rail-right` with an `auto` fallback and neither
+    # was declared anywhere, so the layout was right only while the fallback happened to look right. They belong here
+    # for the reason this file exists — the builder replaces the whole `constants` block, so a key that is only in
+    # tokens.json vanishes on the next run (P12 D6 re-ran it and lost the three: the P08 c5 check found the shell
+    # reading three `var()` names no stylesheet declares).
     "min_touch_target 44 is NOT scaled down by dense — dense shrinks text rows, never hit areas; at "
     "dense the row's padded box stays ≥44px tall on touch breakpoints. shell-max-width 1680 is the "
     "ceiling: past it the user gets bigger gutters, not a 5th column.")
@@ -87,6 +93,9 @@ DENSITY = {
         # only to brand/tokens.json silently vanished on the next run and took --pgm-shell-max-width with it
         # (build-tokens.mjs emits that var only when this key exists). 2026-09-17: this cost a green gate.
         "shell-max-width": 1680,
+        "book_max_block": 560,
+        "rail_left": 280,
+        "rail_right": 320,
         "note": DENSITY_NOTE,
     },
 }
@@ -147,6 +156,23 @@ MOTION = {
         "includes": ["no counting/tweening to a new price", "no per-character flip/roll", "no crossfade between old and new value", "no width animation on the cell (tabular-nums + fixed slot keeps layout still)"],
         "allowed": ["instant text swap", "background flash (above)", "a ▲/▼ glyph that changes with the value, not instead of it"],
         "reduced_motion": "flash becomes a 1-frame 1px left border in the same colour, or nothing at all; all transforms become none",
+    },
+    # --- the Telegram Mini App's three motion values (P12 D2/D4) ------------------------------
+    # They are here rather than in the webview's stylesheet because a distance is a design decision, and P03's rule
+    # is that foundations come from tokens.json and are never typed into a template (this file is why D6 found
+    # `brand/tokens.css` stale: the three values had been hand-appended to the generated CSS, which is exactly the
+    # second source of truth the generator refuses).
+    #
+    # `rise-sm` is a card settling after a list change; `nudge` is the width of a refusal's shake and is deliberately
+    # tiny — a big shake on a money error reads as a crash rather than as "no"; `scrim` is the dimming behind the
+    # confirm sheet and is its own token because two stacked overlays would otherwise darken the page twice.
+    "mini_app": {
+        "rise_sm_px": 8,
+        "nudge_px": 4,
+        "scrim": "color-mix(in srgb, var(--pgm-bg-base) 62%, transparent)",
+        "surfaces": "the sheet, the card, the confirm row, the skeleton and the refusal nudge — no other class animates",
+        "why_own_token": "P03's motion section owns durations and easings; a *distance* has no home there, and inventing "
+                         "one in the webview's CSS makes the promise 'the Mini App is the same design system' unverifiable",
     },
     "physicality": {
         "never": "scale(0) — start at 0.9–0.97 with opacity 0",

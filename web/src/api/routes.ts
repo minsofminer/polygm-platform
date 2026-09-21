@@ -428,16 +428,28 @@ export const ROUTES = {
     whileMissing: "refuses",
     owner: "P08-L7",
   },
-  keyExport: { method: "POST", path: "/v1/wallet/keys/export", built: false, whileMissing: "refuses", owner: "P08-L8" },
-  balance: { method: "GET", path: "/v1/wallet/balance", built: false, whileMissing: "refuses", owner: "P08-L9" },
-  deposit: { method: "POST", path: "/v1/wallet/deposit/quote", built: false, whileMissing: "refuses", owner: "P08-L9" },
-  withdraw: { method: "POST", path: "/v1/wallet/withdraw", built: false, whileMissing: "refuses", owner: "P08-L10" },
+  // P12 D6 served all six of these, so the launch-list owners (P08-L8/L9/L10) are retired and the ledger says what
+  // is true. `built: true` is not a claim about *quality*: the P08 gate pairs each one against an operation in
+  // `contracts/openapi.yaml`, so a row that flipped without the route existing fails the gate rather than the user.
+  keyExport: { method: "POST", path: "/v1/wallet/keys/export", built: true, whileMissing: "refuses", owner: "P12" },
+  balance: { method: "GET", path: "/v1/wallet/balance", built: true, whileMissing: "refuses", owner: "P12" },
+  deposit: { method: "POST", path: "/v1/wallet/deposit/quote", built: true, whileMissing: "refuses", owner: "P12" },
+  // The progress read is the sixth wallet route and the only one the P08 ledger never declared — the deposit screen
+  // cannot be built without it, so it arrives here with the screens rather than being called inline by a component.
+  depositProgress: {
+    method: "GET",
+    path: "/v1/wallet/deposit/{deposit_id}",
+    built: true,
+    whileMissing: "refuses",
+    owner: "P12",
+  },
+  withdraw: { method: "POST", path: "/v1/wallet/withdraw", built: true, whileMissing: "refuses", owner: "P12" },
   transactions: {
     method: "GET",
     path: "/v1/wallet/transactions",
-    built: false,
+    built: true,
     whileMissing: "refuses",
-    owner: "P08-L9",
+    owner: "P12",
   },
   entitlement: { method: "GET", path: "/v1/billing/entitlement", built: false, whileMissing: "refuses", owner: "P08-L11" },
   stripeCheckout: {

@@ -193,17 +193,12 @@
   --pgm-ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
   --pgm-flash-in: 90ms;
   --pgm-flash-out: 200ms;
-  /* The three distances the Mini App's motion needs, as tokens rather than numbers in the keyframes — the same rule
-     the rest of this file enforces. `rise-sm` is a card settling after a list change; `nudge` is the width of a
-     refusal's shake and is deliberately tiny (a big shake on a money error reads as a crash, not as "no"); the
-     scrim is the dimming behind the confirm sheet, and it is its own token because two overlays stacked would
-     otherwise darken the page twice. */
-  --pgm-rise-sm: 8px;
-  --pgm-nudge: 4px;
-  --pgm-scrim: color-mix(in srgb, var(--pgm-bg-base) 62%, transparent);
   --pgm-flash-bg-up: var(--pgm-action-buy);
   --pgm-flash-bg-down: var(--pgm-action-sell);
   /* number_policy: nothing animates a number — no counting/tweening to a new price */
+  --pgm-rise-sm: 8px; /* the sheet, the card, the confirm row, the skeleton and the refusal nudge — no other class animates */
+  --pgm-nudge: 4px;
+  --pgm-scrim: color-mix(in srgb, var(--pgm-bg-base) 62%, transparent);
 
   --pgm-z-dropdown: 1000;
   --pgm-z-sticky_header: 1100;
@@ -264,10 +259,6 @@
 @keyframes pgm-flash-down { from { background: var(--pgm-flash-bg-down); } to { background: transparent; } }
 .pgm-flash--up   { animation: pgm-flash-up   var(--pgm-flash-out) var(--pgm-ease-out) 1; }
 .pgm-flash--down { animation: pgm-flash-down var(--pgm-flash-out) var(--pgm-ease-out) 1; }
-@media (prefers-reduced-motion: reduce) {
-  .pgm-flash--up, .pgm-flash--down { animation: none; }
-  * { transition-duration: 1ms !important; }
-}
 
 /* -----------------------------------------------------------------------------------------------------------
    Telegram Mini App motion (P12 D2/D4).
@@ -305,8 +296,8 @@
 .pgm-tma-grabber { touch-action: none; }
 
 @media (prefers-reduced-motion: reduce) {
-  /* Not "faster": *no* transform motion. The flash stays (it carries meaning) and shortens to its own token. */
+  .pgm-flash--up, .pgm-flash--down { animation: none; }
   .pgm-tma-card, .pgm-tma-sheet, .pgm-tma-sheet--closing, .pgm-tma-reject { animation: none; }
   .pgm-tma-skeleton { animation: pgm-soft-pulse var(--pgm-flash-in) var(--pgm-ease-in-out) infinite; }
-  .pgm-tma-ack { animation: pgm-ack var(--pgm-flash-out) var(--pgm-ease-out) 1; }
+  * { transition-duration: 1ms !important; }
 }

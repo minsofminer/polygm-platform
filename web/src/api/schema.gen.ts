@@ -466,6 +466,153 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/wallet/balance": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The wallet, its custody mode, the cash the ledger says is available, and the locks that are armed
+         * @description The Mini App's wallet card. The address is returned HERE and deliberately not in the chat: a chat message is
+         *     the one surface a user forwards to a stranger, while this is a session-bearing surface whose whole audience
+         *     is the account that owns the wallet. `locks` is the honest summary of the ceremony — a withdrawal needs a
+         *     password and an enrolled authenticator, and a screen that offers the button without them is a screen that
+         *     fails at the last step instead of the first.
+         */
+        get: operations["walletBalance"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/wallet/transactions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The ledger's own entries — every row here is money that moved
+         * @description `cash_ledger` is append-only, so this is a statement rather than a feed, and `reason` travels verbatim: an
+         *     `adjust` with no sentence is the row a support ticket is made of. `nextBeforeMs` is the cursor — the oldest
+         *     `atMs` on the page, or 0 when the page was not full.
+         */
+        get: operations["walletTransactions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/wallet/deposit/quote": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start watching a deposit — the address, and the four legs this app will report on
+         * @description A POST because it creates something: a `deposits` row in `detecting`, keyed so a retry is the same intent
+         *     rather than a second one. No money moves here and none can — the row is a promise to watch an address, and
+         *     the credit happens when the bridge lands. The response carries the chain's confirmation count because the
+         *     progress screen's second leg is "waiting for N confirmations" and N is not the same on Polygon as on Base.
+         */
+        post: operations["walletDepositQuote"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/wallet/deposit/{deposit_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * A deposit's progress — four legs, each with its own state and time
+         * @description `detecting → confirming → bridging → crediting → credited` is the schema's own vocabulary, so this route maps
+         *     rather than invents. A `stuck`/`failed` deposit carries its reason in `problem` instead of a spinner that
+         *     never ends, and "not yours" and "does not exist" are the same 404, which is the rule for every owned
+         *     resource in this product.
+         */
+        get: operations["walletDepositProgress"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/wallet/withdraw": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * The withdrawal ceremony — allowlist, cooldown, typed confirmation, password, TOTP
+         * @description Seven locks, seven refusals, and every one of them its own code because "no" is not an answer at 2am:
+         *     a destination that is not on the list (`ADDRESS_NOT_ALLOWED`), one still inside its 24-hour hold
+         *     (`ADDRESS_COOLDOWN`), a typed amount or address that does not match what was shown (`BAD_FIELD`), no
+         *     password (`PASSWORD_REQUIRED`), the wrong one (`PASSWORD_WRONG`), no authenticator (`TOTP_REQUIRED`) and a
+         *     stale code (`TOTP_INVALID`). A raw `destAddress` is refused even though the schema has no such field: only
+         *     the allowlist may name where money goes.
+         *
+         *     The last thing this does is RECORD the request. Signing is the custody plane's job and is not live until
+         *     P14; the response says so in words, because a screen that says "sent" about an unsigned transaction is the
+         *     exact lie this product refuses to ship.
+         */
+        post: operations["walletWithdraw"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/wallet/keys/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Export the wrapped key material, once, after password + authenticator + typing EXPORT
+         * @description What comes back is the WRAPPED DEK — the blob the keeper holds, with its KEK version and policy hash — not a
+         *     private key, because a private key is derivable only through the custody plane and this route will not
+         *     pretend otherwise. The unwrapping ceremony belongs to go-live (P14), so the honest answer to "give me my
+         *     key" is "here is your material, and here is why it is not usable yet", which is what `note` says.
+         *
+         *     Every export counts against the wrap's nonce budget: an export that runs the counter out is a wallet that
+         *     can no longer sign, so the ceremony is rate-limited by construction rather than by good intentions.
+         */
+        post: operations["walletKeyExport"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/wallet/withdrawal-addresses": {
         parameters: {
             query?: never;
@@ -1290,6 +1437,34 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/orders/amount": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Place an order from a budget — the web ticket's route
+         * @description The ticket on the site is a person typing a dollar amount, and this is the route that takes it. P06's
+         *     `POST /v1/orders` names what the *venue* names — an outcome token, a limit price, a size in shares — which a
+         *     browser cannot honestly supply: a token id it guessed is the wrong market's token, and a price it read a few
+         *     seconds ago is the past. So the caller sends a slug, a side and an amount, and the server resolves the token,
+         *     re-reads the best ask at this instant and calls `_order_from_card`, the same conversion the Telegram confirm
+         *     tap uses. One conversion, one risk gate, one ledger — three surfaces.
+         *
+         *     Until P12 the ticket posted `{market_id, side, amount_cents}` here, which was a 422 on every trade the site
+         *     attempted; the route exists so that the two shapes cannot drift again without a contract change.
+         */
+        post: operations["postOrdersAmount"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/telegram/order": {
         parameters: {
             query?: never;
@@ -1300,13 +1475,15 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Place an order from the Mini App — the same path the bot's confirm tap takes
-         * @description A webview user is a user, so this route takes a *session* (the bearer `POST /v1/telegram/session` minted from
-         *     the signed `initData`) and never a `chat_id` in the body. What makes it different from the web ticket is what
-         *     it does NOT accept: no token id and no price. The client sends the market it is looking at, the side and an
-         *     amount; the server resolves the outcome token, re-reads the best ask at this instant, and calls the one order
-         *     path — validation, risk gate, idempotency store, ledger row. A client-sent price is yesterday's price, and a
-         *     client that can name the token can name the wrong one.
+         * Place an order from the Mini App — the same path the chat's confirm tap takes
+         * @description A webview user is a user, so this route takes a session (the bearer `POST /v1/telegram/session` minted from
+         *     the signed `initData`) rather than a bot secret, and there is no `chat_id` in the body to forge. What the
+         *     caller sends is what it is looking at — a market slug, a side, an amount in USDC — and the server resolves the
+         *     outcome token and re-reads the best ask at this instant through `_tg_order_from_card`, which then calls the one
+         *     order path (`_order_core`: validation, risk gate, idempotency store, ledger row). Letting a client name a
+         *     token would let it name the wrong one; letting it name a price would quote the past. The chat and the Mini App
+         *     therefore differ in how they are authenticated and in nothing else, which is what makes the bot's confirm tap
+         *     and this button the same order twice.
          */
         post: operations["postTelegramOrder"];
         delete?: never;
@@ -2925,7 +3102,7 @@ export interface components {
             /** @description no `detail` field, ever: that is where a Python message would leak. Logs carry the code and the request id instead. */
             error: {
                 /** @enum {string} */
-                code: "RISK_HALT" | "MARKET_NOT_ACCEPTING" | "NO_ORDER_BOOK" | "STALE_QUOTE" | "BAD_SIDE" | "UNKNOWN_TICK" | "OFF_TICK" | "BAD_MARKET_META" | "BELOW_MIN_SIZE" | "ZERO_SIZE" | "BAD_AMOUNT" | "OVER_ORDER_CAP" | "PRICE_FAR_FROM_MID" | "TOO_MANY_OPEN" | "DAILY_CAP" | "IDEM_CONFLICT" | "IDEM_IN_PROGRESS" | "IDEM_KEY_REQUIRED" | "RISK_UNAVAILABLE" | "SIGNER_UNAVAILABLE" | "BAD_REASON" | "NOT_FOUND" | "REFUSED" | "HALTED" | "RULE_CAP" | "DRY_RUN_REQUIRED" | "PLAN_REQUIRED" | "VALIDATION" | "INTERNAL" | "UNAUTHENTICATED" | "SESSION_STALE" | "SESSION_REVOKED" | "SESSION_MISMATCH" | "ADMIN_REQUIRED" | "LOGIN_FAILED" | "ACCOUNT_LOCKED" | "TOTP_REQUIRED" | "TOTP_INVALID" | "TOTP_LOCKED" | "ADDRESS_COOLDOWN" | "ADDRESS_LIMIT" | "REMOVE_DURING_COOLDOWN" | "NO_SUCH_RESOURCE" | "REFRESH_UNKNOWN" | "REFRESH_REUSED" | "REFRESH_EXPIRED" | "TELEGRAM_REPLAY" | "TELEGRAM_INVALID" | "SECURITY_ENV_MISSING" | "KEYSTORE_TAMPER" | "BREAK_GLASS_DENIED" | "AUTHZ_UNDECLARED" | "BAD_FIELD" | "QUOTA_EXCEEDED" | "RADAR_SCOPE" | "HANDLE_TAKEN" | "CODE_TAKEN" | "CODE_INVALID" | "ALREADY_REFERRED" | "SELF_REFERRAL" | "RATE_LIMITED";
+                code: "RISK_HALT" | "MARKET_NOT_ACCEPTING" | "NO_ORDER_BOOK" | "STALE_QUOTE" | "BAD_SIDE" | "UNKNOWN_TICK" | "OFF_TICK" | "BAD_MARKET_META" | "BELOW_MIN_SIZE" | "ZERO_SIZE" | "BAD_AMOUNT" | "OVER_ORDER_CAP" | "PRICE_FAR_FROM_MID" | "TOO_MANY_OPEN" | "DAILY_CAP" | "IDEM_CONFLICT" | "IDEM_IN_PROGRESS" | "IDEM_KEY_REQUIRED" | "RISK_UNAVAILABLE" | "SIGNER_UNAVAILABLE" | "BAD_REASON" | "NOT_FOUND" | "REFUSED" | "HALTED" | "RULE_CAP" | "DRY_RUN_REQUIRED" | "PLAN_REQUIRED" | "VALIDATION" | "INTERNAL" | "UNAUTHENTICATED" | "SESSION_STALE" | "SESSION_REVOKED" | "SESSION_MISMATCH" | "ADMIN_REQUIRED" | "LOGIN_FAILED" | "ACCOUNT_LOCKED" | "TOTP_REQUIRED" | "TOTP_INVALID" | "TOTP_LOCKED" | "ADDRESS_COOLDOWN" | "ADDRESS_LIMIT" | "REMOVE_DURING_COOLDOWN" | "NO_SUCH_RESOURCE" | "REFRESH_UNKNOWN" | "REFRESH_REUSED" | "REFRESH_EXPIRED" | "TELEGRAM_REPLAY" | "TELEGRAM_INVALID" | "SECURITY_ENV_MISSING" | "KEYSTORE_TAMPER" | "BREAK_GLASS_DENIED" | "AUTHZ_UNDECLARED" | "BAD_FIELD" | "QUOTA_EXCEEDED" | "RADAR_SCOPE" | "HANDLE_TAKEN" | "CODE_TAKEN" | "CODE_INVALID" | "ALREADY_REFERRED" | "SELF_REFERRAL" | "RATE_LIMITED" | "INSUFFICIENT_BALANCE" | "PASSWORD_REQUIRED" | "PASSWORD_WRONG" | "ADDRESS_NOT_ALLOWED";
                 /** @description user-safe by construction */
                 message: string;
                 retryable: boolean;
@@ -5265,6 +5442,316 @@ export interface operations {
             };
         };
     };
+    walletBalance: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description the wallet card */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Stamped"] & {
+                        wallet?: {
+                            userId?: string;
+                            provider?: string;
+                            custody?: string;
+                            address?: string | null;
+                            proxyAddress?: string | null;
+                            state?: string;
+                            policyHash?: string;
+                            policyGap?: string | null;
+                            createdMs?: number;
+                        } | null;
+                        cashMicro: string;
+                        reservedMicro: string;
+                        chains?: {
+                            chain?: string;
+                            confirmations?: number;
+                        }[];
+                        locks: {
+                            password?: boolean;
+                            totp?: boolean;
+                            custody?: string;
+                        };
+                        note?: string;
+                    };
+                };
+            };
+            400: components["responses"]["Validation"];
+            401: components["responses"]["Denied"];
+            402: components["responses"]["Denied"];
+            403: components["responses"]["Denied"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Validation"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+            503: components["responses"]["Denied"];
+        };
+    };
+    walletTransactions: {
+        parameters: {
+            query?: {
+                limit?: number;
+                beforeMs?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description the statement */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Stamped"] & {
+                        entries: {
+                            kind?: string;
+                            deltaMicro?: string;
+                            atMs?: number;
+                            reason?: string;
+                            ref?: string;
+                        }[];
+                        count: number;
+                        nextBeforeMs?: number;
+                        note?: string;
+                    };
+                };
+            };
+            400: components["responses"]["Validation"];
+            401: components["responses"]["Denied"];
+            402: components["responses"]["Denied"];
+            403: components["responses"]["Denied"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Validation"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+            503: components["responses"]["Denied"];
+        };
+    };
+    walletDepositQuote: {
+        parameters: {
+            query?: never;
+            header?: {
+                /**
+                 * @description 8-128 chars of [A-Za-z0-9_-]. Required on every mutating endpoint; the 400 for its absence is part
+                 *     of the contract so a client cannot "just try without it" once and conclude it is optional.
+                 */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @enum {string} */
+                    chain: "ethereum" | "base" | "polygon" | "arbitrum";
+                    amountUsdc: string;
+                };
+            };
+        };
+        responses: {
+            /** @description the deposit intent */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        depositId: number;
+                        chain: string;
+                        status: string;
+                        confirmations?: number;
+                        minConfirmations?: number;
+                        firstSeenMs?: number;
+                        address: string;
+                        proxyAddress?: string;
+                        amountMicro?: string;
+                    };
+                };
+            };
+            400: components["responses"]["Validation"];
+            401: components["responses"]["Denied"];
+            402: components["responses"]["Denied"];
+            403: components["responses"]["Denied"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Validation"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+            503: components["responses"]["Denied"];
+        };
+    };
+    walletDepositProgress: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                deposit_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description the legs */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Stamped"] & {
+                        depositId: number;
+                        chain?: string;
+                        amountMicro?: string;
+                        status: string;
+                        confirmations?: number;
+                        minConfirmations?: number;
+                        txHash?: string;
+                        bridgeTxHash?: string;
+                        firstSeenMs?: number;
+                        resolvedMs?: number;
+                        attempts?: number;
+                        problem?: string;
+                        steps: {
+                            key?: string;
+                            label?: string;
+                            /** @enum {string} */
+                            state?: "pending" | "active" | "done" | "stopped";
+                            doneMs?: number;
+                        }[];
+                    };
+                };
+            };
+            400: components["responses"]["Validation"];
+            401: components["responses"]["Denied"];
+            402: components["responses"]["Denied"];
+            403: components["responses"]["Denied"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Validation"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+            503: components["responses"]["Denied"];
+        };
+    };
+    walletWithdraw: {
+        parameters: {
+            query?: never;
+            header?: {
+                /**
+                 * @description 8-128 chars of [A-Za-z0-9_-]. Required on every mutating endpoint; the 400 for its absence is part
+                 *     of the contract so a client cannot "just try without it" once and conclude it is optional.
+                 */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    amountUsdc: string;
+                    addressId: string;
+                    typedAmount: string;
+                    typedAddress: string;
+                    password: string;
+                    code: string;
+                };
+            };
+        };
+        responses: {
+            /** @description recorded and queued; the signing step is the custody plane's */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        withdrawalId: number;
+                        status: string;
+                        amountMicro?: string;
+                        destination?: string;
+                        notified?: {
+                            email?: boolean;
+                            telegram?: boolean;
+                        };
+                        note?: string;
+                    };
+                };
+            };
+            400: components["responses"]["Validation"];
+            401: components["responses"]["Denied"];
+            402: components["responses"]["Denied"];
+            403: components["responses"]["Denied"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Validation"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+            503: components["responses"]["Denied"];
+        };
+    };
+    walletKeyExport: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    password: string;
+                    code: string;
+                    /** @enum {string} */
+                    typedConfirm: "EXPORT";
+                };
+            };
+        };
+        responses: {
+            /** @description the wrapped material, with the audit trail behind it */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Stamped"] & {
+                        dekVersion: number;
+                        kekVersion?: number;
+                        policyHash?: string;
+                        createdMs?: number;
+                        wrappedKey: string;
+                        nonce: string;
+                        tag: string;
+                        wrapsUsed?: number;
+                        note?: string;
+                    };
+                };
+            };
+            400: components["responses"]["Validation"];
+            401: components["responses"]["Denied"];
+            402: components["responses"]["Denied"];
+            403: components["responses"]["Denied"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Validation"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+            503: components["responses"]["Denied"];
+        };
+    };
     listAddresses: {
         parameters: {
             query?: never;
@@ -6793,6 +7280,55 @@ export interface operations {
             503: components["responses"]["Denied"];
         };
     };
+    postOrdersAmount: {
+        parameters: {
+            query?: never;
+            header: {
+                "Idempotency-Key": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    slug: string;
+                    /** @enum {string} */
+                    side: "yes" | "no";
+                    amountUsdc: string;
+                };
+            };
+        };
+        responses: {
+            /** @description queued for the executor */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Stamped"] & {
+                        intentId: string;
+                        state: string;
+                        outcome?: string;
+                        sharesMicro?: string;
+                        priceMicro?: string;
+                        notionalMicro?: string;
+                        note?: string;
+                    };
+                };
+            };
+            400: components["responses"]["Validation"];
+            401: components["responses"]["Denied"];
+            402: components["responses"]["Denied"];
+            403: components["responses"]["Denied"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Validation"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+            503: components["responses"]["Denied"];
+        };
+    };
     postTelegramOrder: {
         parameters: {
             query?: never;
@@ -6829,11 +7365,14 @@ export interface operations {
                     };
                 };
             };
+            400: components["responses"]["Validation"];
             401: components["responses"]["Denied"];
+            402: components["responses"]["Denied"];
             403: components["responses"]["Denied"];
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
             422: components["responses"]["Validation"];
+            429: components["responses"]["RateLimited"];
             500: components["responses"]["Internal"];
             503: components["responses"]["Denied"];
         };

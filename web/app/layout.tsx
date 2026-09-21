@@ -5,6 +5,7 @@ import { AppProviders } from "@/app-providers";
 import { Toasts } from "@/ui/Toast";
 import { serverAuth } from "@/auth/server";
 import { isMiniAppSurface } from "@/tma/surface.server";
+import { TelegramBridge } from "./tma/bridge";
 import themeColors from "../styles/theme-colors.json";
 
 export const metadata: Metadata = {
@@ -45,7 +46,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
         {/* On the Mini App's own deployment every page is the Mini App, so the bridge belongs to the document. On the
             main site it belongs to the `/tma` subtree alone (see app/tma/layout.tsx) — loading it everywhere there
             would hand `initDataUnsafe` and HapticFeedback to pages that have no business calling them. */}
-        {isMiniAppSurface() ? <script src="https://telegram.org/js/telegram-web-app.js" async /> : null}
+        {isMiniAppSurface() ? <TelegramBridge /> : null}
         <AppProviders initialAuth={auth.state}>
           {children}
           <Toasts />

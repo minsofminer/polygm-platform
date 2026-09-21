@@ -134,6 +134,14 @@ const flash = t.motion.flash_on_change;
 motionLines.push(`  --pgm-flash-in: ${flash.in_ms}ms;`, `  --pgm-flash-out: ${flash.out_ms}ms;`);
 motionLines.push(`  --pgm-flash-bg-up: var(--pgm-action-buy);`, `  --pgm-flash-bg-down: var(--pgm-action-sell);`);
 motionLines.push(`  /* number_policy: ${t.motion.number_policy.rule} — ${t.motion.number_policy.includes[0]} */`);
+/* The Telegram Mini App's distances (P12 D2/D4): the same design system in a webview, so the values live with the
+   other motion foundations and the classes below read them as tokens. D6 found this file's output drift because
+   these three had been typed straight into brand/tokens.css — the generated file is not a place to add a value. */
+const mini = t.motion.mini_app;
+required('motion.mini_app', mini && mini.rise_sm_px && mini.nudge_px && mini.scrim, 'run tools/build-foundations.py');
+motionLines.push(`  --pgm-rise-sm: ${px(mini.rise_sm_px)}; /* ${mini.surfaces} */`,
+                 `  --pgm-nudge: ${px(mini.nudge_px)};`,
+                 `  --pgm-scrim: ${mini.scrim};`);
 const motionCss = motionLines.join('\n');
 
 /* --- layers ------------------------------------------------------------------------------- */
@@ -205,8 +213,46 @@ ${bpCss}
 @keyframes pgm-flash-down { from { background: var(--pgm-flash-bg-down); } to { background: transparent; } }
 .pgm-flash--up   { animation: pgm-flash-up   var(--pgm-flash-out) var(--pgm-ease-out) 1; }
 .pgm-flash--down { animation: pgm-flash-down var(--pgm-flash-out) var(--pgm-ease-out) 1; }
+
+/* -----------------------------------------------------------------------------------------------------------
+   Telegram Mini App motion (P12 D2/D4).
+
+   Two things are worth stating where they are defined rather than in a doc:
+
+   * **Every duration and easing here is an existing token.** The Mini App is not a second design system; it is the
+     same one in a webview, and a chat next to a sheet that moves at a different speed reads as two products.
+   * **Nothing animates a number.** The card rises, the sheet slides, the confirm row flashes its *background*, and
+     the digits never move and never count up — the same \`number_policy\` the flash-on-change rule already encodes,
+     restated here because a confirmation is the most tempting place in the product to break it.
+
+   The skeletons animate opacity only, and they carry no values at all: a placeholder that shows a made-up price is
+   worse than an empty one.
+   ----------------------------------------------------------------------------------------------------------- */
+@keyframes pgm-card-in { from { opacity: 0; transform: translateY(var(--pgm-rise-sm)); } to { opacity: 1; transform: none; } }
+@keyframes pgm-sheet-in { from { transform: translateY(100%); } to { transform: translateY(0); } }
+@keyframes pgm-sheet-out { from { transform: translateY(0); } to { transform: translateY(100%); } }
+@keyframes pgm-ack { from { background: var(--pgm-flash-bg-up); } to { background: transparent; } }
+@keyframes pgm-soft-pulse { 0% { opacity: 1; } 50% { opacity: 0.55; } 100% { opacity: 1; } }
+@keyframes pgm-reject-nudge { 0% { transform: none; } 25% { transform: translateX(var(--pgm-nudge)); }
+                             75% { transform: translateX(calc(var(--pgm-nudge) * -1)); } 100% { transform: none; } }
+
+.pgm-tma-card   { animation: pgm-card-in var(--pgm-dur-small) var(--pgm-ease-out) 1; }
+.pgm-tma-sheet  { animation: pgm-sheet-in var(--pgm-dur-drawer) var(--pgm-ease-drawer) 1; }
+.pgm-tma-sheet--closing { animation: pgm-sheet-out var(--pgm-dur-drawer) var(--pgm-ease-drawer) 1 forwards; }
+.pgm-tma-ack    { animation: pgm-ack var(--pgm-dur-medium) var(--pgm-ease-out) 1; }
+.pgm-tma-reject { animation: pgm-reject-nudge var(--pgm-dur-medium) var(--pgm-ease-in-out) 1; }
+.pgm-tma-skeleton { animation: pgm-soft-pulse var(--pgm-dur-large) var(--pgm-ease-in-out) infinite; }
+
+/* The sheet is a bottom sheet with a visible grabber, because a webview has no native affordance to tell a user
+   that the thing under their thumb can move. \`touch-action: none\` on the grabber only: making the whole sheet
+   non-scrollable to make dragging easier is how a sheet becomes a trap on a long market question. */
+.pgm-tma-scrim  { background: var(--pgm-scrim); animation: pgm-card-in var(--pgm-dur-small) var(--pgm-ease-out) 1; }
+.pgm-tma-grabber { touch-action: none; }
+
 @media (prefers-reduced-motion: reduce) {
   .pgm-flash--up, .pgm-flash--down { animation: none; }
+  .pgm-tma-card, .pgm-tma-sheet, .pgm-tma-sheet--closing, .pgm-tma-reject { animation: none; }
+  .pgm-tma-skeleton { animation: pgm-soft-pulse var(--pgm-flash-in) var(--pgm-ease-in-out) infinite; }
   * { transition-duration: 1ms !important; }
 }
 `;

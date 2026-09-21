@@ -249,6 +249,13 @@ export function plainRefusal(code: string, detail?: string): string {
     PASSWORD_REQUIRED: "Set a withdrawal password first — it is the second lock on money leaving.",
     PASSWORD_WRONG: "That password did not match, so nothing was sent. Try again, or reset it from the bot if you have forgotten it.",
     ADDRESS_NOT_ALLOWED: "That destination is not on your allowlist, and an address can be added only from the bot. Nothing was sent.",
+    // The four the wallet ceremony can meet. The P12 gate compares this table with the Python one key for key, so
+    // these exist on both sides or on neither — a screen that can only say "that did not go through (TOTP_INVALID)"
+    // is a screen with a code where a sentence belongs.
+    ADDRESS_COOLDOWN: "That destination is still inside its 24 hour hold, so nothing was sent. The hold is what makes a changed destination visible before money moves.",
+    TOTP_REQUIRED: "This action needs your authenticator code, and none is enrolled on this account yet — set it up in the bot first.",
+    TOTP_INVALID: "That code did not work, so nothing was sent. Codes last 30 seconds — wait for the next one and try again.",
+    TOTP_LOCKED: "Too many wrong authenticator codes, so this is locked for a few minutes. Nothing was sent.",
   };
   return table[code] ?? detail ?? `That did not go through (${code}). Nothing was placed.`;
 }

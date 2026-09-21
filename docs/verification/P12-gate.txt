@@ -20,6 +20,16 @@ PASS a refusal the table does not know still says something true
 PASS the fallback can carry the gate's own detail rather than swallowing it
 PASS canary: an invented RISK_* key is not in either table                 
 PASS canary: the checker rejects a table keyed on those names              
+PASS the QR encoder imports nothing                                        
+PASS the QR encoder fetches nothing at runtime                             
+PASS the encoder states its own ceiling rather than truncating             
+PASS the fixture comparison is every cell, not a sample                    
+PASS the test walks the fixture file rather than a hand-written list       
+PASS the fixtures record the mask and version the reference chose          
+PASS every fixture is a square matrix of the size it claims                
+PASS the fixtures on disk are the ones the generator produces              
+PASS canary: a fixture missing its last row is rejected                    
+PASS canary: a fixture with no recorded mask is rejected                   
 PASS the surface is read in exactly one place                              
 PASS the surface module is server-only by name                             
 PASS the Mini App gate turns a non-miniapp deployment into a pass-through  
@@ -33,4 +43,4 @@ PASS the API entry names its own persistence caveat
 PASS canary: the Mini App's middleware does not pass every path through    
 PASS canary: a noindex header in web/vercel.json is absent                 
 
-p12-gate-check: 31 passed, 0 failed  (--live skipped: no network probes)
+p12-gate-check: 41 passed, 0 failed  (--live skipped: no network probes)

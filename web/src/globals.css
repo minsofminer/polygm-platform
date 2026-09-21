@@ -11,6 +11,19 @@
    runs before the build, so the mirror cannot go stale, and a token added only here is a gate failure. */
 @import "../styles/tokens.css";
 
+/* The wallet's QR: the one mark in the product whose colours are a scanner requirement rather than a theme
+   choice. It renders inside a light-theme subtree (`data-theme="light"` on the wrapper in `src/tma/Qr.tsx`), so it
+   reads the ordinary tokens and gets the light theme's values — dark modules on a light plate, with the four-module
+   quiet zone drawn by the SVG's own viewBox. Two rules, no colour of their own: an inverted (dark-theme) QR is one
+   that some scanners read and some do not, and this is the control whose failure mode is money to a wrong address. */
+.pgm-tma-qr {
+  display: inline-block;
+  line-height: 0;
+}
+.pgm-tma-qr__plate { fill: var(--pgm-bg-base); }
+.pgm-tma-qr__ink { fill: var(--pgm-text-primary); }
+
+
 html,
 body {
   margin: 0;

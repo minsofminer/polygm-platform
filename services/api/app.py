@@ -8873,6 +8873,16 @@ def _tg_plain_refusal(code: str, detail: str = "") -> str:
         "IDEM_KEY_REQUIRED": "That order arrived without a way to tell a retry from a new order, so I did not send it.",
         "RATE_LIMITED": "That is more requests than I can send for you at once. Give it a second.",
         "UNAUTHENTICATED": "Sign in again from the bot and I will pick this up where it stopped.",
+        # --- P12 D6's wallet ceremony -----------------------------------------------------------------
+        # Four codes the withdrawal and export screens can meet, added when the Mini App grew those screens:
+        # a table that covers the order path and not the money-leaving path is a table with one door unwatched.
+        "ADDRESS_COOLDOWN": "That destination is still inside its 24 hour hold, so nothing was sent. The hold is what "
+                            "makes a changed destination visible before money moves.",
+        "TOTP_REQUIRED": "This action needs your authenticator code, and none is enrolled on this account yet — set it "
+                         "up in the bot first.",
+        "TOTP_INVALID": "That authenticator code did not work, so nothing was sent. Codes last 30 seconds; wait for "
+                        "the next one and try again.",
+        "TOTP_LOCKED": "Too many wrong authenticator codes, so this is locked for a few minutes. Nothing was sent.",
         "REFUSED": "The venue refused the order. Nothing was placed.",
     }
     if code in table:

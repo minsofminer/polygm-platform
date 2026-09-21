@@ -14,6 +14,7 @@
  *  - **The age is the book's age, not the page's.** `staleAfter`/`asOf` on the book response is when the snapshot
  *    was taken; rendering the client's clock would claim a freshness we did not receive.
  */
+import type { SuccessBody } from "@/api/types";
 import type { MarketView } from "./trade";
 
 /** The gap between a book snapshot and now, in the words the rest of the product uses. */
@@ -44,15 +45,31 @@ export function centsFromMicro(price: string | null | undefined): string {
   return centsFromMicros(microFromPrice(price));
 }
 
-/** A book level as `/v1/markets/{id}/book` actually sends it: decimal strings + a level count. */
-export type BookLevel = { price: string; shares: string; levels?: number };
-
-export function yesAskFromBook(book: {
+/**
+ * The two payloads this module reads, derived from the contract rather than retyped.
+ *
+ * The P08 gate fails a module that hand-types an API body, and it is right to: a body shape written out here by hand
+ * is a second copy of the contract that the contract cannot update. `SuccessBody` reads the 2xx
+ * schema out of `src/api/schema.gen.ts`, so when a field is renamed in `contracts/openapi.yaml` these break here
+ * instead of lying quietly.
+ *
+ * They are `Partial<>` on purpose, and the reason is a product one: a ladder's sides are genuinely optional (a market
+ * with no offers has no bids) and a mapper is called from tests with payloads built by hand. What is *not* optional is
+ * where the field names come from.
+ */
+type PublicMarket = SuccessBody<"/v1/public/market/{slug}", "get">;
+type BookPayload = SuccessBody<"/v1/markets/{market_id}/book", "get">;
+export type BookLevel = Partial<BookPayload["asks"][number]>;
+type BookRead = Omit<Partial<BookPayload>, "asks" | "bids" | "bestAsk" | "bestBid"> & {
   asks?: BookLevel[];
   bids?: BookLevel[];
+  // Nullable, unlike the contract's `Price`, because the snapshot carries the null case: a one-sided book IS the
+  // market's state, and the sheet's copy for it is a sentence rather than an empty ladder.
   bestAsk?: string | null;
   bestBid?: string | null;
-} | null | undefined): { yes: string; no: string; spread: string } {
+};
+
+export function yesAskFromBook(book: BookRead | null | undefined): { yes: string; no: string; spread: string } {
   // `shares`, not `size`: the ladder's field names are the API's, read off the route that builds them rather than
   // guessed from a schema sketch. A level with no shares behind it is not an offer, so it is filtered out.
   const asks = (book?.asks ?? []).filter((l) => Number(l.shares) > 0);
@@ -88,14 +105,8 @@ export function endsSoon(endMs: number | null | undefined, nowMs: number): boole
 
 /** The whole mapping, from the two reads the page makes. */
 export function toMarketView(
-  market: {
-    id: string;
-    slug?: string;
-    question: string;
-    endDate?: number | null;
-    minimumOrderSize?: string;
-  },
-  book: { asks?: BookLevel[]; bids?: BookLevel[]; bestAsk?: string | null; bestBid?: string | null } | null,
+  market: PublicMarket & { id: string },
+  book: BookRead | null,
   asOfMs: number,
   nowMs: number,
 ): MarketView {
@@ -131,21 +142,6 @@ export type TmaRead<T> = { ok: true; data: T & { asOf: number } } | { ok: false;
  * its stamp. Route *keys*, not paths — the page owns the URL vocabulary (`ROUTES`), this module owns the mapping.
  */
 export type TmaGet = (key: "publicMarketPage" | "book", params: Record<string, string>) => Promise<TmaRead<unknown>>;
-
-type PublicMarket = {
-  marketId?: string;
-  slug?: string;
-  question?: string;
-  endDate?: number | null;
-  minimumOrderSize?: string;
-};
-
-type BookPayload = {
-  asks?: BookLevel[];
-  bids?: BookLevel[];
-  bestAsk?: string | null;
-  bestBid?: string | null;
-};
 
 export async function loadMarketForSheet(get: TmaGet, slug: string): Promise<{ view: MarketView } | { error: string }> {
   const page = (await get("publicMarketPage", { slug })) as TmaRead<PublicMarket>;

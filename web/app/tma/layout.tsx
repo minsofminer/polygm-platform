@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import type { ReactNode } from "react";
 import { isMiniAppSurface } from "@/tma/surface.server";
+import { TelegramBridge } from "./bridge";
 
 /**
  * The Mini App entry. Same shell, same components, same routes — one codebase (P08 D2). What differs is the
@@ -18,7 +19,7 @@ export default function TmaLayout({ children }: { children: ReactNode }) {
   // assignment for no reason.
   return (
     <>
-      {isMiniAppSurface() ? null : <script src="https://telegram.org/js/telegram-web-app.js" async />}
+      {isMiniAppSurface() ? null : <TelegramBridge />}
       {children}
     </>
   );
