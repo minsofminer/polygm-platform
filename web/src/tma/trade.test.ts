@@ -182,7 +182,9 @@ describe("refusals and deep links", () => {
                    "NOT_FOUND", "NO_ORDER_BOOK", "BAD_MARKET_META", "STALE_QUOTE", "BAD_SIDE",
                    "BAD_AMOUNT", "ZERO_SIZE", "BELOW_MIN_SIZE", "OVER_ORDER_CAP", "DAILY_CAP", "TOO_MANY_OPEN",
                    "PRICE_FAR_FROM_MID", "OFF_TICK", "UNKNOWN_TICK", "IDEM_CONFLICT", "IDEM_IN_PROGRESS",
-                   "IDEM_KEY_REQUIRED", "RATE_LIMITED", "UNAUTHENTICATED", "REFUSED"];
+                   "IDEM_KEY_REQUIRED", "RATE_LIMITED", "UNAUTHENTICATED", "REFUSED",
+                   // D6's four: the withdrawal ceremony's refusals, which reach the user as sentences too.
+                   "INSUFFICIENT_BALANCE", "PASSWORD_REQUIRED", "PASSWORD_WRONG", "ADDRESS_NOT_ALLOWED"];
     for (const code of codes) {
       const text = plainRefusal(code);
       expect(text.length).toBeGreaterThan(30);

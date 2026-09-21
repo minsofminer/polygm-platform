@@ -1,0 +1,54 @@
+P12 D6 (backend): the wallet over HTTP, and three cards that were wrong
+
+The Mini App could show a market and place an order; it could not show a wallet. D6's
+custody UX existed only in the chat, and five ledger rows said `built: false`. This
+commit is the HTTP half of ceremonies the bot has run since P07 — six routes, one test
+file that walks the ceremony in order, and the three chat money cards that turned out to
+be broken in ways reading them could not show.
+
+Six routes (services/api/app.py, contract, `check-openapi` table):
+
+  GET  /v1/wallet/balance            the card: custody, cash, reserved, chains, locks
+  GET  /v1/wallet/transactions       the statement, cursor-paginated, reason verbatim
+  POST /v1/wallet/deposit/quote      202 + a `deposits` row in `detecting`, keyed
+  GET  /v1/wallet/deposit/{id}       the four legs as states, plus `problem` when stuck
+  POST /v1/wallet/withdraw           202, the ceremony in the order the locks are
+  POST /v1/wallet/keys/export        the wrapped DEK once, counted against its budget
+
+Four codes join `CODES`, the Python refusal table, the Mini App's copy of it, the
+contract's `Error.code` enum and the key-parity gate: `INSUFFICIENT_BALANCE`,
+`PASSWORD_REQUIRED`, `PASSWORD_WRONG`, `ADDRESS_NOT_ALLOWED`.
+
+Three bugs found by writing the tests, all of them live before this commit:
+
+1. `cash_ledger` has `amount_micro`/`created_ms`. The chat cards and the first draft of
+   these routes read `delta_micro`/`at_ms` — names that read better and do not exist, so
+   `/balance`, `/history` and `/pnl` raised on every tap. `_tm.usdc(...)` was called in
+   the same cards and does not exist anywhere; the formatter is `fmt_usdc`.
+2. `/pnl` summed `kind='realised'` (never a ledger kind in the CHECK) and read
+   `position_snapshots.balance_micro` (never a column). It would have answered 0.00
+   forever. Realised is now exits + settlements minus the basis they released minus our
+   fees, from the ledger and the lots; the peak is cash, and the card says cash.
+3. `/history` printed the kind and the amount and dropped the reason — the one field the
+   ledger entry exists for.
+
+And one ordering bug in the withdrawal route itself, caught by the retry test:
+`_totp_gate` consumes an authenticator step, and the ceremony used to run before
+`_idem_run`, so the retry of a withdrawal whose response was lost came back
+`TOTP_INVALID` — a completed withdrawal reported as a failed one. The locks now run
+inside the key: a replay is answered from the stored body, and the test asserts the
+enrolment's `last_step` did not move.
+
+Also here: `_OPEN_INTENT_STATES` (the reserve used to list `live`/`partial`, which are
+*orders* states, so `pending`/`submitting`/`uncertain` — money genuinely committed — were
+missing), `INSUFFICIENT_BALANCE` joins `_PUBLIC_DETAIL_CODES` so the refusal can say what
+is available, a stopped deposit no longer paints five green ticks, and the export gets a
+real response object for its `no-store` header.
+
+`tests/test_wallet_api.py`: 51 tests. The withdrawal tests are a ladder — each rung
+breaks one lock and asserts the rung above it was reached — because the order of the
+locks is the feature. `TestWalletCards` calls the cards directly with money in the
+tables, which is the only way a tap-only surface gets tested at all.
+
+Verified: pytest 1284 passed; check-openapi 659/0; p12-gate-check 31/0; sqlite
+migrations --check clean.

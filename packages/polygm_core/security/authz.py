@@ -66,7 +66,10 @@ LEVELS_TABLE: dict[str, tuple[str, str]] = {
     "POST /v1/wallet/withdrawal-addresses/add": (USER, "scoped:withdrawal_address_id"),
     "POST /v1/wallet/withdrawal-addresses/remove": (USER, "scoped:withdrawal_address_id"),
     "POST /v1/wallet/withdraw": (USER, ""),
-    "POST /v1/wallet/export": (USER, ""),
+    # P08 wrote this row as `POST /v1/wallet/export` and never served it. P12 D6 serves the export at
+    # `POST /v1/wallet/keys/export` (the ledger, the contract and the route all say `keys/`), so the old
+    # spelling is GONE rather than kept beside it: two rows for one endpoint, one of them dead, is exactly
+    # the corpse this table's staleness check exists to find.
     "GET /v1/copy/record": (PUBLIC, ""),
     # P06 wrote this row as `POST /v1/copy/config` (singular) and never served it. P10 serves the collection:
     # `POST /v1/copy/configs` creates, `GET /v1/copy/configs` lists, and both are declared with the P10 block

@@ -51,6 +51,15 @@ TABLE_FOR_PATH = {
     # P12. The webhook answers 403 when the secret header is wrong and 503 when no secret is configured on the
     # pod; the Mini App session answers 401 for a tampered payload and 409 for a replayed one (the same two
     # statuses /v1/auth/telegram uses), and a drain or a metrics read is 403 without the admin token.
+    # P12 D6, the wallet. Six routes, each with its own table because each answers a different set of refusals:
+    # a balance read can 401 and nothing else, while the withdrawal ceremony can answer with seven different
+    # codes in seven different situations and has to declare every one of them.
+    ("GET", "/v1/wallet/balance"): "WALLET_BALANCE_RESPONSES",
+    ("GET", "/v1/wallet/transactions"): "WALLET_TX_RESPONSES",
+    ("POST", "/v1/wallet/deposit/quote"): "DEPOSIT_QUOTE_RESPONSES",
+    ("GET", "/v1/wallet/deposit/{deposit_id}"): "DEPOSIT_PROGRESS_RESPONSES",
+    ("POST", "/v1/wallet/withdraw"): "WITHDRAW_RESPONSES",
+    ("POST", "/v1/wallet/keys/export"): "KEY_EXPORT_RESPONSES",
     ("POST", "/v1/telegram/webhook"): "TELEGRAM_WEBHOOK_RESPONSES",
     ("POST", "/v1/telegram/session"): "TELEGRAM_SESSION_RESPONSES",
     "/v1/telegram/commands": "TELEGRAM_COMMANDS_RESPONSES",

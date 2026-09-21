@@ -244,6 +244,11 @@ export function plainRefusal(code: string, detail?: string): string {
     RATE_LIMITED: "That is more requests than can be sent for you at once. Give it a second.",
     UNAUTHENTICATED: "Nothing was placed: this view is read-only. Open the bot and tap Trade to place an order.",
     REFUSED: "The venue refused the order. Nothing was placed.",
+    // P12 D6's wallet ceremony. Same three keys as the Python table, checked key-for-key by the P12 gate.
+    INSUFFICIENT_BALANCE: "That is more than your available cash, so nothing was sent. Deposit first, or use a smaller amount.",
+    PASSWORD_REQUIRED: "Set a withdrawal password first — it is the second lock on money leaving.",
+    PASSWORD_WRONG: "That password did not match, so nothing was sent. Try again, or reset it from the bot if you have forgotten it.",
+    ADDRESS_NOT_ALLOWED: "That destination is not on your allowlist, and an address can be added only from the bot. Nothing was sent.",
   };
   return table[code] ?? detail ?? `That did not go through (${code}). Nothing was placed.`;
 }

@@ -75,9 +75,11 @@ PLANNED_NOT_SERVED = [
     "POST /v1/admin/revoke-keys",
     "POST /v1/automation/rules",
     "POST /v1/orders/{intentId}/cancel",
-    "POST /v1/wallet/export",
-    "POST /v1/wallet/withdraw",
 ]
+# P12 D6 served them, and both sides moved together: `withdraw` and the key export (renamed to
+# `/v1/wallet/keys/export`, which is what the route, the contract and the Mini App ledger call it) left this
+# list in the same commit that shipped the handlers. The list is empty of wallet rows on purpose — nothing
+# on this list is provisional, and a name kept here after the route exists would make the assertion vacuous.
 
 
 class RouteBase(unittest.TestCase):

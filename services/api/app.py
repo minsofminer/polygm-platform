@@ -145,6 +145,13 @@ CODES = {
     "SESSION_STALE": ("this session was ended because your credentials changed", 401, False),
     "SESSION_REVOKED": ("this session has been revoked", 401, False),
     "ADMIN_REQUIRED": ("this route is admin-only", 403, False),
+    # P12 D6. `INSUFFICIENT_BALANCE` is P06's name for this in `risk/limits.py` — the venue's own gate refuses an
+    # order that costs more than the account holds — and the wallet routes adopt the same word rather than
+    # inventing a second one for the same fact.
+    "INSUFFICIENT_BALANCE": ("this costs more than your available balance", 422, False),
+    "PASSWORD_REQUIRED": ("set a withdrawal password before this action", 403, False),
+    "PASSWORD_WRONG": ("that password is not right", 403, False),
+    "ADDRESS_NOT_ALLOWED": ("that destination is not on your allowlist", 403, False),
     "LOGIN_FAILED": ("wrong user name or password", 401, False),
     "ACCOUNT_LOCKED": ("too many attempts; try again later", 429, True),
     "RATE_LIMITED": ("too many requests; try again shortly", 429, True),
@@ -282,6 +289,10 @@ del _t
 #: plan and the audit count, never from the request body. `BAD_FIELD` deliberately stays OUT: its message is
 #: generic and its detail goes to the log, because that is the path a request's own content could reach.
 _PUBLIC_DETAIL_CODES = frozenset({"REFUSED", "QUOTA_EXCEEDED", "RADAR_SCOPE",
+                                # P12-D6: "available 10.000000 USDC" is our own ledger's number and nothing from
+                                # the request, and it is the one thing that makes an insufficient-balance refusal
+                                # actionable ("deposit" vs "ask for less" is a different next step each time).
+                                "INSUFFICIENT_BALANCE",
                                 # P10-D8/D9: the four refusals above are sentences written for the user
                                 # (which plan, which limit, which next step) and contain nothing from the
                                 # request, so they are safe to say out loud.
@@ -8179,6 +8190,15 @@ _levels_p12 = {
     # The web ticket's route. A USER row for the same reason: the identity is the session, and a budget is not a
     # credential — the amount and the market in the body are the user's *question*, never their authorisation.
     "POST /v1/orders/amount": (_authz.USER, ""),
+    # P12 D6. The wallet's HTTP half. Every one of these is the caller's own money or their own key material, so
+    # every one is USER: there is no admin read of a wallet, and the operator routes that touch custody live on
+    # their own paths with their own level.
+    "GET /v1/wallet/balance": (_authz.USER, ""),
+    "GET /v1/wallet/transactions": (_authz.USER, ""),
+    "POST /v1/wallet/deposit/quote": (_authz.USER, ""),
+    "GET /v1/wallet/deposit/{deposit_id}": (_authz.USER, ""),
+    "POST /v1/wallet/withdraw": (_authz.USER, ""),
+    "POST /v1/wallet/keys/export": (_authz.USER, ""),
 }
 
 _authz.LEVELS_TABLE.update(_levels_p11)
@@ -8419,32 +8439,58 @@ def _tg_fetch(name: str, payload: dict):
             total_cost += int(cost or 0)
             mark = _tg_mark(token)
             lines.append("• %s <b>%s</b> — %s shares · cost %s" % (mkt_short := question[:60], str(outcome),
-                                                                   _tm.usdc(shares), _tm.usdc(cost)))
+                                                                   fmt_usdc(shares), fmt_usdc(cost)))
         return {"text": "<b>%d position%s</b>\n%s\n<i>cost basis %s · marks as of a moment ago</i>"
-                        % (len(rows), "" if len(rows) == 1 else "s", "\n".join(lines), _tm.usdc(total_cost))}
+                        % (len(rows), "" if len(rows) == 1 else "s", "\n".join(lines), fmt_usdc(total_cost))}
     if name == "balance":
-        row = _db.execute("SELECT COALESCE(SUM(delta_micro),0) FROM cash_ledger WHERE user_id=?", (uid,)).fetchone()
+        row = _db.execute("SELECT COALESCE(SUM(amount_micro),0) FROM cash_ledger WHERE user_id=?", (uid,)).fetchone()
         avail = int(row[0] or 0) if row else 0
         locked = _db.execute("SELECT COALESCE(SUM(notional_micro),0) FROM order_intents WHERE user_id=?"
-                            " AND state IN ('queued','submitted','live','partial')", (uid,)).fetchone()
+                             " AND state IN (%s)" % ",".join("?" * len(_OPEN_INTENT_STATES)),
+                             (uid,) + _OPEN_INTENT_STATES).fetchone()
         return {"text": "<b>Cash %s USDC</b>\nReserved by open orders: %s USDC\n<i>as of just now</i>"
-                        % (_tm.usdc(avail), _tm.usdc(int(locked[0] or 0) if locked else 0))}
+                        % (fmt_usdc(avail), fmt_usdc(int(locked[0] or 0) if locked else 0))}
     if name == "pnl":
-        row = _db.execute("SELECT COALESCE(SUM(CASE WHEN kind='realised' THEN delta_micro ELSE 0 END),0)"
-                          " FROM cash_ledger WHERE user_id=?", (uid,)).fetchone()
-        realised = int(row[0] or 0) if row else 0
-        peak = _db.execute("SELECT COALESCE(MAX(balance_micro),0) FROM position_snapshots WHERE user_id=?",
+        # Realised PnL, from the ledger and the lots — no third bookkeeping system, because a number computed
+        # twice is a number that can disagree with itself. Exits (`sell_fill`, `merge_receipt`) and settlements
+        # (`resolution_payout`) are money in; the basis they released is `invested - still open` (a lot is
+        # reduced in place, so the released part is a subtraction of two sums, not a stored column); platform
+        # `fee` rows come off the top. A BUY already carries its venue fee inside `basis_micro`, and a SELL's
+        # proceeds are already net of it, so fees are not double-counted - only ours are subtracted here.
+        exits = _db.execute("SELECT COALESCE(SUM(amount_micro),0) FROM cash_ledger WHERE user_id=? AND kind IN"
+                            " ('sell_fill','merge_receipt','resolution_payout')", (uid,)).fetchone()
+        invested = _db.execute("SELECT COALESCE(SUM(-amount_micro),0) FROM cash_ledger WHERE user_id=?"
+                               " AND kind='buy'", (uid,)).fetchone()
+        open_basis = _db.execute("SELECT COALESCE(SUM(basis_micro),0) FROM position_lots WHERE user_id=?"
+                                 " AND shares_open_micro>0", (uid,)).fetchone()
+        our_fees = _db.execute("SELECT COALESCE(SUM(-amount_micro),0) FROM cash_ledger WHERE user_id=?"
+                               " AND kind='fee'", (uid,)).fetchone()
+        released = max(0, int(invested[0] or 0) - int(open_basis[0] or 0))
+        realised = int(exits[0] or 0) - released - int(our_fees[0] or 0)
+        # The peak is the peak of *cash on hand* over the ledger's own history: this build keeps no equity curve
+        # for our own users, and inventing one to decorate a chat card would be the lie. So the card says cash,
+        # and the drawdown below it is measured against that peak - the P04 rule ("drawdown wherever a PnL
+        # appears") survives the smaller vocabulary intact.
+        row = _db.execute("SELECT COALESCE(MAX(running),0), COALESCE(MIN(running),0) FROM (SELECT SUM(amount_micro)"
+                          " OVER (ORDER BY created_ms, id) AS running FROM cash_ledger WHERE user_id=?)",
                           (uid,)).fetchone()
-        return {"text": "<b>Realised %s USDC</b>\n<i>Peak book value %s USDC. Drawdown is measured against that "
-                        "peak, not against yesterday — a flat week after a good one is still a drawdown.</i>"
-                        % (_tm.usdc(realised), _tm.usdc(int(peak[0] or 0) if peak else 0))}
+        peak = int(row[0] or 0) if row else 0
+        low = int(row[1] or 0) if row else 0
+        now = _db.execute("SELECT COALESCE(SUM(amount_micro),0) FROM cash_ledger WHERE user_id=?", (uid,)).fetchone()
+        cash_now = int(now[0] or 0) if now else 0
+        drawdown = max(0, peak - cash_now)
+        return {"text": "<b>Realised %s USDC</b>\nPeak cash %s USDC · drawdown %s USDC\n<i>Drawdown is measured "
+                        "against the peak, not against yesterday — a flat week after a good one is still a "
+                        "drawdown. Realised counts exits and settlements minus the cost basis they released and "
+                        "our own fees; the low so far on cash is %s USDC. Open positions are not marked here.</i>"
+                        % (fmt_usdc(realised), fmt_usdc(peak), fmt_usdc(drawdown), fmt_usdc(low))}
     if name == "orders":
         rows = _db.execute("SELECT id, state, side, price_micro, size_micro, risk_code FROM order_intents"
                           " WHERE user_id=? ORDER BY created_ms DESC LIMIT 10", (uid,)).fetchall()
         if not rows:
             return {"text": ""}
-        lines = ["• <code>%s</code> %s %s %s @ %s%s" % (str(r[0])[:12], str(r[1]), str(r[2]), _tm.usdc(r[4]),
-                                                        _tm.usdc(r[3]), ("  ⚠️ %s" % r[5]) if r[5] else "")
+        lines = ["• <code>%s</code> %s %s %s @ %s%s" % (str(r[0])[:12], str(r[1]), str(r[2]), fmt_usdc(r[4]),
+                                                        fmt_usdc(r[3]), ("  ⚠️ %s" % r[5]) if r[5] else "")
                  for r in rows]
         return {"text": "<b>Last %d order%s</b>\n%s" % (len(rows), "" if len(rows) == 1 else "s", "\n".join(lines))}
     if name == "top":
@@ -8476,11 +8522,15 @@ def _tg_fetch(name: str, payload: dict):
                         "below opens it.\n\n<i>Never paste a seed phrase anywhere, including here. We will never "
                         "ask for one.</i>" % str(row[1])}
     if name == "history":
-        rows = _db.execute("SELECT kind, delta_micro, at_ms FROM cash_ledger WHERE user_id=?"
-                          " ORDER BY at_ms DESC LIMIT 8", (uid,)).fetchall()
+        # The reason is the point of the row: "adjust −4.20" with no sentence is the ledger entry a support
+        # ticket is made of, and the API's own `/v1/wallet/transactions` carries it verbatim. A card that shows
+        # the kind and the amount and drops the reason is the version that generates the ticket.
+        rows = _db.execute("SELECT kind, amount_micro, created_ms, reason FROM cash_ledger WHERE user_id=?"
+                           " ORDER BY created_ms DESC LIMIT 8", (uid,)).fetchall()
         if not rows:
             return {"text": ""}
-        lines = ["• %s  %s  <i>%s</i>" % (str(k), _tm.usdc(d), _tg_when(a)) for k, d, a in rows]
+        lines = ["• %s  %s  <i>%s</i>\n  %s" % (str(k), fmt_usdc(d), _tg_when(a), str(r or "")[:80])
+                 for k, d, a, r in rows]
         return {"text": "<b>Recent movements</b>\n%s" % "\n".join(lines)}
     if name == "verify_handle":
         handle = str(payload.get("handle") or "").lstrip("@").lower()
@@ -8784,6 +8834,13 @@ def _tg_plain_refusal(code: str, detail: str = "") -> str:
     """
     table = {
         # --- pauses and platform state ---------------------------------------------------------------
+        "PASSWORD_REQUIRED": "Set a withdrawal password first — it is the second lock on money leaving.",
+        "PASSWORD_WRONG": "That password did not match, so nothing was sent. Try again, or reset it from the bot "
+                        "if you have forgotten it.",
+        "ADDRESS_NOT_ALLOWED": "That destination is not on your allowlist, and an address can be added only "
+                             "from the bot. Nothing was sent.",
+        "INSUFFICIENT_BALANCE": "That is more than your available cash, so nothing was sent. Deposit first, or use "
+                              "a smaller amount.",
         "RISK_HALT": "Trading is paused right now — the platform's kill switch is engaged. Nothing you did caused it.",
         "HALTED": ("Your account is stopped for the day: your own daily-loss limit was hit. It can be lifted from "
                    "the app once you have read what happened."),
@@ -9373,6 +9430,437 @@ def _tg_absorb_order_events(*, at: int | None = None, limit: int = 50) -> dict:
             skipped["nothing to send"] = skipped.get("nothing to send", 0) + 1
     return {"routed": routed, "alreadyQueued": already, "skipped": skipped,
             "scanned": len(rows), "windowMs": _TG_ORDER_EVENT_WINDOW_MS}
+
+
+# ------------------------------------------------------------------------------------ P12 · D6: the wallet, over HTTP
+# The bot has had the custody ceremony since P07 — `/wallet`, `/deposit`, `/withdraw` and the key export all run
+# through `_tg_fetch` and the router's sessions. What the *webview* had was five ledger rows marked `built: false`,
+# which is the honest way to say "the Mini App cannot do this yet" and the exact gap D6 closes: the wallet, its QR,
+# the deposit's progress across the bridge, the withdrawal ceremony and the key export, all reachable by the Mini
+# App's own session. These routes are the HTTP half of ceremonies that already exist; nothing here invents a rule.
+WALLET_BALANCE_RESPONSES = {
+    200: {"description": "the wallet, its custody mode, and the cash the ledger says is available"},
+    **{status: {"description": msg} for msg, status, _retry in CODES.values()},
+}
+WALLET_TX_RESPONSES = {
+    200: {"description": "the ledger's own entries, newest first, with a cursor"},
+    **{status: {"description": msg} for msg, status, _retry in CODES.values()},
+}
+DEPOSIT_QUOTE_RESPONSES = {
+    202: {"description": "a deposit intent: where to send it, and what the bridge will do with it"},
+    **{status: {"description": msg} for msg, status, _retry in CODES.values()},
+}
+DEPOSIT_PROGRESS_RESPONSES = {
+    200: {"description": "the four legs of a deposit, each with its own state and time"},
+    **{status: {"description": msg} for msg, status, _retry in CODES.values()},
+}
+WITHDRAW_RESPONSES = {
+    202: {"description": "the withdrawal is recorded and queued; signing is the custody plane's job"},
+    **{status: {"description": msg} for msg, status, _retry in CODES.values()},
+}
+KEY_EXPORT_RESPONSES = {
+    200: {"description": "the wrapped key material, once, with the ceremony's audit trail behind it"},
+    **{status: {"description": msg} for msg, status, _retry in CODES.values()},
+}
+
+#: The chains the deposit screen may offer. A chain is not a free-text field: a deposit intent names one of these or
+#: it is not an intent. (Adding a chain is a decision with a bridge behind it, so the list lives here and not in a UI.)
+_DEPOSIT_CHAINS = ("ethereum", "base", "polygon", "arbitrum")
+#: How many confirmations we wait for before crediting. Per chain, because they are not the same chain.
+_DEPOSIT_CONFIRMATIONS = {"ethereum": 12, "base": 5, "polygon": 128, "arbitrum": 8}
+
+
+def _wallet_row(uid: str) -> dict | None:
+    """The caller's wallet, in any state a deposit can go into. `suspended`/`closing` are not destinations."""
+    row = _db.execute("SELECT user_id, provider, custody, address, proxy_address, state, policy_hash, policy_gap,"
+                      " created_ms FROM wallets WHERE user_id=? AND state IN"
+                      " ('provisioned','funded','trading') ORDER BY created_ms LIMIT 1", (str(uid),)).fetchone()
+    if row is None:
+        return None
+    keys = ("userId", "provider", "custody", "address", "proxyAddress", "state", "policyHash", "policyGap",
+            "createdMs")
+    return dict(zip(keys, row))
+
+
+def _cash_available_micro(uid: str) -> int:
+    """Cash, from the ledger the money path writes. `balances` is a cache of this, not a second opinion."""
+    row = _db.execute("SELECT COALESCE(SUM(amount_micro),0) FROM cash_ledger WHERE user_id=?",
+                      (str(uid),)).fetchone()
+    return int(row[0] or 0) if row else 0
+
+
+#: The intent states in which cash is committed and must NOT be shown as available. `pending` and `uncertain`
+#: belong here for opposite reasons and both matter: `pending` is an order the risk gate has not answered yet, and
+#: `uncertain` is one that was sent and not acknowledged — the exact case where "your cash is available" would
+#: invite a second order against money that may already be spent. `live`/`partial` were in this tuple and are
+#: *orders* states, not intent states (`0002_money.sql` CHECKs the intent column), so they matched nothing.
+_OPEN_INTENT_STATES = ("pending", "queued", "submitting", "uncertain", "submitted")
+
+
+def _cash_reserved_micro(uid: str) -> int:
+    row = _db.execute("SELECT COALESCE(SUM(notional_micro),0) FROM order_intents WHERE user_id=? AND state IN"
+                      " (%s)" % ",".join("?" * len(_OPEN_INTENT_STATES)),
+                      (str(uid),) + _OPEN_INTENT_STATES).fetchone()
+    return int(row[0] or 0) if row else 0
+
+
+def _password_ok(uid: str, password: str) -> tuple[bool, str]:
+    """`(ok, code)` — `PASSWORD_REQUIRED` when none is set, `PASSWORD_WRONG` when it does not match.
+
+    The same Argon2id envelope the sign-in path uses (P07): one password, one hasher, one cost. A second hasher for
+    "money actions" is how a product ends up with a weaker lock on the door with the money behind it.
+    """
+    cred = SEC.credential(str(uid))
+    if not cred:
+        return False, "PASSWORD_REQUIRED"
+    try:
+        verdict = _hasher().verify(str(cred["phc"]), str(password or ""))
+    except Exception:                                     # noqa: BLE001 — a malformed envelope is a wrong password
+        return False, "PASSWORD_WRONG"
+    return (True, "ok") if verdict.startswith("ok") else (False, "PASSWORD_WRONG")
+
+
+@app.get("/v1/wallet/balance", responses=WALLET_BALANCE_RESPONSES)
+def wallet_balance(request: Request):
+    """The wallet card: what you hold, what is reserved, where to send money, and which locks are armed.
+
+    The address is returned *here* and deliberately not in the chat (the bot's own comment: a chat message is the one
+    surface a user forwards to a stranger). The Mini App is a session-bearing surface whose whole audience is the
+    account that owns the wallet, which is exactly where a deposit address belongs.
+    """
+    rid = request.state.request_id
+    uid, _row, deny = _principal(request)
+    if deny is not None:
+        return deny
+    if not uid:
+        return err("UNAUTHENTICATED", rid)
+    w = _wallet_row(str(uid))
+    cred = SEC.credential(str(uid))
+    totp = SEC.totp_state(str(uid)) or {}
+    return _stamped({
+        "cacheKey": "wallet:balance:%s" % uid,
+        "wallet": w,
+        "cashMicro": str(_cash_available_micro(str(uid))),
+        "reservedMicro": str(_cash_reserved_micro(str(uid))),
+        "chains": [{"chain": c, "confirmations": int(_DEPOSIT_CONFIRMATIONS[c])} for c in _DEPOSIT_CHAINS],
+        "locks": {"password": bool(cred), "totp": bool(totp.get("verified_ms")),
+                  "custody": str((w or {}).get("custody") or "")},
+        "note": ("Deposits are credited after the bridge lands; the address below is yours alone."
+                 if w else "No wallet yet — /wallet in the bot creates one, and this screen fills in with it."),
+    }, ttl_ms=5_000, stale_ms=60_000)
+
+
+@app.get("/v1/wallet/transactions", responses=WALLET_TX_RESPONSES)
+def wallet_transactions(request: Request, limit: int = Query(default=25, ge=1, le=100),
+                        beforeMs: int = Query(default=0, ge=0)):
+    """The ledger's own entries. `cash_ledger` is append-only and every row is money that moved, so this is a
+    statement rather than a feed — and the reason is carried through verbatim, because "adjust" with no sentence is
+    the row a support ticket is made of."""
+    rid = request.state.request_id
+    uid, _row, deny = _principal(request)
+    if deny is not None:
+        return deny
+    if not uid:
+        return err("UNAUTHENTICATED", rid)
+    n = max(1, min(int(limit or 25), 100))
+    rows = _db.execute("SELECT kind, amount_micro, created_ms, reason, ref_table, ref_id FROM cash_ledger WHERE"
+                       " user_id=? AND (? = 0 OR created_ms < ?) ORDER BY created_ms DESC, id DESC LIMIT ?",
+                       (str(uid), int(beforeMs or 0), int(beforeMs or 0), n)).fetchall()
+    out = [{"kind": str(r[0]), "deltaMicro": str(r[1]), "atMs": int(r[2]), "reason": str(r[3]),
+            "ref": "%s:%s" % (str(r[4]), str(r[5])[:24])} for r in rows]
+    return _stamped({"cacheKey": "wallet:tx:%s" % uid, "entries": out, "count": len(out),
+                     "nextBeforeMs": int(rows[-1][2]) if len(rows) >= n else 0,
+                     "note": "Every row here is money that moved. Balances are the sum of this list, not a separate "
+                             "number kept alongside it."},
+                    ttl_ms=10_000, stale_ms=120_000)
+
+
+@app.post("/v1/wallet/deposit/quote", status_code=202, responses=DEPOSIT_QUOTE_RESPONSES,
+          openapi_extra=_body_schema(("chain", "amountUsdc"), {
+              "chain": {"type": "string", "enum": list(_DEPOSIT_CHAINS)},
+              "amountUsdc": {"type": "string", "pattern": "^[0-9]{1,9}(\\.[0-9]{1,6})?$"}}))
+def wallet_deposit_quote(request: Request, body: dict = Body(...),
+                         idempotency_key: str | None = Header(default=None, alias="Idempotency-Key")):
+    """A deposit intent: the address to send to, and the four legs this app will then report on.
+
+    Declared as a POST because it *creates* something — a `deposits` row in `detecting` — and the key makes a retry
+    the same intent rather than a second one. No money moves here and none can: the row is a promise to watch an
+    address, and the credit happens when the bridge lands, through `book_fill`'s siblings in the ledger.
+    """
+    rid = request.state.request_id
+    uid, _row, deny = _principal(request)
+    if deny is not None:
+        return deny
+    if not uid:
+        return err("UNAUTHENTICATED", rid)
+    bad = _check_body(body, ("chain", "amountUsdc"), rid)
+    if bad is not None:
+        return bad
+    chain = str(body["chain"]).strip().lower()
+    if chain not in _DEPOSIT_CHAINS:
+        return err("BAD_FIELD", rid, where=["chain"],
+                   detail="we accept deposits on %s" % ", ".join(_DEPOSIT_CHAINS))
+    bad_key = _idem_shape(idempotency_key)
+    if bad_key is not None:
+        return bad_key
+    try:
+        amount_micro = parse_usdc(str(body["amountUsdc"]))
+    except Exception:                                     # noqa: BLE001
+        return err("BAD_AMOUNT", rid, where=["amountUsdc"])
+    if amount_micro <= 0:
+        return err("ZERO_SIZE", rid, where=["amountUsdc"])
+
+    def work() -> dict:
+        w = _wallet_row(str(uid))
+        if not w or not w.get("address"):
+            # `err(...)`, not a dict: `_idem_run` files a dict as the stored success answer, so a refusal shaped
+            # like one was answered 202 with `ok: false` inside — a deposit intent that does not exist, reported
+            # as created. (The same shape is fine for `/v1/orders`, where the route returns it directly.)
+            return err("NOT_FOUND", rid, detail="no wallet yet — the bot creates one with /wallet")
+        at = _now_ms()
+        # One row per (user, chain, amount, hour): a client that taps twice in a minute is watching the same deposit,
+        # and a *second* deposit of the same size an hour later is a second row, which is the truth.
+        credit_key = "dep:%s:%s:%s:%d" % (uid, chain, amount_micro, at // 3_600_000)
+        row = _db.execute("SELECT id, status, confirmations, first_seen_ms FROM deposits WHERE credit_key=?",
+                          (credit_key,)).fetchone()
+        if row is None:
+            cur = _db.execute("INSERT INTO deposits (user_id, asset, chain, amount_micro, credit_key, status,"
+                              " confirmations, first_seen_ms) VALUES (?,?,?,?,?,'detecting',0,?)",
+                              (str(uid), "USDC", chain, amount_micro, credit_key, at))
+            _db.commit()
+            did = int(getattr(cur, "lastrowid", 0) or 0)
+            status, confirmations, seen = "detecting", 0, at
+        else:
+            did, status, confirmations, seen = int(row[0]), str(row[1]), int(row[2]), int(row[3])
+        return {"ok": True, "depositId": did, "chain": chain, "status": status, "confirmations": confirmations,
+                "firstSeenMs": seen, "address": str(w["address"]), "proxyAddress": str(w.get("proxyAddress") or ""),
+                "amountMicro": str(amount_micro),
+                "minConfirmations": int(_DEPOSIT_CONFIRMATIONS[chain])}
+
+    return _idem_run(str(uid), str(idempotency_key), body, rid, work)
+
+
+@app.get("/v1/wallet/deposit/{deposit_id}", responses=DEPOSIT_PROGRESS_RESPONSES)
+def wallet_deposit_progress(request: Request, deposit_id: int):
+    """The four legs, as states with times — the progress screen's whole input.
+
+    `detecting → confirming → bridging → crediting → credited` is the schema's own vocabulary, so this route maps
+    rather than invents: each leg says what it is waiting for, and a `stuck`/`failed` deposit carries the reason it
+    stopped instead of a spinner that never ends.
+    """
+    rid = request.state.request_id
+    uid, _row, deny = _principal(request)
+    if deny is not None:
+        return deny
+    if not uid:
+        return err("UNAUTHENTICATED", rid)
+    row = _db.execute("SELECT id, chain, amount_micro, status, confirmations, tx_hash, bridge_tx_hash,"
+                      " first_seen_ms, resolved_ms, attempts, last_error FROM deposits WHERE id=? AND user_id=?",
+                      (int(deposit_id), str(uid))).fetchone()
+    if row is None:
+        # Not yours and does not exist are the same answer, which is the P07 rule for every owned resource.
+        return err("NOT_FOUND", rid, detail="no such deposit")
+    (did, chain, amount_micro, status, confirmations, tx_hash, bridge_tx_hash, seen, resolved, attempts,
+     last_error) = row
+    min_conf = int(_DEPOSIT_CONFIRMATIONS.get(str(chain), 12))
+    order = ["detecting", "confirming", "bridging", "crediting", "credited"]
+    stopped = str(status) in ("stuck", "failed")
+    idx = order.index(str(status)) if str(status) in order else len(order)
+    labels = {"detecting": "Watching for your transfer",
+              "confirming": "Waiting for %d confirmations on %s" % (min_conf, chain),
+              "bridging": "Bridging to the venue's chain",
+              "crediting": "Crediting your balance",
+              "credited": "Credited"}
+    steps = []
+    for i, key in enumerate(order):
+        state = "done" if i < idx or str(status) == "credited" else ("active" if i == idx else "pending")
+        if stopped:
+            # `stuck`/`failed` used to fall through to `idx = len(order)`, which painted all five legs green - a
+            # stopped deposit reported as a finished one. The row does not say *which* leg it stopped on, so the
+            # screen says what is true: nothing further has happened, and the last leg is where it stopped.
+            state = "stopped" if i == len(order) - 1 else "pending"
+        steps.append({"key": key, "label": "Stopped — a human has this" if state == "stopped" else labels[key],
+                      "state": state,
+                      "doneMs": int(resolved or 0) if state == "done" and key == "credited" else 0})
+    return _stamped({"cacheKey": "wallet:deposit:%s:%d" % (uid, int(deposit_id)),
+                     "depositId": int(did), "chain": str(chain), "amountMicro": str(amount_micro),
+                     "status": str(status), "confirmations": int(confirmations), "minConfirmations": min_conf,
+                     "txHash": str(tx_hash or ""), "bridgeTxHash": str(bridge_tx_hash or ""),
+                     "firstSeenMs": int(seen), "resolvedMs": int(resolved or 0), "attempts": int(attempts or 0),
+                     "steps": steps,
+                     "problem": ("" if str(status) not in ("stuck", "failed") else
+                                 str(last_error or "the transfer stopped and a human has the case"))},
+                    ttl_ms=2_000, stale_ms=30_000)
+
+
+@app.post("/v1/wallet/withdraw", status_code=202, responses=WITHDRAW_RESPONSES,
+          openapi_extra=_body_schema(("amountUsdc", "addressId", "typedAmount", "typedAddress", "password", "code"), {
+              "amountUsdc": {"type": "string", "pattern": "^[0-9]{1,9}(\\.[0-9]{1,2})?$"},
+              "addressId": {"type": "string", "minLength": 1, "maxLength": 64},
+              "typedAmount": {"type": "string", "minLength": 1, "maxLength": 32},
+              "typedAddress": {"type": "string", "minLength": 4, "maxLength": 128},
+              "password": {"type": "string", "minLength": 1, "maxLength": 200},
+              "code": {"type": "string", "minLength": 6, "maxLength": 10}}))
+def wallet_withdraw(request: Request, body: dict = Body(...),
+                    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key")):
+    """The withdrawal ceremony, in the order the locks are: allowlist, cooldown, typed confirmation, password, TOTP.
+
+    Every refusal is its own code, because "no" is not an answer at 2am: a destination that is not on the list, one
+    that is still inside its 24-hour hold, a typed amount that does not match, a missing password, a wrong password,
+    a missing authenticator and a stale code are seven different situations with seven different next steps.
+
+    The last thing this does is *record* the request. Signing is the custody plane's job (P13/P14) and the response
+    says so in words, because a screen that says "sent" about an unsigned transaction is the exact lie this build
+    refuses to ship.
+    """
+    rid = request.state.request_id
+    uid, _row, deny = _principal(request)
+    if deny is not None:
+        return deny
+    if not uid:
+        return err("UNAUTHENTICATED", rid)
+    # `destAddress` is in `allowed` on purpose: `_check_body`'s default is "anything not required is unknown",
+    # which turned a client that sent a raw destination into a generic VALIDATION before the handler could name
+    # the rule it broke. Accepting the field in order to refuse it is the difference between "unknown: destAddress"
+    # and "withdrawals go to an addressId from your allowlist".
+    bad = _check_body(body, ("amountUsdc", "addressId", "typedAmount", "typedAddress", "password", "code"), rid,
+                      allowed=("amountUsdc", "addressId", "typedAmount", "typedAddress", "password", "code",
+                               "destAddress"))
+    if bad is not None:
+        return bad
+    if body.get("destAddress"):
+        # A raw address is refused even though the schema has no such field, because a client that sends one is a
+        # client telling us where money should go, and only the allowlist may do that.
+        return err("ADDRESS_NOT_ALLOWED", rid, where=["destAddress"],
+                   detail="withdrawals go to an addressId from your allowlist; add one in the bot first")
+    bad_key = _idem_shape(idempotency_key)
+    if bad_key is not None:
+        return bad_key
+
+    def work():
+        """The ceremony runs INSIDE the key, and that ordering is the whole design.
+
+        `_totp_gate` consumes an authenticator step. A client whose withdrawal succeeded but whose response was
+        lost retries with the same key, and if the locks ran before the idempotency check it would be answered
+        `TOTP_INVALID` — the retry of a completed withdrawal reported as a failed one, and the user asked to try
+        again for something that already happened. A refusal returns `err(...)`, which `_idem_run` reads as "abandon
+        the key", so a user who mistyped their password can retry; the ceremony's state changes only in the one
+        branch that gets to the end.
+        """
+        w = _wallet_row(str(uid))
+        if w is None:
+            return err("NOT_FOUND", rid, detail="no wallet yet — the bot creates one with /wallet")
+        if str(w.get("custody")) != "delegated":
+            return err("SIGNER_UNAVAILABLE", rid,
+                       detail="this wallet is watch-only, so nothing can be signed from it")
+        try:
+            amount_micro = parse_usdc(str(body["amountUsdc"]))
+        except Exception:                                 # noqa: BLE001
+            return err("BAD_AMOUNT", rid, where=["amountUsdc"])
+        if amount_micro <= 0:
+            return err("ZERO_SIZE", rid, where=["amountUsdc"])
+        avail = _cash_available_micro(str(uid))
+        if amount_micro > avail:
+            return err("INSUFFICIENT_BALANCE", rid, where=["amountUsdc"],
+                       detail="available %s USDC" % _micro_str(avail, scale=6))
+        ok, code, addr_row = SEC.address_for_withdrawal(str(uid), str(body["addressId"]), at=_now_ms())
+        if not ok:
+            return err(code if code in CODES else "NOT_FOUND", rid,
+                       detail=str((addr_row or {}).get("message") or "")[:160])
+        dest = str(addr_row["address"])
+        # The typed confirmation: the product's own "type it back" rule, and the reason a clipboard-swap cannot
+        # land. Both fields must match what the user was shown, exactly.
+        if str(body["typedAmount"]).strip() != str(body["amountUsdc"]).strip():
+            return err("BAD_FIELD", rid, where=["typedAmount"],
+                       detail="type the amount exactly as shown, digits and all")
+        if str(body["typedAddress"]).strip() != dest:
+            return err("BAD_FIELD", rid, where=["typedAddress"],
+                       detail="the destination you typed is not the address the allowlist holds")
+        ok, pw_code = _password_ok(str(uid), str(body.get("password") or ""))
+        if not ok:
+            return err(pw_code, rid, where=["password"])
+        gate = _totp_gate(request, str(uid), str(body.get("code") or ""), action="withdraw")
+        if gate is not None:
+            return gate
+        at = _now_ms()
+        wid = _db.execute("INSERT INTO withdrawals (user_id, asset, chain, amount_micro, dest_address, typed_amount,"
+                          " typed_address, allowlist_hit, cooldown_ok, password_verified, status, idempotency_key,"
+                          " requested_ms) VALUES (?,?,?,?,?,?,?,1,1,1,'queued',?,?) RETURNING id",
+                          (str(uid), "USDC", str(addr_row.get("chain") or "polygon"), amount_micro, dest,
+                           str(body["typedAmount"]), str(body["typedAddress"]), str(idempotency_key),
+                           at)).fetchone()
+        SEC.auth_event(str(uid), "withdraw_requested", at=at,
+                       detail={"amount_micro": amount_micro, "address_id": str(body["addressId"])[:32],
+                               "withdrawal": int(wid[0]) if wid else 0})
+        _tg_metric(chat_id="", chat_type="private", user_id=str(uid), command="withdraw", action="requested",
+                   ok=True, dur_ms=0, update_id=0)
+        return {"ok": True, "withdrawalId": int(wid[0]) if wid else 0, "status": "queued",
+                "amountMicro": str(amount_micro), "destination": dest,
+                "notified": {"email": False, "telegram": False},
+                "note": "Recorded and queued. Signing runs on the custody plane, which is not live until P14 — "
+                        "until then this row is the request, not a payment, and it says so on the screen too."}
+
+    return _idem_run(str(uid), str(idempotency_key), body, rid, work)
+
+
+@app.post("/v1/wallet/keys/export", responses=KEY_EXPORT_RESPONSES,
+          openapi_extra=_body_schema(("password", "code", "typedConfirm"), {
+              "password": {"type": "string", "minLength": 1, "maxLength": 200},
+              "code": {"type": "string", "minLength": 6, "maxLength": 10},
+              "typedConfirm": {"type": "string", "enum": ["EXPORT"]}}))
+def wallet_key_export(request: Request, body: dict = Body(...),
+                      idempotency_key: str | None = Header(default=None, alias="Idempotency-Key")):
+    """The key export ceremony: password + authenticator + typing EXPORT, then the wrapped material once.
+
+    What is returned is the *wrapped* DEK — the blob the keeper holds, with its KEK version and policy hash — not a
+    private key, because a private key is derivable only through the custody plane and this route refuses to pretend
+    otherwise. The unwrapping ceremony belongs to go-live (P14); until then the honest answer to "give me my key" is
+    "here is your material and here is why it is not usable yet", which is precisely what the response says.
+
+    Counted against the wrap's nonce budget (`note_wrap_used`), because an export that runs the counter out is a
+    wallet that can no longer sign, and an export ceremony nobody rate-limits is not a ceremony.
+    """
+    rid = request.state.request_id
+    uid, _row, deny = _principal(request)
+    if deny is not None:
+        return deny
+    if not uid:
+        return err("UNAUTHENTICATED", rid)
+    bad = _check_body(body, ("password", "code", "typedConfirm"), rid)
+    if bad is not None:
+        return bad
+    if str(body.get("typedConfirm")) != "EXPORT":
+        return err("BAD_FIELD", rid, where=["typedConfirm"], detail="type EXPORT to confirm you understand")
+    ok, pw_code = _password_ok(str(uid), str(body.get("password") or ""))
+    if not ok:
+        return err(pw_code, rid, where=["password"])
+    gate = _totp_gate(request, str(uid), str(body.get("code") or ""), action="key_export")
+    if gate is not None:
+        return gate
+    wrap = SEC.key_wrap(str(uid))
+    if not wrap:
+        return err("NOT_FOUND", rid, detail="no key material for this account yet")
+    used = SEC.note_wrap_used(str(uid), int(wrap["dek_version"]), at=_now_ms())
+    if not used.get("ok"):
+        SEC.auth_event(str(uid), "key_export_blocked", at=_now_ms(),
+                       detail={"why": str(used.get("why") or ""), "dek_version": int(wrap["dek_version"])})
+        return err("SIGNER_UNAVAILABLE", rid, detail="this key needs re-wrapping before more signatures: %s"
+                   % str(used.get("why") or "")[:120])
+    SEC.auth_event(str(uid), "key_export", at=_now_ms(),
+                   detail={"dek_version": int(wrap["dek_version"]), "wraps_used": int(used["messages_wrapped"])})
+    payload = _stamped({"cacheKey": None, "dekVersion": int(wrap["dek_version"]),
+                     "kekVersion": int(wrap["kek_version"]), "policyHash": str(wrap["policy_hash"] or ""),
+                     "createdMs": int(wrap["created_ms"] or 0),
+                     "wrappedKey": str(wrap["wrapped_dek"]), "nonce": str(wrap["nonce"]), "tag": str(wrap["tag"]),
+                     "wrapsUsed": int(used["messages_wrapped"]),
+                     "note": "This is your wrapped key material, shown once and not stored by this response. It is "
+                             "wrapped, so it cannot sign until the custody plane unwraps it — that ceremony is part "
+                             "of go-live (P14). Store it offline; we will never ask you for it."},
+                    ttl_ms=0, stale_ms=0)
+    # `_stamped` returns a dict; setting a header on a dict is an `AttributeError` at the one moment the header
+    # matters. A real response object is what "no-store" needs, and it is the honest declaration that this body
+    # must not be cached anywhere.
+    return JSONResponse(content=payload, headers={"cache-control": "no-store"})
 
 
 # --------------------------------------------------------------------------------------- P12 · D5/D8: the channel and the switch
