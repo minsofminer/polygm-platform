@@ -101,6 +101,44 @@ signed-out visitor to sign-in.
 Verified on the deployed alias with no cookies and no `Origin`: the market page and the book answer 200 with their
 freshness stamps intact, while `/v1/public/blocks`, `/v1/markets/0xM1/fills` and `/v1/orders` all still answer 401.
 
+## The fill that was recorded and never sent
+
+D4 promises two messages the product exists to deliver: "your order filled" and "your order was refused, and here is
+why". Every piece of that existed — the executor wrote a notification row when it refused an order, `Store.book_fill`
+was the single door money came through, `render.fill_card` and `refusal_card` drew both messages, and
+`_tg_notify_fill` queued one at the top priority. What did not exist was the join. **Nothing called any of it.** A fill
+was booked, recorded, and never sent; the unit tests all passed because each was testing its own end of a wire that
+was not attached, and the phase's own acceptance run would have found it on a phone.
+
+So the join exists now, and it is in the one process that is allowed to talk to Telegram:
+
+* **The executor records, the worker sends.** `book_fill` writes the ledger and, in the same commit's wake, the order
+  event (`filled`, or `partial_fill` when the print did not complete the order). The drain —
+  `POST /v1/telegram/drain` — absorbs queued events before it plans its queue, renders the message, and sends it in the
+  same pass. Sending straight from the executor would have put a Bot API round-trip inside the money path.
+* **The card is a report, not a relay.** The first version of this code printed the numbers the notification carried.
+  A test now hands it a fill whose notification says "1 micro-share at 0.0¢ for a 0.000001 USDC fee" next to a booked
+  fill of 40 shares at 0.50 for 0.04 USDC, and asserts the card prints the *ledger's* numbers. Two prints average by
+  size, in integer micros, so a fill that went through at two prices reports what was actually paid.
+* **One message per event, enforced by the database.** The queue's `note` column cannot serve as the marker — the drain
+  appends `mid=<id>` to it on success and *replaces* it with the client's explanation on failure, so a second drain
+  found the marker gone and queued the fill again. `telegram_outbox` grew a `dedupe_key` with a partial unique index
+  (0019, still undeployed anywhere, so no ALTER was needed); the bridge keys on the notification's row id, and the test
+  that drains twice found that bug in the first place.
+* **A case row is not a fill.** The reconciler writes its own `filled` row when a fill wins a race it was not supposed
+  to win, carrying `{"case": "cancelled_race"}` and no numbers. Rendered naively that becomes "0 shares @ 0.0¢" — an
+  invented fill, worse than silence — so the bridge renders a fill only from a row that carries a token and a size, and
+  the test asserts the case row is skipped as "not a fill event".
+* **An event with nowhere to go is not consumed.** No verified Telegram identity means no message and *no burnt row*:
+  linking an account tomorrow delivers yesterday's fill rather than leaving a hole where it was.
+
+Two smaller bugs fell out of writing the tests. The worker captured its clock before absorbing, so the message it had
+just queued was "not due yet" and waited a whole tick — a fill sitting behind a millisecond. And `_tg_shares`'s
+docstring claimed `80_645_161 → "80.65"` while the code truncated to `80.64`, which meant the chat and the Mini App
+printed different numbers for the same fill (the webview used `toFixed(2)`, which rounds). The truncation is the rule
+and now the only behaviour: `sharesText` in the webview and `_tg_shares` in Python are pinned to the same three strings
+from both sides, and `0.50` no longer claims to be `0.5`.
+
 ## What a person can do today
 
 From the bot: `/start`, `/market`, 20 commands with inline keyboards, a natural-language fallback that answers with a
@@ -120,8 +158,11 @@ before the confirm; haptics on a fill or a refusal and nowhere else.
 
 ## Verification
 
-* backend `pytest` **1219 passed**; web `vitest` **492 passed / 56 files**; `tsc --noEmit` clean; `next build` clean on
+* backend `pytest` **1233 passed**; web `vitest` **502 passed / 57 files**; `tsc --noEmit` clean; `next build` clean on
   both surfaces
+* the wiring's own file: 12 tests over the drain (`TestOrderEventMessages`), plus the executor-side pair in
+  `tests/test_executor_service.py` that assert a booked fill records exactly one event, and a replayed venue trade
+  records none
 * `tools/check-openapi.py` **617 passed, 0 failed** (every route documented, every status declared)
 * `tools/p12-gate-check.py` **31 passed, 0 failed**; with `--live` **38 passed, 0 failed**, including the deployed
   Mini App's 404s, its noindex header and the API's health

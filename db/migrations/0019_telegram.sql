@@ -75,6 +75,12 @@ CREATE TABLE IF NOT EXISTS telegram_outbox (
     due_ms         BIGINT NOT NULL DEFAULT 0,
     sent_ms        BIGINT NOT NULL DEFAULT 0,
     note           TEXT NOT NULL DEFAULT '',
+    -- What makes "the same message" a thing the queue can recognise. `note` cannot do this job: the drain APPENDS
+    -- `mid=<id>` to it on a successful send and REPLACES it with the client's explanation on a failure, so a worker
+    -- that ran twice would find its marker gone and queue the fill again (found by the test that drains twice).
+    -- Empty for the one-off messages; keyed for the ones that join a producer's record to a message, today the
+    -- order-event bridge. The unique index below is what makes a duplicate impossible rather than unlikely.
+    dedupe_key     TEXT NOT NULL DEFAULT '',
     CHECK (state IN ('queued','sending','sent','failed')),
     CHECK (priority BETWEEN 1 AND 999),
     CHECK (attempts >= 0)
@@ -84,6 +90,9 @@ CREATE TABLE IF NOT EXISTS telegram_outbox (
 CREATE INDEX IF NOT EXISTS telegram_outbox_ready_ix ON telegram_outbox (state, due_ms, priority, id);
 -- Read path 2: the sending-state sweep looks for claims older than a minute (a worker that died mid-send).
 CREATE INDEX IF NOT EXISTS telegram_outbox_claim_ix ON telegram_outbox (state, claim_ms) WHERE state = 'sending';
+-- Read path 3 (and a write barrier): "has this message already been queued?" is a single index probe, and a second
+-- attempt to queue the same key is refused by the database rather than by a check somebody has to remember.
+CREATE UNIQUE INDEX IF NOT EXISTS telegram_outbox_dedupe_ix ON telegram_outbox (dedupe_key) WHERE dedupe_key <> '';
 
 CREATE TABLE IF NOT EXISTS telegram_commands (
     id          BIGSERIAL PRIMARY KEY,

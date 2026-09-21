@@ -332,6 +332,7 @@
       "dropped": [
         "partial/expression index: CREATE INDEX IF NOT EXISTS telegram_updates_state_ix ON telegram_updat",
         "partial/expression index: CREATE INDEX IF NOT EXISTS telegram_outbox_claim_ix ON telegram_outbox",
+        "partial/expression index: CREATE UNIQUE INDEX IF NOT EXISTS telegram_outbox_dedupe_ix ON telegra",
         "PG-only statement: CREATE TRIGGER append_only_telegram_broadcasts BEFORE UPDATE OR DELETE ON tele",
         "PG-only statement: DO $$"
       ],

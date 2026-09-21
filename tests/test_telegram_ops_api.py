@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import zlib
 import json
 import os
 import re
@@ -640,6 +641,293 @@ class TestMiniAppOrder(OpsBase):
         self.assertIn(second.status_code, (403, 409), second.text)
         n = self.db.execute("SELECT COUNT(*) FROM order_intents WHERE user_id=?", (UID,)).fetchone()
         self.assertEqual(1, int(n[0]), "a reused key must not place a second order")
+
+
+class TestOrderEventMessages(OpsBase):
+    """D4's wiring: what the executor records about a fill or a refusal becomes a message, exactly once.
+
+    The gap this closes was invisible to every test that existed before it: `_tg_notify_fill` was unit-tested with
+    the texts handed to it, the executor's notification rows were tested as rows, and nothing joined the two — so a
+    fill would be booked, recorded, and *never sent*. These tests call the worker (`POST /v1/telegram/drain`) and
+    read the outbox, because that is the seam.
+
+    Two facts about the fixture shape the assertions. `fills` is append-only (the trigger refuses DELETE — the trap
+    this build has hit three times), so every test gets its own ids: intent, order, market and token are named after
+    the test, nothing is cleaned up, and no test can see another's rows. And the dev/test bot client never really
+    sends, so the assertions are about what the queue holds and what the drain *attempted*, not about Telegram.
+    """
+
+    app_name = "api-telegram-order-events"
+
+    def setUp(self):
+        super().setUp()
+        # Per-test ids, because the product tables this class writes cannot be pruned: `fills` is append-only (its
+        # trigger refuses DELETE — the trap this build has hit before) and `orders` references `order_intents`, so a
+        # shared id would make the base fixture's cleanup fail with a foreign-key error rather than isolate anything.
+        # Every id here is derived from the test's own name, so no test can see another's rows.
+        tag = "".join(ch for ch in self._testMethodName if ch.isalnum())[:24]
+        self.OWNER = "u-events-%s" % tag
+        self.TG = str(770000 + zlib.crc32(tag.encode()) % 200000)
+        self.INTENT = "oi-test%s" % tag[:16]
+        self.ORDER = "o-test%s" % tag[:16]
+        self.SLUG = "fed-%s" % tag.lower()
+        self.market, _, self.token = self.seed_market(self.SLUG)
+        # The base fixture clears `telegram_outbox`; the notification rows are cleared here, scoped to this class's
+        # own intents, so a case that deliberately leaves a message unsent cannot inflate the next case's counts.
+        self.db.execute("DELETE FROM order_notifications WHERE intent_id LIKE 'oi-test%'")
+        self.db.commit()
+        self.owner()
+
+    def owner(self) -> str:
+        """The account these events belong to, with a verified Telegram identity — a fill needs somewhere to go."""
+        self.db.execute("INSERT OR IGNORE INTO users (id, created_ms, tier) VALUES (?,?, 'free')", (self.OWNER, 1))
+        self.db.execute("INSERT OR REPLACE INTO user_identities (kind, value, user_id, state, claimed_ms,"
+                        " verified_ms, proof_kind, revoked_ms) VALUES ('telegram',?,?,'verified',?,?,"
+                        " 'fixture', NULL)", (self.TG, self.OWNER, 1, 1))
+        self.db.commit()
+        return self.OWNER
+
+    # ------------------------------------------------------------------ fixtures: rows the executor would have written
+    def intent(self, *, size_micro: int = 100_000_000, price_micro: int = 500_000, state: str = "submitted") -> str:
+        at = self.app._now_ms()
+        self.db.execute("INSERT OR REPLACE INTO order_intents (id,user_id,market_id,token_id,side,price_micro,"
+                        "size_micro,notional_micro,state,risk_code,idempotency_key,created_ms,updated_ms)"
+                        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                        (self.INTENT, self.OWNER, self.market, self.token, "BUY", price_micro, size_micro,
+                         (size_micro * price_micro) // 1_000_000, state, "", "idem-%s" % self.INTENT, at, at))
+        self.db.commit()
+        return self.INTENT
+
+    def book(self, *, size_micro=40_000_000, price_micro=500_000, fee_micro=40_000, trade="0xtrade-1",
+             exchange_ts=1_700_000_000) -> None:
+        """The ledger rows a booked fill leaves: an order and a `fills` row. `book_fill` writes these."""
+        at = self.app._now_ms()
+        self.db.execute("INSERT OR REPLACE INTO orders (id,intent_id,user_id,token_id,market_id,side,price_micro,"
+                        "size_micro,size_matched_micro,state,acknowledged,builder_code,expiration_ts,placed_ms,"
+                        "updated_ms) VALUES (?,?,?,?,?,?,?,?,?,?,1,'polygm',0,?,?)",
+                        (self.ORDER, self.INTENT, self.OWNER, self.token, self.market, "BUY", price_micro, size_micro,
+                         size_micro, "filled", at, at))
+        self.db.execute("INSERT OR REPLACE INTO fills (order_id,trade_id,taker_order_id,side,price_micro,"
+                        "size_micro,notional_micro,fee_micro,maker,exchange_ts,ingest_ms,source,raw_json)"
+                        " VALUES (?,?,?,?,?,?,?,?,0,?,?,?,?)",
+                        (self.ORDER, trade, trade, "BUY", price_micro, size_micro,
+                         (size_micro * price_micro) // 1_000_000, fee_micro, exchange_ts, at, "reconcile", "{}"))
+        self.db.commit()
+
+    def record(self, event: str, detail: dict, *, at_ms: int | None = None) -> int:
+        """The event, written through the executor's own writer — `Store.notify` validates the event vocabulary, so
+        a test that typed its own INSERT could pass on an event name the real code refuses."""
+        import sys
+        ex = str(Path(__file__).resolve().parents[1] / "services" / "executor")
+        if ex not in sys.path:
+            sys.path.insert(0, ex)
+        from store import Store                                            # noqa: PLC0415
+        st = Store.open(os.environ["PGM_DB_PATH"])
+        try:
+            st.notify(intent_id=self.INTENT, user_id=self.OWNER, event=event,
+                      at=self.app._now_ms() if at_ms is None else at_ms, detail=detail)
+        finally:
+            st.close()
+        return int(self.db.execute("SELECT MAX(id) FROM order_notifications WHERE intent_id=?",
+                                   (self.INTENT,)).fetchone()[0])
+
+    def detail(self, event="filled", *, size_micro=40_000_000, price_micro=500_000, fee_micro=40_000) -> dict:
+        """Exactly what `book_fill` hands `Store.notify` (see the executor's store)."""
+        d = {"side": "BUY", "sizeMicro": str(size_micro), "priceMicro": str(price_micro),
+             "feeMicro": str(fee_micro), "notionalMicro": str((size_micro * price_micro) // 1_000_000),
+             "matchedMicro": str(size_micro), "marketId": self.market, "tokenId": self.token,
+             "tradeId": "0xtrade-1", "maker": False, "source": "reconcile"}
+        if event == "rejected":
+            d = {"code": "DAILY_CAP", "http": 403, "checks": ["daily"], "venue_code": ""}
+        return d
+
+    # ------------------------------------------------------------------ the worker
+    def drain(self, **extra) -> dict:
+        r = self.client.post("/v1/telegram/drain", json=extra, headers={"X-Admin-Token": ADMIN})
+        self.assertEqual(200, r.status_code, r.text)
+        return r.json()
+
+    def jobs(self) -> list[dict]:
+        """This test's messages, found by the chat they are addressed to.
+
+        Not by `note`: the drain REWRITES the note on every send attempt (adds `mid=<id>` on success, replaces it
+        with the client's own explanation on failure), which is precisely why the queue grew a `dedupe_key` column.
+        The chat is written once and never touched, so it is the only durable way to find a row.
+        """
+        rows = self.db.execute("SELECT id, chat_id, priority, text, note, state FROM telegram_outbox"
+                               " WHERE chat_id = ? ORDER BY id", (self.TG,)).fetchall()
+        return [{"id": int(r[0]), "chat_id": str(r[1]), "priority": int(r[2]), "text": str(r[3]),
+                 "note": str(r[4]), "state": str(r[5])} for r in rows]
+
+    # ------------------------------------------------------------------ the tests
+    def test_a_booked_fill_becomes_one_message_at_the_fill_priority(self):
+        self.intent()
+        self.book()
+        self.record("filled", self.detail())
+        out = self.drain()
+        # The report prints a shortened intent id (it is a log line, and ids are 40 characters of uuid), so the
+        # comparison is against the same truncation the report applies.
+        self.assertEqual([self.INTENT[:16]], [r["intent"] for r in out["orderEvents"]["routed"]], out["orderEvents"])
+        jobs = self.jobs()
+        self.assertEqual(1, len(jobs))
+        self.assertEqual(self.app._tgb_outbox.P_FILL, jobs[0]["priority"])
+        self.assertEqual(self.TG, jobs[0]["chat_id"], "a fill goes to the user's private chat")
+        text = jobs[0]["text"]
+        # The card, in one assertion: which market, which side (the OUTCOME, not the venue's BUY), how much, at what
+        # price, for what fee, and the position after.
+        self.assertIn("YES", text)
+        self.assertIn("filled", text)
+        self.assertIn("Will the Fed cut rates in September 2026?", text)
+        self.assertIn("40 shares", text)
+        self.assertIn("50.0¢", text)
+        self.assertIn("0.04 USDC", text)
+        self.assertIn("position now 40 shares", text)
+
+    def test_the_card_reports_the_ledger_not_the_numbers_it_was_handed(self):
+        """The bug this test would have caught: the card used to print whatever the notification carried.
+
+        Here the notification's own numbers are wrong on purpose (a 1-micro size, a 1-micro price, a 1-micro fee) and
+        the card must still read the fill that actually booked. `fills` is the money; the blob is a message.
+        """
+        self.account()
+        self.intent()
+        self.book(size_micro=40_000_000, price_micro=500_000, fee_micro=40_000)
+        self.record("filled", self.detail(size_micro=1, price_micro=1, fee_micro=1))
+        self.drain()
+        text = self.jobs()[0]["text"]
+        self.assertIn("40 shares", text)
+        self.assertIn("50.0¢", text)
+        self.assertIn("0.04 USDC", text)
+        self.assertNotIn("0.000001 USDC", text, "the fee is what the ledger booked, not what the blob claimed")
+
+    def test_two_prints_average_by_size_in_the_ledger(self):
+        """80 shares bought in two prints at different prices: the card reports the size-weighted average.
+
+        An average of prices would print 55.0¢ here too by luck, so the sizes differ: 40 @ 0.5 and 20 @ 0.65 gives
+        (20_000_000 + 13_000_000) / 60 shares = 55.0¢ — while a plain average of the two prices would say 57.5¢.
+        """
+        self.account()
+        self.intent()
+        self.book(size_micro=40_000_000, price_micro=500_000, fee_micro=40_000, trade="0xt1")
+        self.book(size_micro=20_000_000, price_micro=650_000, fee_micro=30_000, trade="0xt2", exchange_ts=1_700_000_001)
+        self.record("partial_fill", self.detail(size_micro=60_000_000, price_micro=575_000, fee_micro=70_000))
+        self.drain()
+        text = self.jobs()[0]["text"]
+        self.assertIn("60 shares", text)
+        self.assertIn("55.0¢", text)
+        self.assertNotIn("57.5¢", text, "a simple average of prices is not what was paid")
+
+    def test_with_no_booked_fill_the_notification_numbers_are_used(self):
+        """The fallback, stated: an event with no `fills` row behind it (nothing booked yet) still renders."""
+        self.account()
+        self.seed_market(self.SLUG, first_seen_ms=self.app._now_ms())
+        self.intent()
+        self.record("partial_fill", self.detail(size_micro=12_000_000, price_micro=625_000, fee_micro=5_000))
+        self.drain()
+        text = self.jobs()[0]["text"]
+        self.assertIn("12 shares", text)
+        self.assertIn("62.5¢", text)
+        self.assertIn("0.005 USDC", text)
+
+    def test_the_drain_attempts_what_it_just_absorbed(self):
+        """One drain both absorbs the event and sends it — not "absorb now, send next tick".
+
+        The clock matters here: the worker captured `at` before the absorb, the absorb writes `due_ms = now()`, and
+        a queue read against the stale `at` finds nothing ready. That is a fill waiting a whole tick behind a
+        millisecond.
+        """
+        self.account()
+        self.intent()
+        self.book()
+        self.record("filled", self.detail())
+        out = self.drain()
+        job = self.jobs()[0]["id"]
+        attempted = list(out["sent"]) + [f["id"] for f in out["failed"]]
+        self.assertIn(job, attempted, "the drain queued the message and then ignored it: %s" % out)
+
+    def test_running_the_worker_twice_sends_one_message(self):
+        self.intent()
+        self.book()
+        self.record("filled", self.detail())
+        first = self.drain()
+        second = self.drain()
+        self.assertEqual(1, len(first["orderEvents"]["routed"]))
+        self.assertEqual(0, len(second["orderEvents"]["routed"]))
+        self.assertEqual(1, second["orderEvents"]["alreadyQueued"])
+        self.assertEqual(1, len(self.jobs()), "a fill message must not be queued twice")
+
+    def test_a_refusal_arrives_in_plain_language_with_its_code(self):
+        self.intent()
+        self.record("rejected", self.detail("rejected"))
+        out = self.drain()
+        self.assertEqual(1, len(out["orderEvents"]["routed"]))
+        jobs = self.jobs()
+        self.assertEqual(self.app._tgb_outbox.P_REJECT, jobs[0]["priority"])
+        text = jobs[0]["text"]
+        self.assertIn(self.app._tg_plain_refusal("DAILY_CAP"), text, "the sentence, not just the code")
+        self.assertIn("DAILY_CAP", text, "…and the code, for support")
+        self.assertIn("lift your own daily limit", text, "a refusal with a next step names it")
+        self.assertNotIn("RISK_", text)
+
+    def test_a_case_notification_is_never_rendered_as_a_fill(self):
+        """The reconciler's `filled` row for a race carries no numbers, and must not become a card.
+
+        Without the shape rule that row renders as "0 shares @ 0.0¢" — a made-up fill, which is worse than silence.
+        """
+        self.account()
+        self.record("filled", {"case": "cancelled_race", "note": "the fill won the race"})
+        self.record("partial_fill", {"micro": 40_000_000, "price_micro": 500_000})
+        out = self.drain()
+        self.assertEqual([], out["orderEvents"]["routed"])
+        self.assertEqual(2, out["orderEvents"]["skipped"]["not a fill event"])
+        self.assertEqual([], self.jobs())
+
+    def test_a_user_with_no_telegram_identity_is_skipped_and_not_consumed(self):
+        """The row is not burnt: linking Telegram later must deliver the fill, not leave a hole where it was."""
+        self.db.execute("DELETE FROM user_identities WHERE user_id=?", (self.OWNER,))
+        self.db.commit()
+        self.intent()
+        self.book()
+        self.record("filled", self.detail())
+        out = self.drain()
+        self.assertEqual([], out["orderEvents"]["routed"])
+        self.assertEqual(1, out["orderEvents"]["skipped"]["no telegram chat"])
+        self.assertEqual([], self.jobs())
+        self.owner()                                          # …now they link it
+        again = self.drain()
+        self.assertEqual(1, len(again["orderEvents"]["routed"]), "the message was still owed")
+        self.assertEqual(1, len(self.jobs()))
+
+    def test_an_event_outside_the_window_is_left_alone(self):
+        """A month-old event is history, not news: the bridge looks back a week, on purpose."""
+        self.account()
+        self.intent()
+        self.book()
+        self.record("filled", self.detail(), at_ms=self.app._now_ms() - 30 * 86_400_000)
+        out = self.drain()
+        self.assertEqual([], out["orderEvents"]["routed"], "a stale row must not be queued as news")
+        self.assertEqual([], self.jobs())
+
+    def test_an_unverified_identity_is_not_a_destination(self):
+        self.intent()
+        self.book()
+        self.record("filled", self.detail())
+        self.db.execute("UPDATE user_identities SET state='claimed' WHERE user_id=?", (self.OWNER,))
+        self.db.commit()
+        out = self.drain()
+        self.assertEqual([], out["orderEvents"]["routed"])
+        self.assertEqual([], self.jobs(), "an unverified identity is not somewhere a position goes")
+
+    def test_the_two_surfaces_print_the_same_share_count(self):
+        """The chat truncates and so does the Mini App: 80,645,161 micro-shares is "80.64" in both.
+
+        The docstring in `_tg_shares` claimed 80.65 for years of this build's life while the code truncated — and
+        the webview's confirm line rounds by default, so the two surfaces disagreed by a cent of a share about the
+        same fill. Pinned here as a string, because "the same number in both places" is the property.
+        """
+        self.assertEqual("80.64", self.app._tg_shares(80_645_161))
+        self.assertEqual("1,290", self.app._tg_shares(1_290_000_000))
+        self.assertEqual("0.50", self.app._tg_shares(500_000))
 
 
 if __name__ == "__main__":

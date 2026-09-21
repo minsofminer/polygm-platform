@@ -390,6 +390,53 @@ class TestFillsAndLedger(Harness):
         self.assertEqual([c["kind"] for c in cash], ["buy"])
         self.assertEqual(cash[0]["amount_micro"], -(20_000_000 + 40_000))
 
+    def test_a_booked_fill_records_the_order_event_that_becomes_the_message(self) -> None:
+        """D4's data half: money in the ledger AND the event the notification is rendered from.
+
+        `book_fill` is the only door money comes through, so it is the only place this row can honestly be born.
+        The test asserts the *event name* as well as the row: `partial_fill` vs `filled` is the difference between
+        "some of your order went through" and "your order is done", and getting it from the order's own size is the
+        whole of that decision.
+        """
+        iid = self._placed()
+        oid = self.orders()[0]["id"]
+        self.mock.fill(oid, price=0.5, size=40.0)
+        self.mock.trades[-1]["fee_micro"] = 40_000
+        self.ex.reconciler.run_pass(at=self.at + 10_000)
+        # Only the rows that carry a fill's numbers: the executor writes `submitted` for the same intent, and the
+        # reconciler writes its own thin `partial_fill` for the in-app trail. This asserts the one the message is
+        # rendered from, which is `book_fill`'s — the money door's.
+        events = [e for e in self.rows("SELECT * FROM order_notifications ORDER BY id")
+                  if "tokenId" in (e["detail_json"] or "")]
+        self.assertEqual([e["event"] for e in events], ["partial_fill"])
+        detail = json.loads(events[0]["detail_json"])
+        self.assertEqual(detail["side"], "BUY")
+        self.assertEqual(detail["sizeMicro"], str(40 * 10**6))
+        self.assertEqual(detail["priceMicro"], "500000")
+        self.assertEqual(detail["feeMicro"], "40000")
+        self.assertEqual(detail["tokenId"], self.token)
+        self.assertEqual(detail["marketId"], self.market)
+        self.assertEqual(events[0]["intent_id"], iid)
+        # …and a fill that takes the order to its full size reads `filled`, once.
+        self.mock.fill(oid, price=0.5, size=60.0)
+        self.ex.reconciler.run_pass(at=self.at + 20_000)
+        events = [e for e in self.rows("SELECT event, detail_json FROM order_notifications ORDER BY id")
+                  if "tokenId" in (e["detail_json"] or "")]
+        self.assertEqual([e["event"] for e in events], ["partial_fill", "filled"])
+        self.assertEqual(json.loads(events[1]["detail_json"])["matchedMicro"], str(100 * 10**6))
+
+    def test_replaying_the_same_venue_fill_records_no_second_notification(self) -> None:
+        """The dedupe that protects the ledger has to protect the message too: nobody gets a fill twice."""
+        self._placed()
+        oid = self.orders()[0]["id"]
+        self.mock.fill(oid, price=0.5, size=40.0)
+        self.ex.reconciler.run_pass(at=self.at + 10_000)
+        rich = ("SELECT * FROM order_notifications WHERE detail_json LIKE '%tokenId%'")
+        self.assertEqual(len(self.rows(rich)), 1)
+        for i in range(3):
+            self.ex.reconciler.run_pass(at=self.at + 20_000 + i)
+        self.assertEqual(len(self.rows(rich)), 1, "a replayed venue trade must not queue a second fill message")
+
     def test_replaying_the_same_venue_fill_changes_nothing(self) -> None:
         self._placed()
         oid = self.orders()[0]["id"]

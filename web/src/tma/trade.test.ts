@@ -9,7 +9,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   amountFindings, blockers, chooseSize, close, confirmCopy, confirmKey, feeMicro, fromMicro, initial,
   maxLossMicro, normaliseAmount, open, plainRefusal, primaryAction, priceFromText, READ_ONLY_SENTENCE, refused,
-  screenFor, sharesFor, SIZES, submitted, toMicro, validAmount, type MarketView,
+  screenFor, sharesFor, sharesText, SIZES, submitted, toMicro, validAmount, type MarketView,
 } from "./trade";
 
 const MARKET: MarketView = {
@@ -24,6 +24,22 @@ const MARKET: MarketView = {
   minSizeMicro: "5000000",
   endsSoon: false,
 };
+
+describe("shares, as text", () => {
+  it("truncates, groups, and prints what the chat prints", () => {
+    // The three examples both languages agree on. A rounding formatter would say "80.65" and "0.5"; the chat says
+    // "80.64" and "0.50", and a surface that disagrees with the message about the same fill is the bug this pair of
+    // assertions exists to prevent. The Python twin is pinned in tests/test_telegram_ops_api.py.
+    expect(sharesText(80_645_161)).toBe("80.64");
+    expect(sharesText(1_290_000_000)).toBe("1,290");
+    expect(sharesText(500_000)).toBe("0.50");
+    // Under a hundredth of a share truncates away entirely: 1.005 shares prints "1", exactly as the chat does.
+    // That is the same rule read the other way — this product never shows a fraction of a share it cannot honour.
+    expect(sharesText(1_005_000)).toBe("1");
+    expect(sharesText(1_010_000)).toBe("1.01");
+    expect(sharesText(0)).toBe("0");
+  });
+});
 
 describe("money, in integers", () => {
   it("parses decimals into micros without touching a float", () => {
@@ -131,7 +147,10 @@ describe("the state machine", () => {
 describe("what the confirm sheet says", () => {
   it("states the size, the price, the fee, the worst case and the age of the quote", () => {
     const copy = confirmCopy(chooseSize(open(initial(), "yes"), "50"), MARKET);
-    expect(copy).toContain("50 USDC buys about 80.65 YES shares at 62.0¢");
+    // "80.64", not "80.65": 50 USDC at 0.62 is 80.645161 shares and this product truncates. The chat prints the
+    // same string for the same fill (`_tg_shares`), and `tests/test_telegram_ops_api.py` pins that side — the pair
+    // is the property, and the webview reading "80.65" while the fill message read "80.64" is the seam bug.
+    expect(copy).toContain("50 USDC buys about 80.64 YES shares at 62.0¢");
     expect(copy).toContain("Fee 0.50 USDC");
     expect(copy).toContain("worst case you lose 50.00 USDC");
     expect(copy).toContain("as of 4 seconds ago");

@@ -445,6 +445,24 @@ class Store:
         except Exception as e:
             self._rollback(outer)
             raise RuntimeError("book_fill failed for %s: %s" % (cash_ref, e)) from e
+        # D4's other half: a fill is a message, and this is the only door money comes through, so this is the only
+        # place the message can be born. Written AFTER the commit, always — a notification for a fill the books did
+        # not keep is worse than a late one, and the executor's own rule (see `deliver_notifications`) is that the
+        # event is recorded once the thing that triggered it is durable.
+        #
+        # One row per venue trade, at the venue's granularity: an order that fills in three prints tells the user
+        # three times, and the print that takes `matched` to the order's size is the one that reads `filled`. The
+        # detail carries the numbers as micro strings (never floats), because the message that eventually renders
+        # from it is money text and the money path does not round.
+        if intent_id:
+            order_row = self.conn.execute("SELECT size_micro FROM orders WHERE id=?", (order_id,)).fetchone()
+            order_size = int(order_row[0]) if order_row else 0
+            self.notify(intent_id=intent_id, user_id=user_id,
+                        event="filled" if order_size and matched >= order_size else "partial_fill", at=t,
+                        detail={"side": side, "sizeMicro": str(size_micro), "priceMicro": str(price_micro),
+                                "feeMicro": str(fee_micro), "notionalMicro": str(notional),
+                                "matchedMicro": str(matched), "marketId": market_id, "tokenId": token_id,
+                                "tradeId": trade_id, "maker": bool(maker), "source": source})
         return {"booked": True, "fill_id": fill_id, "notional_micro": notional, "fee_micro": fee_micro,
                 "cash_amount_micro": amount, "trade_id": trade_id}
 

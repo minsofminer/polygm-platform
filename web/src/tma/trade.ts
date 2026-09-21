@@ -123,6 +123,25 @@ export function sharesFor(amountUsdc: string, priceText: string): number {
   return Math.trunc((toMicro(amountUsdc) * 1_000_000) / priceMicro);
 }
 
+/**
+ * `80_645_161` micro-shares → `"80.64"` — the share count as the chat prints it: truncated, never rounded.
+ *
+ * `toFixed(2)` rounds, and this line used to use it, so the webview said "80.65" about the same fill whose message
+ * in the chat said "80.64" (Python's `_tg_shares` truncates deliberately: "never rounded up into a lie"). Rounding a
+ * size up tells somebody they hold more than they do; the two surfaces now print the same string for the same fill,
+ * and `tests/test_telegram_ops_api.py` pins the Python half of that pair.
+ *
+ * Integer arithmetic throughout — the micro value never becomes a float, so `toFixed`'s binary rounding cannot move
+ * the last digit of a money-adjacent number.
+ */
+export function sharesText(sharesMicro: number): string {
+  const micro = Math.max(0, Math.trunc(sharesMicro || 0));
+  const whole = Math.trunc(micro / 1_000_000);
+  const frac = Math.trunc((micro % 1_000_000) / 10_000);          // two places, truncated, like `_tg_shares`
+  const grouped = whole.toLocaleString("en-US");                  // "1,290" — the chat's grouping separator
+  return frac === 0 ? grouped : `${grouped}.${String(frac).padStart(2, "0")}`;
+}
+
 /** "62.0¢" → 620000. Kept here rather than in a formatter because this is the one place a display string is turned
  *  back into arithmetic, and it does so by *parsing digits*, never by a float multiply. */
 export function priceFromText(text: string): number {
@@ -253,7 +272,7 @@ export function confirmCopy(state: SheetState, market: MarketView): string {
   const price = state.side === "yes" ? market.yesAsk : market.noAsk;
   const shares = sharesFor(state.amountUsdc, price);
   return [
-    `${state.amountUsdc} USDC buys about ${(shares / 1_000_000).toFixed(2)} ${state.side.toUpperCase()} shares at ${price}`,
+    `${state.amountUsdc} USDC buys about ${sharesText(shares)} ${state.side.toUpperCase()} shares at ${price}`,
     `Fee ${fromMicro(feeMicro(state.amountUsdc))} USDC · worst case you lose ${fromMicro(maxLossMicro(state.amountUsdc))} USDC`,
     `${market.ageText} — if the price moves before you confirm, the order does not go`,
   ].join("\n");

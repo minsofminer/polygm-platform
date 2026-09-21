@@ -24,7 +24,8 @@ import { CLASS, DUR, SEQUENCE } from "@/tma/motion";
 import { haptic } from "@/tma/haptics";
 import {
   amountFindings, blockers, chooseSize, close, confirmCopy, confirmKey, initial, open, plainRefusal, READ_ONLY_SENTENCE,
-  primaryAction, refused, SIZES, sharesFor, submitted, type MarketView, type SheetState, type Side,
+  primaryAction, refused, SIZES, sharesFor, sharesText, submitted, type MarketView, type SheetState,
+  type Side,
 } from "@/tma/trade";
 
 export type OrderFn = (input: {
@@ -165,7 +166,7 @@ export function TradeSheet({ market, place, onNeedDeposit, readOnly = false }: T
           <p id="pgm-tma-amount-help">
             {problems.length > 0
               ? problems.join(" ")
-              : `${(shares / 1_000_000).toFixed(2)} ${state.side.toUpperCase()} shares at ${price}`}
+              : `${sharesText(shares)} ${state.side.toUpperCase()} shares at ${price}`}
           </p>
 
           {state.step === "submitting" ? (

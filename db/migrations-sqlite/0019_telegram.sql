@@ -47,6 +47,7 @@ CREATE TABLE IF NOT EXISTS telegram_outbox (
     due_ms         INTEGER NOT NULL DEFAULT 0,
     sent_ms        INTEGER NOT NULL DEFAULT 0,
     note           TEXT NOT NULL DEFAULT '',
+    dedupe_key     TEXT NOT NULL DEFAULT '',
     CHECK (state IN ('queued','sending','sent','failed')),
     CHECK (priority BETWEEN 1 AND 999),
     CHECK (attempts >= 0)

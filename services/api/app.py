@@ -8332,7 +8332,7 @@ def _tg_clear_session(chat_id: str) -> None:
 
 
 def _tg_enqueue(*, chat_id: str, chat_type: str, plan, priority: int = 0, edit_message_id: int = 0,
-                note: str = "") -> int:
+                note: str = "", dedupe_key: str = "") -> int:
     """Put a plan's beats in the outbox. The first beat is a send (or an edit); the second, if any, is an edit.
 
     A two-beat plan is stored as its *answer* with the skeleton's job id recorded, because the skeleton is only
@@ -8351,11 +8351,30 @@ def _tg_enqueue(*, chat_id: str, chat_type: str, plan, priority: int = 0, edit_m
     method = "editMessageText" if first.edit_message_id else "sendMessage"
     target = int(first.edit_message_id or edit_message_id or 0)
     kb = last.keyboard or first.keyboard
-    job = _db.execute(
-        "INSERT INTO telegram_outbox (chat_id, chat_type, priority, method, text, keyboard_json, edit_message_id,"
-        " state, attempts, created_ms, due_ms, note) VALUES (?,?,?,?,?,?,?,?,?,?,?,?) RETURNING id",
-        (str(chat_id), str(chat_type or "private"), int(priority or plan.priority), method, last.text,
-         json.dumps(kb) if kb else "", target, "queued", 0, at, at, str(note)[:120])).fetchone()
+    # The dedupe key is checked before the insert AND enforced by the index behind it, because two workers can
+    # pass a check at the same moment: the read makes the common case cheap, the unique index makes the race
+    # impossible. `note` cannot carry this job — the drain rewrites it on every send attempt (see 0019's comment).
+    if dedupe_key:
+        seen = _db.execute("SELECT id FROM telegram_outbox WHERE dedupe_key=?", (str(dedupe_key),)).fetchone()
+        if seen:
+            return int(seen[0])
+    try:
+        job = _db.execute(
+            "INSERT INTO telegram_outbox (chat_id, chat_type, priority, method, text, keyboard_json,"
+            " edit_message_id, state, attempts, created_ms, due_ms, note, dedupe_key)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?) RETURNING id",
+            (str(chat_id), str(chat_type or "private"), int(priority or plan.priority), method, last.text,
+             json.dumps(kb) if kb else "", target, "queued", 0, at, at, str(note)[:120],
+             str(dedupe_key))).fetchone()
+    except Exception as e:                                                    # noqa: BLE001
+        # Driver-agnostic on purpose: sqlite says "UNIQUE constraint failed", psycopg says "duplicate key value".
+        # Both mean the same thing here — somebody else queued this message first — and that is not an error.
+        text_e = str(e).lower()
+        if dedupe_key and ("unique" in text_e or "duplicate" in text_e):
+            seen = _db.execute("SELECT id FROM telegram_outbox WHERE dedupe_key=?", (str(dedupe_key),)).fetchone()
+            if seen:
+                return int(seen[0])
+        raise
     job_id = int(job[0]) if job else 0
     if len(beats) > 1 and method == "sendMessage":
         # The skeleton: sent immediately so the user sees motion, and remembered as the message the answer edits.
@@ -8595,12 +8614,17 @@ def _micro_str(micro: int, *, scale: int = 6) -> str:
 
 
 def _tg_shares(micro: int) -> str:
-    """`1_290_000_000` micro-shares → `"1,290"`, `80_645_161` → `"80.65"`, `500_000` → `"0.5"`.
+    """`1_290_000_000` micro-shares → `"1,290"`, `80_645_161` → `"80.64"`, `500_000` → `"0.50"`.
 
     A share count on a phone is a *reading*, not a measurement: `_micro_str` gives the money path its exact string
     (and stays as it is, because that string is parsed back), while this one gives the reader the number they would
     say out loud. Trailing zeros go, the grouping separator stays, and the fraction is capped at two places — a
     channel post reading "50000.000000 shares" is six decimals of noise in the one line the alert exists for.
+
+    Two of the examples above used to be wrong about this function's own behaviour (`"80.65"`, which truncation never
+    produces, and `"0.5"`, where the two-decimal rule gives `"0.50"`). Truncation is the rule and it is deliberate —
+    never round a size up, because being told you hold more than you do is a support ticket — and the Mini App's
+    confirm line truncates the same way, so the two surfaces print the same number for the same fill.
     """
     micro = int(micro or 0)
     whole, frac = divmod(abs(micro), 1_000_000)
@@ -8999,6 +9023,14 @@ def telegram_drain(request: Request, body: dict = Body(default={}),
     kill = _tg_kill()
     bot = _tg_bot()
     at = _now_ms()
+    # The worker's first job: absorb what the executor recorded. It runs here rather than in the request that
+    # produced the fill because this is the process with a Bot client, and because the drain is already the one
+    # place that knows about priorities, buckets and the kill switch.
+    events = _tg_absorb_order_events(at=at)
+    # Re-read the clock: the jobs the absorb just queued are due *now*, and the `at` above predates them by a few
+    # milliseconds, so a queue read against it plans nothing and the fill waits for the next drain. (Caught by the
+    # test that asserts one drain both absorbs a fill and sends it.)
+    at = _now_ms()
     rows = _db.execute("SELECT id, chat_id, chat_type, priority, method, text, keyboard_json, edit_message_id,"
                       " attempts, created_ms, due_ms FROM telegram_outbox WHERE state='queued' AND due_ms <= ?"
                       " ORDER BY priority, due_ms, id LIMIT 500", (at,)).fetchall()
@@ -9038,6 +9070,7 @@ def telegram_drain(request: Request, body: dict = Body(default={}),
             failed.append({"id": job.job_id, "status": res.status, "retry": retry})
     _db.commit()
     return _stamped({"sent": sent, "failed": failed, "planned": len(chosen), "nextInMs": wait_ms,
+                     "orderEvents": events,
                      "botConfigured": bot is not None,
                      "held_by_kill": kill.engaged and {"engaged": True, "scope": kill.scope,
                                                        "reason": kill.reason} or None}, ttl_ms=0, stale_ms=0)
@@ -9109,8 +9142,27 @@ def telegram_metrics(request: Request, days: int = Query(default=7, ge=1, le=90)
                     ttl_ms=60_000, stale_ms=0)
 
 
+def _tg_user_chat(user_id: str, chat_id: str = "") -> str:
+    """The private chat a message about this user goes to, from the identity table.
+
+    A fill must not depend on the caller remembering where to send it — that is how a fill goes to the wrong chat —
+    and a user who only ever talks to the bot in a group must still get it privately. `user_identities.value` for a
+    verified telegram identity IS the user id, which is the one place Telegram's model is kind to us.
+    """
+    chat = str(chat_id or "")
+    if chat:
+        return chat
+    # Ordered, because a user can hold more than one verified Telegram identity over time and "LIMIT 1" without an
+    # ORDER BY means the message goes somewhere different on different engines. Oldest first: the identity they
+    # linked first is the chat they actually read.
+    row = _db.execute("SELECT value FROM user_identities WHERE kind='telegram' AND user_id=? AND"
+                      " state='verified' ORDER BY claimed_ms, value LIMIT 1", (str(user_id),)).fetchone()
+    return str(row[0]) if row else ""
+
+
 def _tg_notify_fill(user_id: str, *, market: str, side: str, size_text: str, price_text: str, fee_text: str,
-                    position_text: str, price_age_text: str, chat_id: str = "") -> int:
+                    position_text: str, price_age_text: str, chat_id: str = "", note: str = "fill",
+                    market_slug: str = "", dedupe_key: str = "") -> int:
     """A fill, queued at the top priority. Called by whatever records the fill (the executor, or the reconciler).
 
     The chat is looked up from the identity table rather than passed in by every caller, because the one thing a
@@ -9121,16 +9173,206 @@ def _tg_notify_fill(user_id: str, *, market: str, side: str, size_text: str, pri
     "fixed" later: a user who only ever talks to the bot in a group must still get their own fill privately, and
     sending it to the group would publish their position to the group.
     """
-    chat = str(chat_id or "")
-    if not chat:
-        row = _db.execute("SELECT value FROM user_identities WHERE kind='telegram' AND user_id=? AND"
-                          " state='verified' LIMIT 1", (str(user_id),)).fetchone()
-        chat = str(row[0]) if row else ""
+    chat = _tg_user_chat(user_id, chat_id)
     if not chat:
         return 0
     plan = _tgb_render.fill_card(market=market, side=side, size_text=size_text, price_text=price_text,
-                                 fee_text=fee_text, position_text=position_text, price_age_text=price_age_text)
-    return _tg_enqueue(chat_id=chat, chat_type="private", plan=plan, priority=_tgb_outbox.P_FILL, note="fill")
+                                 fee_text=fee_text, position_text=position_text, price_age_text=price_age_text,
+                                 market_slug=market_slug)
+    return _tg_enqueue(chat_id=chat, chat_type="private", plan=plan, priority=_tgb_outbox.P_FILL, note=note,
+                       dedupe_key=dedupe_key)
+
+
+def _tg_notify_refusal(user_id: str, *, what: str, code: str, plain: str, next_step: str = "",
+                       chat_id: str = "", note: str = "refused", dedupe_key: str = "") -> int:
+    """A rejection, at `P_REJECT`, in the same shape a fill takes.
+
+    Queued rather than sent from wherever the refusal was decided, for the reason the whole phase runs on an
+    outbox: a refusal that arrives *after* whatever the user did next is still better than one that blocks the
+    request that produced it.
+    """
+    chat = _tg_user_chat(user_id, chat_id)
+    if not chat:
+        return 0
+    plan = _tgb_render.refusal_card(what=what, code=code, plain=plain, next_step=next_step)
+    return _tg_enqueue(chat_id=chat, chat_type="private", plan=plan, priority=_tgb_outbox.P_REJECT, note=note,
+                       dedupe_key=dedupe_key)
+
+
+def _tg_market_bits(market_id: str) -> tuple[str, str]:
+    """`(question, slug)` for a market id — what a message calls the market it is about."""
+    row = _db.execute("SELECT question, COALESCE(slug,'') FROM markets WHERE id=?",
+                      (str(market_id),)).fetchone()
+    return (str(row[0]), str(row[1])) if row else ("that market", "")
+
+
+def _tg_outcome_for_token(token_id: str) -> str:
+    """The *outcome* a token is, not the venue's BUY/SELL side.
+
+    The distinction is the difference between a message that reads "YES filled" and one that reads "BUY filled",
+    and the second is not English anybody uses about a prediction market. `tokens` is where the mapping lives.
+    """
+    row = _db.execute("SELECT outcome FROM tokens WHERE token_id=?", (str(token_id),)).fetchone()
+    return str(row[0]) if row else ""
+
+
+def _tg_booked_fill(intent_id: str) -> tuple[int, int, int]:
+    """`(shares, average price, fee)` in micros, summed from the `fills` rows this intent actually booked.
+
+    This is the ledger's answer, and it is what a fill card must print: the money that moved, not the numbers the
+    caller happened to be carrying. The line that used to build this card took the size, price and fee from the
+    notification's own detail blob — so a caller that passed the wrong numbers printed the wrong numbers, with the
+    ledger disagreeing and nothing to reconcile them. Reading `fills` makes the card a report.
+
+    A weighted average rather than an average of prices: two prints at different prices average by *size*, and the
+    integer arithmetic is exact (the price is a micro-USDC ratio, so it is computed in micros and never as a float).
+    An intent with no booked fill returns zeros and the caller falls back.
+    """
+    row = _db.execute("SELECT COALESCE(SUM(f.size_micro),0), COALESCE(SUM(f.notional_micro),0),"
+                      " COALESCE(SUM(f.fee_micro),0) FROM fills f JOIN orders o ON o.id = f.order_id"
+                      " WHERE o.intent_id=?", (str(intent_id),)).fetchone()
+    size, notional, fee = (int(row[0]), int(row[1]), int(row[2])) if row else (0, 0, 0)
+    price = (notional * 1_000_000) // size if size and notional else 0
+    return size, price, fee
+
+
+def _tg_position_text(user_id: str, token_id: str, *, fallback_micro: int, side: str) -> str:
+    """`"80.65 shares"` — what the user holds in this token *after* the fill, read from the lots.
+
+    The lots are the book's own answer, so this line agrees with `/wallet` instead of with arithmetic done twice.
+    A BUY that opened the first lot in this token has no rows to sum yet if the book leg has not landed, and the
+    fill's own size is the honest fallback in exactly that case.
+    """
+    row = _db.execute("SELECT COALESCE(SUM(shares_open_micro),0), COUNT(*) FROM position_lots WHERE"
+                      " user_id=? AND token_id=?", (str(user_id), str(token_id))).fetchone()
+    held, lots = (int(row[0]), int(row[1])) if row else (0, 0)
+    if lots == 0 and str(side).upper() == "BUY":
+        held = int(fallback_micro or 0)
+    return "%s share%s" % (_tg_shares(held), "" if held == 1_000_000 else "s")
+
+
+def _tg_usdc_text(micro: int) -> str:
+    """`500000` → `"0.5 USDC"`. Exact, never rounded: this is a fee somebody paid."""
+    from polygm_core.money.cents import fmt_usdc
+    return "%s USDC" % fmt_usdc(int(micro or 0))
+
+
+#: How far back the order-event bridge looks. A week is longer than any retry the outbox does and short enough that
+#: a user with no Telegram identity is not re-examined for ever; a row that falls out of the window is not lost, it
+#: is simply no longer a *message* — the in-app row was never ours to consume.
+_TG_ORDER_EVENT_WINDOW_MS = 7 * 86_400_000
+
+#: The order events that become a chat message. `submitted`, `live` and `queued` are deliberately absent: they are
+#: the order's own progress, the user just placed it, and a message per state change is how a bot becomes noise.
+_TG_ORDER_EVENTS = ("filled", "partial_fill", "rejected")
+
+#: For a refusal that has a next step, the sentence that names it. A code with no entry gets no advice rather than
+#: invented advice, and `_tg_plain_refusal` already says what the gate decided.
+_TG_REFUSAL_NEXT_STEP = {
+    "DAILY_CAP": "You can lift your own daily limit in /settings when you are ready.",
+    "HALTED": "Your account is stopped for today — /settings shows the limit that stopped it.",
+    "TOO_MANY_OPEN": "Close or cancel something that is still open, then place this again.",
+    "BELOW_MIN_SIZE": "The market's minimum is on the card; a larger order will go through.",
+    "STALE_QUOTE": "Nothing was lost by waiting — place it again and the book will be re-read.",
+    "NO_ORDER_BOOK": "There is nothing to trade against in that market right now.",
+}
+
+
+def _tg_order_event_key(row_id: int) -> str:
+    """The outbox dedupe key that makes the bridge idempotent: one notification row, one message, for ever.
+
+    A key of its own rather than a `note`: the drain rewrites notes (it appends the message id on success and the
+    client's explanation on failure), so a note-based marker is *gone* by the second drain and the fill would be
+    sent twice. That is not a theory — it is why `telegram_outbox` grew `dedupe_key` in 0019.
+    """
+    return "order-event:%d" % int(row_id)
+
+
+def _tg_absorb_order_events(*, at: int | None = None, limit: int = 50) -> dict:
+    """Turn recorded order events into queued messages. The missing half of D4.
+
+    The executor is what records a fill or a refusal — `Store.book_fill` writes the ledger and, since this phase,
+    the `order_notifications` row that goes with it — and the executor has no Bot API client on purpose: sending
+    from the process that moves money would put a network stall in the money path. So the two meet in the one table
+    both processes already share, and this function is the meeting point: it runs inside the drain (the worker that
+    is *allowed* to talk to Telegram), reads what the executor recorded, and queues the message.
+
+    Idempotent by construction rather than by care: each notification row maps to an outbox note derived from its
+    row id, and a row whose note is already in the outbox is skipped. That is what makes "run the drain twice"
+    safe, and it is why this does not consume the row — the row is also the in-app notification, and marking it
+    sent would be a lie about a channel that is not this one.
+
+    Two rules keep it from inventing messages. A fill is only rendered when the row carries the fill's own numbers
+    (see the `not a fill event` branch below), and a row with no Telegram chat is *skipped rather than consumed*,
+    so linking Telegram tomorrow delivers yesterday's fill instead of leaving a hole where it was.
+    """
+    t = int(at if at is not None else _now_ms())
+    placeholders = ",".join("?" for _ in _TG_ORDER_EVENTS)
+    rows = _db.execute(
+        "SELECT id, intent_id, user_id, event, at_ms, detail_json FROM order_notifications"
+        " WHERE event IN (%s) AND at_ms <= ? AND at_ms >= ? ORDER BY at_ms, id LIMIT ?" % placeholders,
+        (*_TG_ORDER_EVENTS, t, t - _TG_ORDER_EVENT_WINDOW_MS, max(1, int(limit)))).fetchall()
+    routed: list[dict] = []
+    skipped: dict[str, int] = {}
+    already = 0
+    for (row_id, intent_id, user_id, event, at_ms, detail_json) in rows:
+        key = _tg_order_event_key(int(row_id))
+        if _db.execute("SELECT id FROM telegram_outbox WHERE dedupe_key=? LIMIT 1", (key,)).fetchone():
+            already += 1
+            continue
+        if not _tg_user_chat(str(user_id)):
+            # No Telegram identity, so there is no message to send — and no row is written, because the day they
+            # link one they should get the message rather than a hole where it was.
+            skipped["no telegram chat"] = skipped.get("no telegram chat", 0) + 1
+            continue
+        try:
+            detail = json.loads(detail_json or "{}")
+        except (TypeError, ValueError):
+            detail = {}
+        if not isinstance(detail, dict):
+            detail = {}
+        event = str(event)
+        if event == "rejected":
+            code = str(detail.get("code") or "REFUSED")
+            job = _tg_notify_refusal(
+                str(user_id), what="Order not placed", code=code,
+                plain=_tg_plain_refusal(code, str(detail.get("venue_code") or "")),
+                next_step=_TG_REFUSAL_NEXT_STEP.get(code, ""), note="order-event:%s" % str(intent_id)[:40],
+                dedupe_key=key)
+        elif not (detail.get("tokenId") and int(detail.get("sizeMicro") or 0) > 0):
+            # A `filled`/`partial_fill` row WITHOUT a token and a size is not a fill event, it is a *case*
+            # notification: the reconciler writes `{"case": "cancelled_race", "note": ...}` when a fill won a race
+            # it was not supposed to win, and an older shape writes `{"micro": ..., "price_micro": ...}`. Those are
+            # the in-app trail, not a message, and rendering one would produce a card reading "0 shares @ 0.0¢" —
+            # a made-up fill, which is worse than no message. The numbers are what make it renderable, so the
+            # numbers are the test.
+            skipped["not a fill event"] = skipped.get("not a fill event", 0) + 1
+            continue
+        else:
+            question, slug = _tg_market_bits(str(detail.get("marketId") or ""))
+            side = _tg_outcome_for_token(str(detail.get("tokenId") or ""))
+            # The ledger first, the notification's own numbers second: `fills` is what moved, and this is the
+            # line that used to trust the caller's blob and print whatever it was given.
+            booked_size, booked_price, booked_fee = _tg_booked_fill(str(intent_id))
+            size_micro = booked_size or int(detail.get("sizeMicro") or 0)
+            price_micro = booked_price or int(detail.get("priceMicro") or 0)
+            fee_micro = booked_fee if booked_size else int(detail.get("feeMicro") or 0)
+            job = _tg_notify_fill(
+                str(user_id), market=question, side=side or "order",
+                size_text="%s shares" % _tg_shares(size_micro),
+                price_text=_tg_cents(price_micro),
+                fee_text=_tg_usdc_text(fee_micro),
+                position_text=_tg_position_text(str(user_id), str(detail.get("tokenId") or ""),
+                                                fallback_micro=size_micro, side=str(detail.get("side") or "BUY")),
+                price_age_text="the venue's own fill, %s" % _tg_ago(max(0, t - int(at_ms))),
+                note="order-event:%s" % str(intent_id)[:40], market_slug=slug, dedupe_key=key)
+        if job:
+            routed.append({"notification": int(row_id), "event": event, "job": int(job),
+                           "intent": str(intent_id)[:16]})
+        else:
+            skipped["nothing to send"] = skipped.get("nothing to send", 0) + 1
+    return {"routed": routed, "alreadyQueued": already, "skipped": skipped,
+            "scanned": len(rows), "windowMs": _TG_ORDER_EVENT_WINDOW_MS}
 
 
 # --------------------------------------------------------------------------------------- P12 · D5/D8: the channel and the switch
