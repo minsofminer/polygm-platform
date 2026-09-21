@@ -241,6 +241,22 @@ def chaos(g: Gate, *, heavy: bool) -> dict:
 SOAK_CLAUSE = {"seconds": 1800, "rate": 200, "expected_fills": 360_000, "max_second_half_mb": 6.0}
 
 
+def soak_of(data: dict | None) -> dict | None:
+    """The soak record, wherever the harness put it.
+
+    `tools/p13-load.py --json` writes one document for whatever tests it ran (`{"results": {"soak": {...}}}`),
+    and a soak-only run of it writes the same shape with one key. The first version of this gate read that
+    document as if it were the soak itself, so every field it checked was `None` — which the gate then *did*
+    report, at length, in words that looked like the harness had failed rather than the reader. Unwrapping here
+    is the fix; it is a function with a name so a canary can prove the unwrapping works.
+    """
+    if not isinstance(data, dict):
+        return None
+    if isinstance(data.get("results"), dict) and isinstance(data["results"].get("soak"), dict):
+        return data["results"]["soak"]
+    return data
+
+
 def soak_problems(soak: dict | None) -> list[str]:
     if not soak:
         return ["there is no machine-readable soak result"]
@@ -280,10 +296,16 @@ def load(g: Gate, *, heavy: bool) -> dict:
              "--json", str(VERIF / "P13-load-quick.json")])
     quick_text = quick.read_text(encoding="utf-8") if quick.exists() else ""
     soak_files = sorted(VERIF.glob("P13-soak-1800s.json"))
-    soak = json.loads(soak_files[-1].read_text(encoding="utf-8")) if soak_files else None
+    soak = soak_of(json.loads(soak_files[-1].read_text(encoding="utf-8"))) if soak_files else None
     problems = load_problems(quick_text, soak) if quick.exists() else ["no quick load run on record"]
     g.check("the load harness's quick run passes and the kit's 30-minute soak meets its clause", not problems,
             "; ".join(problems))
+    # must-accept: the real recorded shape is a wrapper, and reading it must produce the fields, not `None`s.
+    wrapped = soak_of({"results": {"soak": {"seconds": 1800, "elapsed_s": 1800.0, "rate": 200, "fills": 360_000,
+                                            "alerts_fired": 10, "duplicate_deliveries": 0,
+                                            "rss_second_half_mb": 2.1}}})
+    g.check("load canary: the soak record is read out of the harness's own JSON shape (must-accept)",
+            bool(wrapped) and not soak_problems(wrapped), str(wrapped))
     g.canary("load canary: a soak with duplicates, or a short one, is refused",
              soak_problems({"seconds": 300, "elapsed_s": 302.0, "rate": 200, "fills": 60_000,
                             "duplicate_deliveries": 6_000, "rss_second_half_mb": 1.0, "alerts_fired": 10}),

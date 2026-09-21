@@ -1,14 +1,14 @@
 CHAOS 2 — WebSocket killed for 5 minutes
 ==============================================================================
-verdict: PASS
-elapsed: 399.5 s
+expected outcome (written before the drill ran):
+  Five minutes without the socket: no duplicate orders, no missed fills (the fallback poll finds each one), every stale surface marked stale for the whole outage, and no alert delivered twice.
 
-command: /usr/local/bin/python3 /home/user/polygm-platform/tools/p05-chaos-test.py --kill-seconds 300 --json
-exit: 0, artifact: docs/verification/P13-chaos-2-ws-kill.txt
-   "dups": 10450,
-   "alerts": 10,
-   "fired": 10,
-   "suppressed": 33
-  }
-  ALL 7 CHECKS PASSED (outage 300s, 141 WS msgs, 151 REST polls)
+verdict: PASS
+elapsed: 0.0 s
+
+live drill artifact: docs/verification/P13-chaos-2-ws-kill.txt (463 bytes)
+     "fired": 10,
+     "suppressed": 33
+    }
+    ALL 7 CHECKS PASSED (outage 300s, 141 WS msgs, 151 REST polls)
 

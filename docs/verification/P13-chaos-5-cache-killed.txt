@@ -4,8 +4,8 @@ expected outcome (written before the drill ran):
   No cache at all: every read still answers from the source, no request 5xx-es for a cache miss, and the upstream call count stays inside the per-IP budget (a cold cache must not become a rate-limit ban).
 
 verdict: PASS
-elapsed: 0.9 s
+elapsed: 1.0 s
 
 first read: market 200, book levels 5, 0 cache entries cleared
-25 market+book reads with an empty cache: 25 complete, 91 ms total, 3.6 ms each
+25 market+book reads with an empty cache: 25 complete, 82 ms total, 3.3 ms each
 

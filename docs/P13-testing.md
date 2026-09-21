@@ -196,12 +196,25 @@ from the full runs recorded in `docs/verification/`:
 
 | Clause | Result | Artifact |
 |---|---|---|
-| 200 fills/s for 30 minutes, no lag growth, no duplicate alerts | see `P13-soak-1800s.txt`; the paced run is driven in real time (`elapsed_s` is recorded and the gate asserts it) | `P13-soak-1800s.{txt,json}` |
+| 200 fills/s for 30 minutes, no lag growth, no duplicate alerts | **360,000 fills at 200/s in 1,800.0 s of wall clock** (paced, `elapsed_s` recorded and asserted); **0 duplicate deliveries**, 0 tape duplicates; 7,536 alerts fired and 31,272 suppressed by cooldown; consumer skew flat at **−204 ms → −198 ms** (no growth); RSS 26.1 → 35.9 MB with **2.1 MB of second-half growth** (0.098 MB/min steady, ceiling 6 MB); 385 s of CPU | `P13-soak-1800s.{txt,json}` |
 | 2,000 books under continuous deltas | **11,955,200 deltas at 99,625/s**, cpu 96.9 % of one core, **RSS +7.8 MB** | `P13-load-books.txt` |
 | p95/p99 at 500 concurrent users, reads from cache | p50 1,841 / p95 1,997 / p99 2,138 ms at 500 clients, 268 req/s, **0 errors**; ramp 10→500 with the knee at 250 (p95 1,085 ms) | `P13-load-api.txt` |
 | 10,000 subscribers, one evaluation, delivery inside SLO | **10,000 drained in 54.7 s (182.8/s)** at 16 workers; SLO 300 s | `P13-load-fanout.txt` |
 | 1,000 clients + reconnect storm after a forced restart | **1,000 clients, 4,268 ok / 57,827 refused during 10.4 s of outage, back in 6.09 s, 20 answers after**, 0 slow failures while the server was definitively down (60 were in flight when the process died) | `P13-load-storm.txt` |
 | 100 aggressive users never exceed the per-IP budget | **30,000 requested, 184 served, 27,812 dropped by the queue**; peak 10 s windows `{data.trades 60, clob.book 62, gamma.markets 62}` | `P13-load-budget.txt` |
+
+### The soak clause, run for real
+
+The kit's clause is the one number in D5 that cannot be argued with: sustained 200 fills/s for 30 minutes with no
+lag growth and no duplicate alerts. `P13-soak-1800s.{txt,json}` is that run — **360,000 fills in 1,800.0 s of wall
+clock**, zero duplicate deliveries, zero tape duplicates, 7,536 alerts delivered with 31,272 suppressed by
+cooldown, consumer skew flat from −204 ms to −198 ms (ahead of schedule, not behind it), 2.1 MB of second-half RSS
+growth against a 6 MB ceiling, 385 s of CPU.
+
+Three attempts at this clause are on record and the first two failed, which is why it is worth stating as a
+sequence: the first counted 6,000 duplicate deliveries of the harness's own making, and the second was an
+*unpaced* 30-minute soak that finished in 45 s and reported 1,800 s. The pacing assertion in the gate exists
+because of the second.
 
 Two harness bugs were found and fixed by running these at full size, and both are recorded because a load
 harness that lies is worse than no load harness:
@@ -281,6 +294,8 @@ on the deployment checklist, not in a green suite.
 ---
 
 ## D8. CI/CD gates
+
+Measured by the phase gate: `p13-gate-check: 25 passed, 0 failed` — recorded in `docs/verification/P13-gate.txt`.
 
 | Workflow | Trigger | What it runs |
 |---|---|---|

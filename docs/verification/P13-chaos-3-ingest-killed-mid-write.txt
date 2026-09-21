@@ -6,7 +6,7 @@ expected outcome (written before the drill ran):
 verdict: PASS
 elapsed: 0.8 s
 
-killed pid 11688 after ~0.3 s; rows durable at the kill: 3551 of 4000
+killed pid 41292 after ~0.3 s; rows durable at the kill: 3526 of 4000
 restart exit: 0 (child wrote 4000)
 rows after the replay: 4000, distinct dedupe keys: 4000, notional: 2000000000
 the replay filled the gap and the unique key made the overlap harmless

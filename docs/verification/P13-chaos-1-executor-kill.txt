@@ -4,7 +4,7 @@ expected outcome (written before the drill ran):
   100 kills between signing and the response, at random points: zero duplicate orders, zero lost positions, zero intents left in an impossible state. Every uncertain intent resolves to exactly one venue order or none, and the trail says why.
 
 verdict: PASS
-elapsed: 22.1 s
+elapsed: 22.3 s
 
 command: /usr/local/bin/python3 /home/user/polygm-platform/tools/p13-recovery-loop.py --runs 6 --seed 13 --record /home/user/polygm-platform/docs/verification/P13-chaos-1-executor-kill.txt
 exit: 0

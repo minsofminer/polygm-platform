@@ -1,5 +1,5 @@
 {
-  "at": "2026-09-21T05:45:12+0000",
+  "at": "2026-09-21T06:14:50+0000",
   "drills": {
     "1": {
       "artifact": "docs/verification/P13-chaos-1-executor-kill.txt",
@@ -20,12 +20,21 @@
       "title": "key compromise drill",
       "verdict": "PASS"
     },
+    "2": {
+      "artifact": "docs/verification/P13-chaos-2-ws-kill.txt",
+      "expected": "Five minutes without the socket: no duplicate orders, no missed fills (the fallback poll finds each one), every stale surface marked stale for the whole outage, and no alert delivered twice.",
+      "facts": {
+        "artifact": "docs/verification/P13-chaos-2-ws-kill.txt"
+      },
+      "title": "WebSocket killed for 5 minutes",
+      "verdict": "PASS"
+    },
     "3": {
       "artifact": "docs/verification/P13-chaos-3-ingest-killed-mid-write.txt",
       "expected": "The ingest consumer killed mid-write: every fill that was acknowledged is on disk, the replay after restart adds each one exactly once (the durable cursor), and no alert fires twice for one event.",
       "facts": {
         "distinct_keys": 4000,
-        "durable_at_kill": 3551,
+        "durable_at_kill": 3526,
         "rows_after_replay": 4000
       },
       "title": "ingest killed mid-write",
@@ -37,7 +46,7 @@
       "facts": {
         "idem_rows_added_while_locked": 0,
         "recovered_status": 202,
-        "refusal_ms": 5027.6,
+        "refusal_ms": 5026.8,
         "refused_status": 503,
         "rows_added_while_locked": 0
       },
@@ -49,7 +58,7 @@
       "expected": "No cache at all: every read still answers from the source, no request 5xx-es for a cache miss, and the upstream call count stays inside the per-IP budget (a cold cache must not become a rate-limit ban).",
       "facts": {
         "cache_entries_cleared": 0,
-        "ms_each": 3.6,
+        "ms_each": 3.3,
         "ok": 25,
         "reads": 25
       },

@@ -21,9 +21,13 @@ CI: `.github/workflows/nightly.yml` (drills + full-size load + Playwright + the 
 the phase gate plus a `web` job. `Makefile` gained `p13`, `p13-read`, `p13-matrix`, `p13-chaos`,
 `p13-chaos-live`, `p13-recovery`, `p13-load-quick`, `p13-load`, `p13-soak`; `make check` now runs `p13-read`.
 
-**Verified.** `pytest` **1332 passed in 120.4 s**; `vitest` **62 files / 560 passed**; `p12-gate-check` **41/0**
-(with `node_modules` restored); `check-openapi` 659/0; chaos suite **9 of 9 PASS** here plus the live drill-2
-artifact; money matrix **43 of 43 rows green, 62 of 62 mapped tests ran in 15 s**. D5 at the kit's sizes:
+**Verified.** `python3 tools/p13-gate-check.py` → **25 passed, 0 failed** (every section canaried, all ten
+recorded chaos drills counted); `pytest` **1332 passed in 120.4 s**; `vitest` **62 files / 560 passed**;
+`tsc --noEmit` clean; `p12-gate-check` **41/0** (with `node_modules` restored); `check-openapi` 659/0; chaos suite
+**9 of 9 PASS** here plus the live drill-2 artifact; money matrix **43 of 43 rows green, 62 of 62 mapped tests ran
+in 15 s**. D5 at the kit's sizes — including the clause that cannot be argued with: **360,000 fills at 200/s in
+1,800.0 s of wall clock, zero duplicate deliveries, consumer skew flat (−204 → −198 ms), 2.1 MB of second-half RSS
+growth** (`P13-soak-1800s.{txt,json}`). The rest:
 2,000 books — **11,955,200 deltas at 99,625/s**, RSS +7.8 MB; **500 concurrent users** p95 1,997 / p99 2,138 ms
 with 0 errors; **10,000 subscribers** drained in 54.7 s (SLO 300 s); **1,000 clients** through a SIGKILL, back in
 6.09 s with 0 slow failures while the server was down; **100 aggressive users** demanding 30,000 calls,

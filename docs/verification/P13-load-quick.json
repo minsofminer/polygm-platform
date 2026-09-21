@@ -1,5 +1,5 @@
 {
-  "at": "2026-09-21T05:08:18+0000",
+  "at": "2026-09-21T06:15:30+0000",
   "failures": [],
   "mode": "quick (CI)",
   "paced": false,
@@ -13,37 +13,37 @@
         {
           "as_of_top": [
             [
-              "1789967267038",
-              234
+              "1789971299032",
+              216
             ],
             [
-              "1789967267036",
-              120
+              "1789971299026",
+              110
             ]
           ],
-          "distinct_as_of": 220,
-          "max_ms": 325.5,
-          "ok": 825,
+          "distinct_as_of": 205,
+          "max_ms": 429.9,
+          "ok": 766,
           "other": {},
-          "p50_ms": 18.089,
-          "p95_ms": 151.649,
-          "p99_ms": 232.189,
-          "requests": 825,
-          "requests_per_s": 266.2,
+          "p50_ms": 18.841,
+          "p95_ms": 172.503,
+          "p99_ms": 283.013,
+          "requests": 766,
+          "requests_per_s": 251.4,
           "sample_errors": [],
-          "seconds": 3.1,
+          "seconds": 3.05,
           "server_errors": 0,
           "slowest": [
             [
-              325.5,
+              429.9,
               "/v1/leaderboard?limit=25"
             ],
             [
-              311.7,
+              315.1,
               "/v1/leaderboard?limit=25"
             ],
             [
-              276.2,
+              307.6,
               "/v1/leaderboard?limit=25"
             ]
           ],
@@ -53,37 +53,37 @@
         {
           "as_of_top": [
             [
-              "1789967267038",
-              236
+              "1789971299032",
+              210
             ],
             [
-              "1789967267036",
-              121
+              "1789971299030",
+              109
             ]
           ],
-          "distinct_as_of": 212,
-          "max_ms": 1072.3,
-          "ok": 829,
+          "distinct_as_of": 196,
+          "max_ms": 559.6,
+          "ok": 735,
           "other": {},
-          "p50_ms": 50.003,
-          "p95_ms": 374.142,
-          "p99_ms": 630.5,
-          "requests": 829,
-          "requests_per_s": 268.6,
+          "p50_ms": 88.426,
+          "p95_ms": 237.603,
+          "p99_ms": 365.135,
+          "requests": 735,
+          "requests_per_s": 227.6,
           "sample_errors": [],
-          "seconds": 3.09,
+          "seconds": 3.23,
           "server_errors": 0,
           "slowest": [
             [
-              1072.3,
+              559.6,
               "/v1/leaderboard?limit=25"
             ],
             [
-              742.1,
+              542.9,
               "/v1/leaderboard?limit=25"
             ],
             [
-              730.7,
+              468.2,
               "/v1/leaderboard?limit=25"
             ]
           ],
@@ -93,37 +93,37 @@
         {
           "as_of_top": [
             [
-              "1789967267038",
-              225
+              "1789971299032",
+              219
             ],
             [
-              "1789967267036",
-              128
+              "1789971299030",
+              114
             ]
           ],
-          "distinct_as_of": 211,
-          "max_ms": 1511.0,
-          "ok": 798,
+          "distinct_as_of": 204,
+          "max_ms": 623.5,
+          "ok": 780,
           "other": {},
-          "p50_ms": 104.234,
-          "p95_ms": 798.829,
-          "p99_ms": 1176.674,
-          "requests": 798,
-          "requests_per_s": 225.8,
+          "p50_ms": 191.769,
+          "p95_ms": 354.768,
+          "p99_ms": 488.562,
+          "requests": 780,
+          "requests_per_s": 238.7,
           "sample_errors": [],
-          "seconds": 3.53,
+          "seconds": 3.27,
           "server_errors": 0,
           "slowest": [
             [
-              1511.0,
+              623.5,
               "/v1/leaderboard?limit=25"
             ],
             [
-              1460.6,
+              600.9,
               "/v1/leaderboard?limit=25"
             ],
             [
-              1456.4,
+              596.8,
               "/v1/leaderboard?limit=25"
             ]
           ],
@@ -131,29 +131,29 @@
           "users": 50
         }
       ],
-      "throughput_peak_req_s": 268.6,
-      "workers_needed_for_500": 0.93
+      "throughput_peak_req_s": 251.4,
+      "workers_needed_for_500": 0.99
     },
     "books": {
       "books": 300,
       "cap": 300,
-      "cpu_pct": 93.7,
-      "events": 484400,
-      "events_per_s": 96827,
+      "cpu_pct": 97.7,
+      "events": 444800,
+      "events_per_s": 88933,
       "modelled_bytes_per_book": 8240,
       "resyncs": 0,
       "rss_delta_mb": 0.0,
-      "rss_mb": 32.5
+      "rss_mb": 32.6
     },
     "budget": {
       "by_source": {
         "clob.book": {
           "budget_10s": 800,
           "capacity": 200,
-          "peak_10s": 60,
+          "peak_10s": 61,
           "per_sec": 60,
-          "rate_per_s": 6.44,
-          "sends": 60
+          "rate_per_s": 6.55,
+          "sends": 61
         },
         "data.trades": {
           "budget_10s": 110,
@@ -166,17 +166,17 @@
         "gamma.markets": {
           "budget_10s": 300,
           "capacity": 100,
-          "peak_10s": 60,
+          "peak_10s": 61,
           "per_sec": 20,
-          "rate_per_s": 6.44,
-          "sends": 60
+          "rate_per_s": 6.55,
+          "sends": 61
         }
       },
       "demand": 1600,
-      "dropped_by_backpressure": 1374,
+      "dropped_by_backpressure": 1372,
       "note": "user demand is dropped by the bounded queue, never queued for minutes; what reaches the venue is the bucket's business, and that is the assertion",
       "seconds": 9.3,
-      "served": 182,
+      "served": 184,
       "straggler_threads": 4,
       "users": 40,
       "workers": 4
@@ -184,8 +184,8 @@
     "fanout": {
       "cycles": 63,
       "delivered": 1000,
-      "deliveries_per_s": 194.8,
-      "drain_seconds": 5.13,
+      "deliveries_per_s": 194.3,
+      "drain_seconds": 5.15,
       "send_ms": 80.0,
       "slo_seconds": 300.0,
       "subscribers": 1000,
@@ -194,49 +194,51 @@
     "soak": {
       "alerts_fired": 480,
       "alerts_suppressed": 144,
-      "cpu_s": 2.57,
+      "cpu_s": 2.89,
       "deliveries": 400,
       "duplicate_deliveries": 0,
+      "elapsed_s": 2.9,
       "fills": 6000,
       "notes": [
-        "virtual clock 6000 fills at 200/s (30.0 s of venue time in 2.6 s of wall clock)",
+        "virtual clock 6000 fills at 200/s (30.0 s of venue time in 2.9 s of wall clock)",
         "RSS slope measured after the first quarter of the run (warm-up excluded); the dedupe window is bounded at 100000 keys exactly as Tape's is",
         "cooldown memory 480 entries, queued deliveries 80 at the end"
       ],
       "rate": 200,
-      "rss_end_mb": 32.9,
-      "rss_growth_mb_per_min": 121.958,
-      "rss_second_half_mb": 3.1,
-      "rss_start_mb": 26.0,
+      "rss_end_mb": 33.0,
+      "rss_growth_mb_per_min": 108.904,
+      "rss_second_half_mb": 3.0,
+      "rss_start_mb": 26.1,
       "seconds": 30,
-      "skew_ms_first_tenth": -1608.2,
-      "skew_ms_last_tenth": -26245.7,
-      "skew_ms_max": -247.6,
+      "skew_ms_first_tenth": -1608.1,
+      "skew_ms_last_tenth": -25968.3,
+      "skew_ms_max": -248.2,
       "tape_dups": 0
     },
     "storm": {
       "as_of_after": [
         [
-          "1789967277448",
+          "1789971309406",
           14
         ],
         [
-          "1789967277442",
+          "1789971309402",
           9
         ]
       ],
       "as_of_before": [
-        "1789967277446",
-        "1789967277448"
+        "1789971309405",
+        "1789971309406"
       ],
       "came_back": true,
       "clients": 200,
-      "err": 13857,
+      "err": 12936,
       "note": "the transport is REST polling; the kill is SIGKILL of the API process",
-      "ok": 1746,
-      "outage_seconds": 3.84,
-      "recovered": 55,
-      "restart_seconds": 1.72,
+      "ok": 1618,
+      "outage_seconds": 4.26,
+      "recovered": 56,
+      "restart_log_bytes": 168811,
+      "restart_seconds": 2.34,
       "slow_err": 0,
       "status_after_restart": "clean"
     }
