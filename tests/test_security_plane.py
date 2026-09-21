@@ -20,7 +20,13 @@ import time
 import unittest
 import uuid
 
+import subprocess
+import sys
+from pathlib import Path
+
 from conftest import import_app, refresh_flags  # noqa: F401
+
+ROOT = Path(__file__).resolve().parents[1]
 
 BOT_TOKEN = "7123456789:" + "Aa4" + "x" * 40  # lint-allow: shape only, never a real token
 ADMIN = "adm_" + "k" * 44
@@ -870,3 +876,81 @@ class TestAuthzTable(RouteBase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestOptimisedBuildIsNotADifferentProduct(unittest.TestCase):
+    """P14 D3: the three guards SAST found as `assert` must survive `python -O`.
+
+    Why this is not a style note. `assert` is stripped by `python -O`, and each of these three is a *runtime*
+    control:
+
+      * `risk.limits` refuses a deny code whose severity is not one of the known set — the severity decides how a
+        refusal is displayed and whether it is retryable, so an unknown one would be rendered by whichever client
+        felt like it;
+      * `risk.limits.evaluate_extra`'s inner `deny()` refuses a code that is not in the table at all;
+      * `copy.engine` refuses a skip reason that is not documented, and a silently-counted skip is a copy that
+        stopped without saying why.
+
+    So the test does not grep for the word `raise` — that would pass on a file that raises in a comment. It runs
+    a *child interpreter with -O* and asserts the guards still fire there. The child is a subprocess because
+    optimisation is fixed at interpreter start: there is no way to un-assert a running module.
+    """
+
+    def test_the_deny_table_invariant_fires_under_optimisation(self) -> None:
+        script = (
+            "import sys; sys.path.insert(0, %r)\n"
+            "from polygm_core.risk import limits\n"
+            "from dataclasses import replace\n"
+            "bad = dict(limits.DENY_CODES)\n"
+            "bad['P14_FAKE'] = replace(list(limits.DENY_CODES.values())[0], severity='not-a-severity')\n"
+            "limits.DENY_CODES.clear(); limits.DENY_CODES.update(bad)\n"
+            "try:\n"
+            "    limits.validate_deny_table()\n"
+            "except ValueError as e:\n"
+            "    print('RAISED', e); sys.exit(0)\n"
+            "print('SILENT'); sys.exit(3)\n"
+        ) % str(ROOT / "packages")
+        r = subprocess.run([sys.executable, "-O", "-c", script], capture_output=True, text=True, timeout=60)
+        self.assertEqual(r.returncode, 0,
+                         "a bad severity passed validation under -O: %s" % (r.stdout + r.stderr)[-300:])
+        self.assertIn("RAISED", r.stdout)
+
+    def test_the_unknown_deny_code_guard_fires_under_optimisation(self) -> None:
+        script = (
+            "import sys; sys.path.insert(0, %r)\n"
+            "from polygm_core.risk import limits\n"
+            "print('deny_code_known:', limits.deny_code_known('P14_NOT_A_CODE'))\n"
+            "assert not limits.deny_code_known('P14_NOT_A_CODE')\n"   # deliberately an assert: inside -O it is a
+            "print('OK')\n"                                          # no-op, so the printed value is the evidence
+        ) % str(ROOT / "packages")
+        r = subprocess.run([sys.executable, "-O", "-c", script], capture_output=True, text=True, timeout=60)
+        self.assertEqual(r.returncode, 0, (r.stdout + r.stderr)[-300:])
+        self.assertIn("deny_code_known: False", r.stdout,
+                      "the table lookup itself is the control, and it must not depend on assertion machinery")
+
+    def test_the_copy_skip_reason_guard_fires_under_optimisation(self) -> None:
+        script = (
+            "import sys; sys.path.insert(0, %r)\n"
+            "from polygm_core.copy.engine import EngineStats\n"
+            "try:\n"
+            "    EngineStats().skip('not_a_documented_reason: because')\n"
+            "except ValueError as e:\n"
+            "    print('RAISED', e); sys.exit(0)\n"
+            "print('SILENT'); sys.exit(3)\n"
+        ) % str(ROOT / "packages")
+        r = subprocess.run([sys.executable, "-O", "-c", script], capture_output=True, text=True, timeout=60)
+        self.assertEqual(r.returncode, 0,
+                         "an undocumented skip reason was accepted under -O: %s" % (r.stdout + r.stderr)[-300:])
+        self.assertIn("RAISED", r.stdout)
+
+    def test_a_documented_skip_reason_still_counts(self) -> None:
+        """The canary for over-raising: a guard that refuses everything is a copy engine that stops working."""
+        script = (
+            "import sys; sys.path.insert(0, %r)\n"
+            "from polygm_core.copy.engine import EngineStats, SKIP_REASONS\n"
+            "s = EngineStats(); s.skip(sorted(SKIP_REASONS)[0] + ': ok')\n"
+            "print('COUNTED', sorted(s.skipped))\n"
+        ) % str(ROOT / "packages")
+        r = subprocess.run([sys.executable, "-O", "-c", script], capture_output=True, text=True, timeout=60)
+        self.assertEqual(r.returncode, 0, (r.stdout + r.stderr)[-300:])
+        self.assertIn("COUNTED", r.stdout)

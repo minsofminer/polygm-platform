@@ -137,13 +137,23 @@ DENY_CODES: dict[str, DenySpec] = dict([
     _d("UNCERTAIN_INTENT", 409, True, "hard", "we are still checking whether this order exists", "p06"),
 ])
 
-for _c, _s in DENY_CODES.items():
-    # NOT an `assert`. P14's SAST pass flagged this and the two sites below as "assert used for control flow",
-    # and the reason it matters here is `python -O`: asserts vanish, so a typo'd severity would ship silently to
-    # the surface that decides how a refusal is displayed. An invariant that is load-bearing is raised, not
-    # asserted — the build that strips asserts must not be a different product.
-    if _s.severity not in SEVERITIES:
-        raise ValueError("DENY_CODE_SEVERITY: %s is %r, not one of %s" % (_c, _s.severity, SEVERITIES))
+def validate_deny_table() -> None:
+    """Every deny code carries a severity the client can render.
+
+    NOT an `assert`. P14's SAST pass flagged this and the call site below as "assert used for control flow", and
+    the reason it matters is `python -O`: asserts vanish, so a typo'd severity would ship silently to the surface
+    that decides how a refusal is displayed. An invariant that is load-bearing is raised, not asserted — the build
+    that strips asserts must not be a different product. It is a named function rather than an inline loop so that
+    `tests/test_security_plane.py::TestOptimisedBuildIsNotADifferentProduct` can run it under `-O` with a known-bad
+    table instead of asserting that a source file contains the right keyword.
+    """
+    for code, spec in DENY_CODES.items():
+        if spec.severity not in SEVERITIES:
+            raise ValueError("DENY_CODE_SEVERITY: %s is %r, not one of %s"
+                             % (code, spec.severity, SEVERITIES))
+
+
+validate_deny_table()
 
 
 def deny_code_known(code: str) -> bool:
