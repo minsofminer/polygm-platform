@@ -17,6 +17,15 @@ coverage/
 # scratch: temp DBs and executor child logs from the P06 harnesses when TMPDIR points in here
 .tmp/
 
+# P15 terraform: state and provider plugins never enter the repository
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+*.tfplan
+terraform.tfvars
+crash.log
+
 # P08 frontend
 web/node_modules/
 web/.next/

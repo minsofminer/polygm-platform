@@ -1,0 +1,9 @@
+# Copy to terraform.tfvars and fill from the secret store. This file is the list of what an operator must hold;
+# nothing here is ever committed with a value.
+hcloud_token         = ""
+cloudflare_api_token = ""
+cloudflare_account_id = ""
+domain               = "polygm.trade"
+neon_api_key         = ""
+ssh_public_keys      = ["ssh-ed25519 AAAA... operator", "ssh-ed25519 AAAA... ci-deploy"]
+admin_cidrs          = ["203.0.113.7/32", "198.51.100.0/28"] # the operator and the CI runner's egress range

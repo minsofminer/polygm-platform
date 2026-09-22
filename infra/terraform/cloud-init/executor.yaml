@@ -1,0 +1,109 @@
+#cloud-config
+# P15 D2 — the executor host. This box holds the signing path, so its bootstrap is written to assume it will
+# eventually be probed: no inbound service, an egress allowlist enforced twice, and a kernel-level record of what
+# it tried to reach.
+package_update: true
+packages:
+  - docker.io
+  - docker-compose-v2
+  - ufw
+  - unattended-upgrades
+  - auditd
+write_files:
+  - path: /etc/docker/daemon.json
+    content: |
+      {
+        "log-driver": "json-file",
+        "log-opts": { "max-size": "20m", "max-file": "5" },
+        "no-new-privileges": true,
+        "live-restore": true
+      }
+  # Host-level egress allowlist. The Hetzner firewall matches destination *addresses*; this matches *names*,
+  # resolved at boot and re-resolved every minute, so a vendor that moves its edge does not silently become
+  # unreachable and a new outbound connection to anywhere else is refused by the kernel rather than by hope.
+  - path: /usr/local/bin/polygm-egress.sh
+    permissions: "0755"
+    content: |
+      #!/usr/bin/env bash
+      # Deny by default, then allow exactly: the venue, the wallet provider, the database host and DNS.
+      set -euo pipefail
+      ALLOW_HOSTS=(clob.polymarket.com gamma-api.polymarket.com data-api.polymarket.com api.turnkey.com)
+      DB_HOST="$(awk -F= '/^PGM_DB_HOST=/{print $2}' /etc/polygm/executor.env)"
+      ALLOW_HOSTS+=("$DB_HOST")
+      iptables -F OUTPUT; iptables -P OUTPUT DROP
+      iptables -A OUTPUT -o lo -j ACCEPT
+      iptables -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+      iptables -A OUTPUT -p udp --dport 53 -d 1.1.1.1 -j ACCEPT
+      iptables -A OUTPUT -p tcp --dport 53 -d 1.1.1.1 -j ACCEPT
+      iptables -A OUTPUT -p tcp --dport 22 -d 10.20.0.0/16 -j ACCEPT
+      iptables -A OUTPUT -p tcp --dport 8443 -d 10.20.1.10 -j ACCEPT
+      for h in "${ALLOW_HOSTS[@]}"; do
+        for ip in $(getent ahostsv4 "$h" | awk '{print $1}' | sort -u); do
+          iptables -A OUTPUT -p tcp --dport 443 -d "$ip" -j ACCEPT
+          iptables -A OUTPUT -p tcp --dport 5432 -d "$ip" -j ACCEPT
+        done
+      done
+      # Everything that is not listed above is logged and dropped. The log line is what the P14 D4 probe reads.
+      iptables -A OUTPUT -j LOG --log-prefix "polygm-egress-drop: " --log-level 4
+  # The executor's own environment. Filled by the deploy job from the secret store; the only file on this host
+  # that names the database, and it is 0640 root:docker.
+  - path: /etc/polygm/executor.env
+    permissions: "0640"
+    content: |
+      PGM_REQUIRE_SECURITY_ENV=1
+      PGM_LOG_FORMAT=json
+      POLYGM_ENGINE=postgres
+      POLYGM_TRANSPORT=live
+      # PGM_DB_HOST / PGM_DB_URL / PGM_SIGNER_* are injected at deploy time and never committed.
+  - path: /etc/logrotate.d/polygm-egress
+    content: |
+      /var/log/kern.log { weekly rotate 8 compress missingok notifempty }
+runcmd:
+  - ufw default deny incoming
+  - ufw default deny outgoing
+  - ufw allow out 22/tcp
+  - ufw allow out 53
+  - ufw allow out 443/tcp
+  - ufw allow out 5432/tcp
+  - ufw allow out to 10.20.1.10 port 8443 proto tcp
+  - ufw --force enable
+  - systemctl enable --now auditd unattended-upgrades docker
+  - /usr/local/bin/polygm-egress.sh
+  - |
+    # A timer, not a one-shot: a vendor edge that moves must not turn into "the executor stopped placing orders
+    # and nothing said why". Re-resolving every minute also means the drop log accumulates the truth.
+    cat >/etc/systemd/system/polygm-egress.service <<'UNIT'
+    [Unit]
+    Description=PolyGM executor egress allowlist
+    [Service]
+    Type=oneshot
+    ExecStart=/usr/local/bin/polygm-egress.sh
+    UNIT
+  - |
+    cat >/etc/systemd/system/polygm-egress.timer <<'UNIT'
+    [Unit]
+    Description=Refresh the executor egress allowlist
+    [Timer]
+    OnBootSec=30
+    OnUnitActiveSec=60
+    [Install]
+    WantedBy=timers.target
+    UNIT
+  # The executor process itself. It is a compose service in the same release tarball as the API, so a release is
+  # one artifact and one commit — but the drain protocol (P6 D3) is what decides *when* it may be replaced.
+  - |
+    cat >/etc/systemd/system/polygm-executor.service <<'UNIT'
+    [Unit]
+    Description=PolyGM executor plane
+    After=docker.service network-online.target polygm-egress.service
+    [Service]
+    WorkingDirectory=/srv/polygm
+    EnvironmentFile=/etc/polygm/executor.env
+    ExecStart=/usr/bin/docker compose -f /srv/polygm/docker-compose.prod.yml up executor --remove-orphans
+    ExecStop=/usr/bin/docker compose -f /srv/polygm/docker-compose.prod.yml stop executor
+    Restart=always
+    [Install]
+    WantedBy=multi-user.target
+    UNIT
+  - systemctl daemon-reload && systemctl enable --now polygm-egress.timer polygm-executor.service
+final_message: "polygm executor host ready after $UPTIME seconds"

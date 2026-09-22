@@ -1,0 +1,46 @@
+# P15 D2 — the infrastructure gate. It runs on every pull request like the other gates, because the failure this
+# prevents (a firewall rule edited in a console, a variable pinned in a dashboard) is invisible until the day
+# somebody tries to rebuild the environment and gets something subtly different.
+name: infra
+
+on:
+  pull_request:
+    paths: ["infra/**", "config/environments.json", "tools/p15-env-diff.py", "Makefile", ".github/workflows/infra.yml"]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Terraform 1.9 has no state locking for an S3-compatible backend, so applies must not overlap. The concurrency
+# group is the lock. (Terraform >=1.10 adds `use_lockfile = true`; adopting it is a recorded follow-up, not an
+# assumption baked into this workflow.)
+concurrency:
+  group: infra-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  terraform:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.9.8"
+      - name: format
+        run: terraform -chdir=infra/terraform fmt -recursive -check
+      - name: validate
+        run: |
+          terraform -chdir=infra/terraform init -backend=false -input=false
+          terraform -chdir=infra/terraform validate
+      - name: environment matrix
+        run: python3 tools/p15-env-diff.py
+      - name: the plan is what review sees
+        # `plan` needs provider credentials, so it runs only where they exist (the deploy environment) — a plan
+        # against no account would be a green tick that proves nothing. The gate is documented in D2 as owner-run.
+        if: ${{ vars.POLYGM_INFRA_PLAN == 'true' }}
+        env:
+          HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
+        run: |
+          terraform -chdir=infra/terraform init -input=false
+          terraform -chdir=infra/terraform plan -input=false -lock=false

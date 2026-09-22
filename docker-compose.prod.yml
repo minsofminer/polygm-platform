@@ -1,0 +1,104 @@
+# P15 D2 — the production stack. Three properties matter more than the rest of this file:
+#
+#   1. **The executor is on the internal network only.** It publishes no ports, it is not reachable from the edge
+#      network, and the only thing that can wake it is the API over the private network. Ingress is not firewalled
+#      here — it does not exist.
+#   2. **Every image is pinned by digest.** `deploy/image-digests.txt` is written by the build job and read by the
+#      deploy job, so the thing that ran in staging is bit-for-bit the thing that runs in production. A tag is a
+#      promise; a digest is a fact.
+#   3. **Secrets arrive as files at deploy time.** `env_file` points at `/etc/polygm/*.env`, written by the deploy
+#      job from the platform store. Nothing here is baked into an image, and nothing here is in git.
+#
+# The development stack (repo root `docker-compose.yml`) is deliberately a different file: it has fixture services,
+# a SQLite-friendly API and a mock executor. Keeping them separate is why "it worked locally" and "it worked in
+# prod" can both be true.
+
+name: polygm
+
+x-hardening: &hardening
+  security_opt: ["no-new-privileges:true"]
+  cap_drop: ["ALL"]
+  restart: unless-stopped
+  logging:
+    driver: json-file
+    options: { max-size: "20m", max-file: "5" }
+
+services:
+  # TLS termination and the only thing attached to the public network. Cloudflare sits in front of this (proxied
+  # DNS record), so the origin sees Cloudflare's ranges and the certificate is renewed by Caddy without us.
+  caddy:
+    image: caddy:2.8.4-alpine
+    <<: *hardening
+    ports: ["80:80", "443:443"]
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+    networks: [edge]
+    depends_on:
+      api: { condition: service_healthy }
+
+  api:
+    image: "${POLYGM_API_IMAGE:?the deploy job exports POLYGM_API_IMAGE from deploy/image-digests.txt}"
+    <<: *hardening
+    env_file: ["/etc/polygm/api.env"]
+    environment:
+      POLYGM_ENGINE: postgres
+      PGM_DB_URL: "postgres://polygm_app@pgbouncer:6432/polygm?sslmode=require"
+      PGM_AUTH_MODE: bearer
+      PGM_REQUIRE_SECURITY_ENV: "1"
+      PGM_LOG_FORMAT: json
+    networks: [edge, internal]
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=2).status==200 else 1)"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 30s
+    read_only: true
+    tmpfs: ["/tmp"]
+    stop_grace_period: 45s # P15 D3: the drain window. Long enough to finish an in-flight order, short enough to deploy.
+
+  # The money path. No ports. No edge network. The firewall above has no inbound rules for this host, and the
+  # host itself drops all egress except the venue, the wallet provider, the database and the API's wake-up port.
+  executor:
+    image: "${POLYGM_EXECUTOR_IMAGE:?the deploy job exports POLYGM_EXECUTOR_IMAGE from deploy/image-digests.txt}"
+    <<: *hardening
+    env_file: ["/etc/polygm/executor.env"]
+    environment:
+      POLYGM_ENGINE: postgres
+      PGM_DB_URL: "postgres://polygm_executor@pgbouncer:6432/polygm?sslmode=require"
+      POLYGM_TRANSPORT: live
+      PGM_LOG_FORMAT: json
+    networks: [internal]
+    depends_on:
+      pgbouncer: { condition: service_started }
+    healthcheck:
+      # The executor's own liveness: it answers only on the private network, and only to the API's probe.
+      test: ["CMD", "python3", "-c", "import socket,sys; s=socket.socket(); s.settimeout(2); sys.exit(0 if s.connect_ex(('127.0.0.1', 8091))==0 else 1)"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+    read_only: true
+    tmpfs: ["/tmp", "/run/polygm"]
+    stop_grace_period: 120s # the drain: an ambiguous order must never be replaced mid-flight (P6 D3 reconciliation)
+
+  # Connection pooling between the app and the managed database. Neon's pooler exists, but a local pgbouncer keeps
+  # the connection count a property of this box rather than of the plan, and it is one more thing the *dev* stack
+  # also runs — so the connection path in staging is the connection path in production.
+  pgbouncer:
+    image: edoburu/pgbouncer:v1.23.1-p2
+    <<: *hardening
+    env_file: ["/etc/polygm/pgbouncer.env"]
+    networks: [internal]
+    read_only: true
+    tmpfs: ["/tmp"]
+
+volumes:
+  caddy_data:
+
+networks:
+  edge:
+    driver: bridge
+  internal:
+    driver: bridge
+    internal: true # no route off this network except through the containers that also sit on `edge`

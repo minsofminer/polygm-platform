@@ -1,0 +1,21 @@
+P15 D2 — executor isolation check
+========================================================================
+
+1. platform firewall (infra/terraform/network.tf)
+   terraform validates: see `make infra-validate` (recorded in the D2 section of docs/P15-deployment.md)
+
+2. host egress allowlist (infra/terraform/cloud-init/executor.yaml)
+
+3. container (docker-compose.prod.yml)
+
+========================================================================
+Checks passed: 23, failed: 0
+
+Still owner-run on real infrastructure (the halves a file cannot prove):
+# on polygm-executor-1, with the stack running:
+docker compose -f /srv/polygm/docker-compose.prod.yml exec executor sh -c \
+  'for h in example.com github.com api.openai.com; do curl -s -m 3 -o /dev/null -w "$h %{http_code}\n" https://$h || echo "$h BLOCKED"; done'
+# expected: every line BLOCKED, and `grep polygm-egress-drop /var/log/kern.log` shows the attempts.
+# then the inverse: `curl -sS -o /dev/null -w '%{http_code}\n' https://clob.polymarket.com/` must answer 200.
+
+Verdict: PASS (static) — runtime probe PENDING

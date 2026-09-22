@@ -1,0 +1,122 @@
+{
+  "_comment": "P15 D1. The environment matrix the deploy reads and tools/p15-env-diff.py checks. Every knob listed here is also declared in .env.example (the human-readable home of what it means); this file exists because 'what differs between staging and prod' has to be readable by a machine before it can be trusted by a person. Empty string means unset. `_purpose`/`_data`/`_cost` are the kit's own columns.",
+  "environments": {
+    "local": {
+      "_purpose": "development: docker compose up, fixtures, no network to the venue",
+      "_data": "mock + fixtures (seeded by `make seed`)",
+      "_cost": "$0",
+      "POLYGM_ENGINE": "sqlite",
+      "PGM_DB_PATH": "var/polygm.db",
+      "POLYGM_TRANSPORT": "mock",
+      "PGM_MOCK_CLOB_URL": "http://executor-mock:8090",
+      "PGM_REQUIRE_SECURITY_ENV": "",
+      "PGM_AUTH_MODE": "dev-header",
+      "PGM_LOG_FORMAT": "text",
+      "PGM_BUILDER_CODE": "",
+      "PGM_SENTRY_DSN": "",
+      "PGM_BACKUP_TARGET": ""
+    },
+    "preview": {
+      "_purpose": "one per pull request, ephemeral: does the branch boot and answer?",
+      "_data": "mock; a branch database seeded with fixtures, dropped with the environment",
+      "_cost": "~$0 (branch compute only)",
+      "POLYGM_ENGINE": "postgres",
+      "PGM_DB_PATH": "",
+      "POLYGM_TRANSPORT": "mock",
+      "PGM_MOCK_CLOB_URL": "http://executor-mock:8090",
+      "PGM_REQUIRE_SECURITY_ENV": "1",
+      "PGM_AUTH_MODE": "bearer",
+      "PGM_LOG_FORMAT": "json",
+      "PGM_BUILDER_CODE": "",
+      "PGM_SENTRY_DSN": "",
+      "PGM_BACKUP_TARGET": ""
+    },
+    "staging": {
+      "_purpose": "pre-prod rehearsal: the whole order path, with fake money and a real book",
+      "_data": "real Polymarket market data and tape; no real order leaves the building",
+      "_cost": "~$10/mo (one small host; a branch database)",
+      "POLYGM_ENGINE": "postgres",
+      "PGM_DB_PATH": "",
+      "POLYGM_TRANSPORT": "mock",
+      "PGM_MOCK_CLOB_URL": "http://executor-mock:8090",
+      "PGM_REQUIRE_SECURITY_ENV": "1",
+      "PGM_AUTH_MODE": "bearer",
+      "PGM_LOG_FORMAT": "json",
+      "PGM_BUILDER_CODE": "",
+      "PGM_SENTRY_DSN": "set (staging-tagged project)",
+      "PGM_BACKUP_TARGET": "s3://polygm-backups/staging/"
+    },
+    "canary": {
+      "_purpose": "our own money, real orders, internal accounts only: the $50 of the P14 D7 checklist",
+      "_data": "real",
+      "_cost": "shared with prod",
+      "POLYGM_ENGINE": "postgres",
+      "PGM_DB_PATH": "",
+      "POLYGM_TRANSPORT": "live",
+      "PGM_MOCK_CLOB_URL": "",
+      "PGM_REQUIRE_SECURITY_ENV": "1",
+      "PGM_AUTH_MODE": "bearer",
+      "PGM_LOG_FORMAT": "json",
+      "PGM_BUILDER_CODE": "the registered builder code",
+      "PGM_SENTRY_DSN": "set (production project, environment=canary)",
+      "PGM_BACKUP_TARGET": "s3://polygm-backups/prod/"
+    },
+    "prod": {
+      "_purpose": "live: other people's money",
+      "_data": "real",
+      "_cost": "~$72/mo at launch (see docs/P15-deployment.md D2)",
+      "POLYGM_ENGINE": "postgres",
+      "PGM_DB_PATH": "",
+      "POLYGM_TRANSPORT": "live",
+      "PGM_MOCK_CLOB_URL": "",
+      "PGM_REQUIRE_SECURITY_ENV": "1",
+      "PGM_AUTH_MODE": "bearer",
+      "PGM_LOG_FORMAT": "json",
+      "PGM_BUILDER_CODE": "the registered builder code",
+      "PGM_SENTRY_DSN": "set (production project, environment=prod)",
+      "PGM_BACKUP_TARGET": "s3://polygm-backups/prod/"
+    }
+  },
+  "knobs": {
+    "POLYGM_ENGINE": {
+      "why": "postgres | sqlite. The storage engine; SQLite is the development and CI twin of the same schema.",
+      "whyDiffers": "local runs SQLite because a laptop has no Postgres and the seed is instant; every deployed environment runs the engine that will hold real money. Preview runs Postgres specifically so a migration that only works on SQLite cannot pass review."
+    },
+    "PGM_DB_PATH": {
+      "why": "the SQLite file, used only when POLYGM_ENGINE=sqlite.",
+      "whyDiffers": "it is the local database's location, and nothing else."
+    },
+    "POLYGM_TRANSPORT": {
+      "why": "mock | live. `live` requires the signer and is gated on P13/P14; `mock` talks to services/executor-mock.",
+      "whyDiffers": "staging and preview must be able to run the entire order path — risk gate, signing, submission, reconciliation — without a real order ever leaving the building; prod and the canary place real orders. Local mocks because there is no network from a laptop's compose stack."
+    },
+    "PGM_MOCK_CLOB_URL": {
+      "why": "where the mock venue listens.",
+      "whyDiffers": "it is only meaningful where the transport is mock; it is deliberately empty everywhere the venue is real so a misroute cannot happen silently."
+    },
+    "PGM_REQUIRE_SECURITY_ENV": {
+      "why": "1 = production identity shape: the dev header is ignored and a missing KEK is a boot failure.",
+      "whyDiffers": "local is unset so a developer can boot from .env without the full security plane; preview, staging, the canary and prod all set it, because P14's F9 was the deployed API running the development identity shape in production."
+    },
+    "PGM_AUTH_MODE": {
+      "why": "bearer | dev-header. dev-header trusts X-User-Id and is only safe on loopback.",
+      "whyDiffers": "local only. A dev identity on any environment with a public URL is an authentication hole with a friendly name."
+    },
+    "PGM_LOG_FORMAT": {
+      "why": "json | text. JSON is what the redactor and the log scanner read.",
+      "whyDiffers": "local is text because a human is reading it; every deployed environment emits JSON, and the CI log-redaction check runs against the JSON shape."
+    },
+    "PGM_BUILDER_CODE": {
+      "why": "the registered builder code every order carries; it is our revenue share.",
+      "whyDiffers": "live environments carry the registered code (and a self-referral can disable it — see P14); mock environments send nothing, because a code that earns nothing has no business appearing in a rehearsal."
+    },
+    "PGM_SENTRY_DSN": {
+      "why": "if set, the redacting before_send is installed before anything can leave the pod.",
+      "whyDiffers": "local stays silent so a developer's stack traces are their own; staging is tagged separately from prod so a rehearsal error cannot be mistaken for a production incident."
+    },
+    "PGM_BACKUP_TARGET": {
+      "why": "where `pg_basebackup` output goes. A backup with no restore record is not a backup.",
+      "whyDiffers": "local has no backups to take; staging writes to its own prefix so restoring staging can never overwrite production's history — the distinction that matters on the day somebody restores the wrong one."
+    }
+  }
+}

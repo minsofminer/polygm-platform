@@ -334,7 +334,32 @@ security-gate:
 	$(PY) tools/p14-security-gate.py
 	$(PY) tools/p14-security-gate.py --check
 
-check: test lint lint-canary openapi-selftest sql-sqlite-check gate gate-mutate p01 p02 p03 p04 p05 p06 p07 p08 p09 p10 p12 p12-selftest p13-read probe-fresh
+# ------------------------------------------------------------------ P15 infrastructure
+# The terraform binary is not vendored: CI installs it, and a developer who does not have it gets a clear message
+# rather than a mystery. `infra-check` is what CI runs, and it is the P15 D2 gate: formatting, validity, and the
+# environment matrix agreeing with the files we deploy.
+TF ?= terraform
+infra-envs:
+	$(PY) tools/p15-env-diff.py
+
+infra-fmt:
+	@command -v $(TF) >/dev/null || { echo "terraform not installed: see docs/P15-deployment.md D2"; exit 127; }
+	$(TF) -chdir=infra/terraform fmt -recursive -check
+
+infra-validate:
+	@command -v $(TF) >/dev/null || { echo "terraform not installed: see docs/P15-deployment.md D2"; exit 127; }
+	$(TF) -chdir=infra/terraform init -backend=false -input=false >/dev/null
+	$(TF) -chdir=infra/terraform validate
+
+infra-plan:
+	@command -v $(TF) >/dev/null || { echo "terraform not installed"; exit 127; }
+	$(TF) -chdir=infra/terraform init -input=false
+	$(TF) -chdir=infra/terraform plan -input=false -out=infra/terraform/polygm.tfplan
+
+infra-check: infra-envs infra-fmt infra-validate
+	@echo "INFRA GREEN"
+
+check: test lint lint-canary openapi-selftest sql-sqlite-check gate gate-mutate p01 p02 p03 p04 p05 p06 p07 p08 p09 p10 p12 p12-selftest p13-read infra-check probe-fresh
 	@echo "ALL GREEN"
 
 # ------------------------------------------------------------------ diagnostics

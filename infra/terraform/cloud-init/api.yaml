@@ -1,0 +1,57 @@
+#cloud-config
+# P15 D2 — the API + ingest host. Everything here is a bootstrap: the deploy job replaces the application
+# containers on every release, and nothing stateful lives on the disk except the docker volumes and the logs.
+package_update: true
+packages:
+  - docker.io
+  - docker-compose-v2
+  - ufw
+  - fail2ban
+  - unattended-upgrades
+write_files:
+  - path: /etc/docker/daemon.json
+    content: |
+      {
+        "log-driver": "json-file",
+        "log-opts": { "max-size": "20m", "max-file": "5" },
+        "no-new-privileges": true,
+        "live-restore": true
+      }
+  # The compose file is *pulled*, not written here: a cloud-init copy of the stack is the version that drifts.
+  - path: /etc/polygm/api.env
+    permissions: "0640"
+    content: |
+      # Filled by the deploy job from the platform's secret store at every release; never in the image, never in git.
+      PGM_REQUIRE_SECURITY_ENV=1
+      PGM_AUTH_MODE=bearer
+      PGM_LOG_FORMAT=json
+      POLYGM_ENGINE=postgres
+      POLYGM_TRANSPORT=live
+runcmd:
+  # The host firewall is the second layer under the Hetzner one: if a rule is ever removed from the platform
+  # firewall, this is what still refuses 5432 and 22 from the world.
+  - ufw default deny incoming
+  - ufw default allow outgoing
+  - ufw allow 22/tcp
+  - ufw allow 80,443/tcp
+  - ufw --force enable
+  - systemctl enable --now fail2ban unattended-upgrades docker
+  - mkdir -p /srv/polygm && cd /srv/polygm
+  # The stack itself comes from the release tarball (`make deploy`), so a rebuild of this host cannot invent a
+  # different version of the product: the compose file is the one from the deployed commit.
+  - |
+    cat >/etc/systemd/system/polygm.service <<'UNIT'
+    [Unit]
+    Description=PolyGM API plane
+    After=docker.service network-online.target
+    [Service]
+    WorkingDirectory=/srv/polygm
+    EnvironmentFile=/etc/polygm/api.env
+    ExecStart=/usr/bin/docker compose -f /srv/polygm/docker-compose.prod.yml up --remove-orphans
+    ExecStop=/usr/bin/docker compose -f /srv/polygm/docker-compose.prod.yml down
+    Restart=always
+    [Install]
+    WantedBy=multi-user.target
+    UNIT
+  - systemctl daemon-reload && systemctl enable polygm
+final_message: "polygm api host ready after $UPTIME seconds"

@@ -1,0 +1,47 @@
+# P15 D2 — TLS termination for the API origin. Caddy because the certificate is a solved problem: it acquires and
+# renews on its own, and a deploy that forgets to copy a cert is a class of incident we simply do not have.
+#
+# Cloudflare is in front (the DNS record is proxied), so this listener sees Cloudflare's edge, not the public. The
+# real client address arrives in CF-Connecting-IP, and that is the address the API's rate limiter and the P14 F9
+# header checks read — passing it through unvalidated would let anyone spoof it by talking to the origin directly,
+# so the origin firewall accepts 443 from anywhere but the app trusts the header only because Cloudflare strips a
+# client-supplied copy.
+
+{
+	email {$POLYGM_TLS_EMAIL:ops@example.com}
+	servers {
+		protocols h1 h2
+	}
+}
+
+{$POLYGM_API_HOST:localhost} {
+	encode zstd gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+	}
+
+	# The Mini App is a different origin (Vercel) and calls this API; the allowlist is exactly that origin, not `*`.
+	@miniapp header Origin {$POLYGM_WEB_ORIGIN:http://localhost:3000}
+	header @miniapp Access-Control-Allow-Origin "{$POLYGM_WEB_ORIGIN:http://localhost:3000}"
+
+	# Long-lived streams (the tape and the order stream) must not be buffered into uselessness by a proxy.
+	reverse_proxy api:8080 {
+		flush_interval -1
+		transport http {
+			read_timeout 0
+			write_timeout 0
+		}
+	}
+
+	log {
+		output file /data/access.log {
+			roll_size 50MiB
+			roll_keep 10
+		}
+		format json
+	}
+}
