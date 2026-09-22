@@ -452,3 +452,60 @@ keep it from being a lockout: the victim keeps their session, is notified, and c
 machine, which measures the product's own budgets and failure modes — and found a crash — but not the deployed
 fleet behind a CDN. The OPEN item records that P13's load harness owns the fleet question and must be re-run
 against the deployed API before launch, with the p95 and error-rate curves attached to the security gate document.
+
+---
+
+## D6–D8 — the decisions, the gate document, and what keeps it true
+
+### D6 — decisions, in `docs/P14-audit-bounty-legal.md`
+
+* **An external penetration test, before real funds**, scoped to the money and identity paths in five priorities
+  (authorisation, custody, the order path against the venue, the Mini App, infrastructure), with our own evidence
+  pack handed to the tester so their hours go on what we missed rather than on what we documented. The document
+  also states what our own testing *cannot* cover — the registry cannot be both the map and the territory, and the
+  executor has never talked to the real venue — and that a skipped audit is recorded as a sentence in writing
+  rather than as a gap nobody mentions.
+* **A private, invited bug bounty at launch**, with published bands set against expected loss (critical
+  2 000–5 000, high 750–2 000, medium 150–750), safe harbour written first, a 72-hour triage commitment, a budget
+  line at 5 % of the first year's security spend, and the same rule this phase has run on: **no finding closed
+  without a re-test**, visible to the reporter.
+* **Twelve questions for counsel**, written with the product facts attached so they are answerable (delegated
+  custody, builder-code revenue, Telegram distribution, pseudonymised leaderboards, copy-trading, the logging
+  design), grouped by audience, with the two that gate the launch named as such.
+
+### D7 — the pre-launch security gate, `docs/P14-security-gate.md`
+
+Written by `tools/p14-security-gate.py` **from the recorded artifacts**, so the verdict cannot drift from the
+evidence: `--check` fails if the document on disk disagrees with what the five harnesses recorded. It carries the
+kit's launch conditions as a table, the blocking findings, the open items, a sign-off block that is deliberately
+empty until a human puts a name and a date against it, and the standing rule it inherits — no real funds until
+P13/P14 are green.
+
+Its verdict today is **NO-GO**, and the reason is not the code: the two failing checks are owner actions (MFA on
+the GitHub account that owns this repository; the inherited `0.0.0.0/0` default on a database on the linked
+Supabase account). Everything the build itself can close is closed.
+
+### D8 — continuous assurance
+
+The controls are only worth what their cadence is worth, so the cadence is executable rather than aspirational:
+
+| Cadence | What runs | What it catches |
+|---|---|---|
+| every PR touching `services/`, `packages/`, `tools/p14-*`, `db/` | `tools/p14-appsec-scan.py`, `tools/p14-authz-matrix.py`, the triage-file diff, and `p14-security-gate.py --check` | a new SAST finding, a route that stops refusing the wrong principal, a triage entry that has gone stale, and a gate document that no longer matches reality |
+| nightly | `make security` — all five harnesses, including the six key drills and the 100-aggressive-users probe | a control that stopped working while nobody was looking |
+| quarterly (and on any advisory touching `cryptography`, `argon2-cffi`, `asyncpg`, `py-clob-client-v2`) | the dependency review in `docs/dependency-review.md`, with a date and an owner per row | the advisory that lands on an unowned package |
+| before any deployment that touches money or keys | `make security-record && make security-gate`, then the sign-off block | shipping on evidence that has expired |
+
+`.github/workflows/security.yml` implements the first two; `make security` and `make security-record` are the
+by-hand equivalents, which matters because a control that can *only* run in CI is a control nobody can reproduce
+during an incident.
+
+**The drill calendar** (from D2, with the same names the `drill_records` table uses): `key_compromise` quarterly —
+the six scenarios in `tools/p14-key-drills.py`; `phishing_support` twice a year; `pg_failover` after any database
+change; `channel_poison` (the Telegram channel) quarterly. Each run writes its own row with a stopwatch time, and
+a failure has to name the step that failed or the record is refused — a failure with no named step is a failure
+that gets "fixed" by re-running it until it says pass.
+
+**What is deliberately not automated**: the sign-off, the external audit, and the legal questions. Those are the
+three places where a human signature is the control, and automating them would replace the control with a
+document.

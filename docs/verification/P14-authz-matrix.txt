@@ -25,11 +25,11 @@ PASS no refused attack echoed the other account's private strings
 PASS write canary: a changed row is visible to the post-state read
 PASS an intent created with A's session is A's, whatever else the request says (owner is A)
 PASS the order body has no field that names an account (a body with `userId` answers 422, so there is nothing to spoof)
-PASS an admin token is not a way around the user session on an order (status 503)
+PASS an admin token is not a way around the user session on an order (status 401)
 PASS a service token is not a user identity (3 probes, none accepted)
 PASS an order above the risk limits is refused for the limit reason (403 OVER_ORDER_CAP)
 PASS an order inside the limits is still accepted (202)
-PASS an admin credential does not step over the risk gate (503, and with no admin token configured on this box it is refused before the gate at all)
+PASS an admin credential does not step over the risk gate (401, and with no admin token configured on this box it is refused before the gate at all)
 PASS no admin operation is a route that places an order (14 admin operations)
 PASS the shared service secret is enforced where it belongs, and is not an API credential (3 header probes refused)
 PASS hostile ids on the id-bearing routes are answered, never crashed (39 requests, {404: 27, 422: 12})
