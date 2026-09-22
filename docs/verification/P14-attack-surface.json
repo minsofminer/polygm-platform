@@ -1,0 +1,739 @@
+{
+  "verdict": "CONDITIONAL",
+  "open_conditions": [
+    {
+      "check": "THE CASCADE WAS BOUNDED ARITHMETICALLY, NOT END TO END: 500 copiers were sized through the engine, but no run placed 500 real orders against a filling venue",
+      "why": "measure the wall-clock and the aggregate notional of a real 500-copier fanout in the P13 chaos suite (which already kills the executor mid-fill), and record both numbers against these caps \u2014 500 configs is a load shape, and the bound that matters is the one the queue enforces"
+    },
+    {
+      "check": "A LEGITIMATE QUESTION CONTAINING `_`, `*`, `[`, `]` OR A BACKTICK TRIPS THE BROADCAST MARKDOWN-CONFETTI WARNING (cosmetic: the text renders literally)",
+      "why": "narrow MARKDOWN_CONFETTI_RE to paired emphasis markers (`**x**`, `__x__`, `[x](y)`, `` `x` ``) rather than any occurrence of the character, and add the underscore-in-a-market-question case as a test beside the confetti one"
+    },
+    {
+      "check": "NO OUTBOUND WEBHOOK TRANSPORT EXISTS YET, so the stored-URL SSRF path is latent rather than absent",
+      "why": "the alert channel `webhook` is Pro's and its rows are held, not sent (P10 D9). When a transport lands it must (a) parse the URL, (b) refuse any scheme but https, (c) resolve the host and refuse loopback, link-local 169.254.0.0/16, RFC1918 and IPv6 ULA ranges, (d) re-check after every redirect or refuse redirects outright. The check belongs in this section, and it must be a refusal *before* the socket rather than a timeout after it"
+    },
+    {
+      "check": "NO CSV EXPORT ROUTE EXISTS YET, so formula injection could not be probed end to end",
+      "why": "when the tax export ships: write a row whose fields begin `=`, `+`, `-`, `@`, then assert the writer prefixes each with a quote and that the header row is unchanged; add a test next to the wallet's own, and keep this probe as the outside view"
+    },
+    {
+      "check": "THE COPY-FARM RULE CANNOT TELL A FOLLOWER FROM TWO ACTIVE TRADERS ON THE SAME CADENCE",
+      "why": "measured, not argued: with the candidate's fills moved 200s earlier \u2014 so it is never the one being followed in any pairing sense \u2014 10 of 12 of our fills still matched, because any candidate fill inside 120s counts and a 60s cadence always has one. The row this produces is a public suspicion ('derived from 0x\u2026'), which is a claim about a person. Before the label ships to users: pair the fills one-to-one (a matched candidate cannot match twice), require the pairing to be stable across the window rather than per-fill, or compare each wallet's own inter-fill cadence \u2014 and add this tape as the test, because it currently flags"
+    },
+    {
+      "check": "NEITHER STRIPE NOR TELEGRAM-STARS FULFILMENT EXISTS YET, so payment-webhook forgery has no target",
+      "why": "both arrive as attacker-reachable POSTs, so before either ships: verify the signature over the RAW bytes with a constant-time compare (Stripe's `Stripe-Signature` includes a timestamp \u2014 refuse outside a 5-minute tolerance and store every event id to refuse replays; Telegram's is the secret header plus `successful_payment` arriving only in an update, never in a form post), and never read the amount, the user id or the plan from the body without cross-checking the record the provider keeps"
+    },
+    {
+      "check": "THE REVOCATION GROUND IS THE PROGRAMME-WIDE BUILDER CODE, AND NOTHING RE-ENABLES IT IN THE PRODUCT",
+      "why": "one user's self-referral writes `state='disabled', source='manual'` on the single code the whole referral programme earns under (correctly: the venue's affiliate terms are what is at risk, and the row is where ops look). Two gaps to close before launch: (a) `_ref_invalidate_builder_code` returns False when the code is already disabled, so a later self-referral records `builder_code_revoked: false` while the code stays disabled \u2014 an operator reading only the audit line sees 'nothing happened'; (b) there is no route or screen that clears a manual disable after a review clears it, so the only way back is a hand-written UPDATE. Both are small, both are operational, and the fix is a `manual_review_cleared` event plus an admin route rather than a new table"
+    },
+    {
+      "check": "A `close_position` ACTION LARGER THAN THE PER-ORDER CAP IS STILL REFUSED AT FIRE TIME ONLY",
+      "why": "the F19 fix covers sized actions (limit/market). Closing a position is sized by the position itself, so a $25,000 position cannot be closed by a rule while the cap is $2,500 \u2014 the risk review has to decide whether closes are exempt from the entry cap or split into legs, and that decision belongs in the gate's deny table rather than in this probe"
+    }
+  ],
+  "facts": {
+    "at_ms": 1790109811488,
+    "bench": {
+      "market": "0xM1",
+      "token": "0xT10",
+      "tick": "0.01",
+      "account": "u_attacker_3e8be9f8"
+    },
+    "trading": {
+      "must_accept": {
+        "status": 202,
+        "code": ""
+      },
+      "off_tick": {
+        "price": "0.5555",
+        "tick": "0.01",
+        "status": 422,
+        "code": "OFF_TICK",
+        "detail": "{\"error\": {\"code\": \"OFF_TICK\", \"message\": \"price is not on a valid tick\", \"retryable\": false, \"requestId\": \"a65cf2a1964d4e80\"}}"
+      },
+      "intents_after_off_tick": {
+        "before": {
+          "queued": 1
+        },
+        "after": {
+          "queued": 1,
+          "rejected": 1
+        },
+        "delta": {
+          "rejected": 1,
+          "queued": 0
+        }
+      },
+      "sizes": {
+        "below_minimum": {
+          "status": 422,
+          "code": "BELOW_MIN_SIZE"
+        },
+        "zero": {
+          "status": 422,
+          "code": "ZERO_SIZE"
+        },
+        "negative": {
+          "status": 422,
+          "code": "BAD_AMOUNT"
+        },
+        "enormous": {
+          "status": 403,
+          "code": "OVER_ORDER_CAP"
+        },
+        "not_a_number": {
+          "status": 422,
+          "code": "BAD_AMOUNT"
+        },
+        "scientific": {
+          "status": 422,
+          "code": "BAD_AMOUNT"
+        }
+      },
+      "toctou": {
+        "quote_status": 422,
+        "submit_status": 503,
+        "code": "STALE_QUOTE",
+        "book_rows_aged": 24
+      },
+      "idempotency": {
+        "same_first": 202,
+        "same_again": 202,
+        "different_body": 409,
+        "different_code": "IDEM_CONFLICT"
+      },
+      "race": {
+        "attempts": 8,
+        "outcomes": [
+          {
+            "status": 403,
+            "code": "OVER_ORDER_CAP"
+          }
+        ],
+        "intents_before": 6,
+        "intents_after": 14
+      },
+      "automation": {
+        "over_cap_errors": [
+          "actions[0]: limit of $11000 is above the per-order cap of $2500, so the risk gate would refuse every fire: lower the size or split the rule"
+        ],
+        "under_cap_errors": [],
+        "under_cap_actions": 0
+      },
+      "cascade": {
+        "copiers": 500,
+        "largest_copy_shares_micro": 45454545,
+        "largest_copy_shares": 45.4545,
+        "largest_copy_usdc": 25.0,
+        "aggregate_usdc_if_all_placed": 12500.0,
+        "distinct_keys": 500,
+        "refusals": [
+          ""
+        ]
+      },
+      "cascade_daily_tail": {
+        "shares": 1818181,
+        "why": ""
+      }
+    },
+    "injection": {
+      "sqli": {
+        "baseline_rows": 18,
+        "leaks": []
+      },
+      "prototype_pollution": {
+        "status": 422,
+        "body": "{\"error\":{\"code\":\"VALIDATION\",\"message\":\"request body or parameters are not valid for this endpoint (unknown: __proto__, unknown: constructor)\",\"retryable\":fals"
+      },
+      "chat_escaping": {
+        "fill_card": {
+          "has_raw_script": false,
+          "has_raw_img": false,
+          "findings": []
+        },
+        "refusal_card": {
+          "has_raw_script": false,
+          "has_raw_img": false,
+          "findings": [
+            "a beat looks like Markdown in an HTML message"
+          ]
+        },
+        "unknown_order_card": {
+          "has_raw_script": false,
+          "has_raw_img": false,
+          "findings": []
+        }
+      },
+      "scanner_findings": {
+        "hard": {},
+        "cosmetic": {
+          "refusal_card": [
+            "a beat looks like Markdown in an HTML message"
+          ]
+        }
+      },
+      "render_canary": [
+        "a beat has a tag Telegram will reject"
+      ],
+      "stored_params": {
+        "status": 200,
+        "roundtrip_exact": true,
+        "rendered_escaped": true
+      },
+      "ssrf": {
+        "declared_paths": 87,
+        "url_named_parameters": [],
+        "endpoint_constants": [
+          {
+            "const": "GAMMA",
+            "host": "gamma-api.polymarket.com",
+            "where": "services/ingest/main.py:66"
+          },
+          {
+            "const": "CLOB",
+            "host": "clob.polymarket.com",
+            "where": "services/ingest/main.py:67"
+          },
+          {
+            "const": "DATA",
+            "host": "data-api.polymarket.com",
+            "where": "services/ingest/main.py:68"
+          },
+          {
+            "const": "WS_URL",
+            "host": "ws-subscriptions-clob.polymarket.com",
+            "where": "services/ingest/main.py:69"
+          },
+          {
+            "const": "API",
+            "host": "api.telegram.org",
+            "where": "packages/polygm_core/telegrambot/client.py:28"
+          }
+        ],
+        "endpoint_hosts": [
+          "api.telegram.org",
+          "clob.polymarket.com",
+          "data-api.polymarket.com",
+          "gamma-api.polymarket.com",
+          "ws-subscriptions-clob.polymarket.com"
+        ],
+        "fetch_sites": [
+          "services/executor-mock/transport.py:31 urllib.request.urlopen(req)",
+          "services/ingest/net.py:232 urllib.request.urlopen(req)",
+          "services/ingest/wsclient.py:109 socket.create_connection()"
+        ]
+      },
+      "redos": {
+        "/v1/markets?q": {
+          "status": 422,
+          "ms": 5.3
+        },
+        "/v1/markets?category": {
+          "status": 422,
+          "ms": 5.3
+        },
+        "/v1/leaderboard?q": {
+          "status": 422,
+          "ms": 3.9
+        }
+      }
+    },
+    "logic": {
+      "self_referral": {
+        "code_status": 200,
+        "apply_status": 409,
+        "apply_code": "SELF_REFERRAL",
+        "attribution_rows": 0,
+        "audit": {
+          "builder_code_revoked": true,
+          "reason": "self_referral",
+          "referrer": "u_attacker_3e8be9f8",
+          "review": 1,
+          "state": "refused"
+        },
+        "programme_code": "polygm-referral",
+        "builder_code": [
+          "polygm-referral",
+          "disabled",
+          "manual",
+          "self-referral detected on account u_attacker_3e8be9f8"
+        ],
+        "referral_token": "ref_bwpvwohl\u2026"
+      },
+      "duplicate_funding": {
+        "first": {
+          "uid": "u_sybil-a_3c839946",
+          "status": 200,
+          "body_state": "attributed",
+          "code": "",
+          "record_state": "pending",
+          "record_reason": "",
+          "qualify_order": "",
+          "notional_micro": 0
+        },
+        "second": {
+          "uid": "u_sybil-b_5eb097c5",
+          "status": 409,
+          "body_state": null,
+          "code": "REFUSED",
+          "record_state": "refused",
+          "record_reason": "duplicate_funding",
+          "qualify_order": "",
+          "notional_micro": 0
+        }
+      },
+      "sybil_claims": [
+        {
+          "uid": "u_sybil-0_31db4ab5",
+          "status": 200,
+          "body_state": "attributed",
+          "code": "",
+          "record_state": "pending",
+          "record_reason": "",
+          "qualify_order": "",
+          "notional_micro": 0
+        },
+        {
+          "uid": "u_sybil-1_96878bfe",
+          "status": 200,
+          "body_state": "attributed",
+          "code": "",
+          "record_state": "pending",
+          "record_reason": "",
+          "qualify_order": "",
+          "notional_micro": 0
+        },
+        {
+          "uid": "u_sybil-2_4eaaa3a2",
+          "status": 200,
+          "body_state": "attributed",
+          "code": "",
+          "record_state": "pending",
+          "record_reason": "",
+          "qualify_order": "",
+          "notional_micro": 0
+        },
+        {
+          "uid": "u_sybil-3_869f0efe",
+          "status": 200,
+          "body_state": "review",
+          "code": "",
+          "record_state": "review",
+          "record_reason": "velocity",
+          "qualify_order": "",
+          "notional_micro": 0
+        },
+        {
+          "uid": "u_sybil-4_3026fe0a",
+          "status": 200,
+          "body_state": "review",
+          "code": "",
+          "record_state": "review",
+          "record_reason": "velocity",
+          "qualify_order": "",
+          "notional_micro": 0
+        },
+        {
+          "uid": "u_sybil-6_5fd02741",
+          "status": 200,
+          "body_state": "review",
+          "code": "",
+          "record_state": "review",
+          "record_reason": "velocity",
+          "qualify_order": "",
+          "notional_micro": 0
+        }
+      ],
+      "sybil_states": {
+        "pending": 3,
+        "review": 3
+      },
+      "wash": {
+        "washedMicro": 50000000,
+        "verifiedMicro": 112000000,
+        "roundTrips": 1,
+        "windowMs": 600000,
+        "rule": "a round trip is an opposite-side fill in the same market within 10 minutes whose price moved no more than 50 bps: the position went nowhere, so the volume is subtracted",
+        "note": "removed 50000000 micro of round-tripped volume from 1 pair(s) before ranking this wallet"
+      },
+      "wash_control": {
+        "pairs_in_window": 1,
+        "other_wallet_washed": 0
+      },
+      "copy_farm": {
+        "caught": {
+          "derivedFrom": "0xleaderleader",
+          "mirroredFills": 12,
+          "mirrorBps": 10000,
+          "windowMs": 120000,
+          "fills": 12,
+          "rule": "12 of 12 fills mirror one wallet's market and side inside 120 seconds, which is a copy, not a coincidence"
+        },
+        "other_market": null,
+        "other_side": null,
+        "thirty_minutes_earlier": null,
+        "interleaved_same_cadence": {
+          "derivedFrom": "0xleaderleader",
+          "mirroredFills": 10,
+          "mirrorBps": 8333,
+          "windowMs": 120000,
+          "fills": 12,
+          "rule": "10 of 12 fills mirror one wallet's market and side inside 120 seconds, which is a copy, not a coincidence"
+        },
+        "below_the_fill_floor": null
+      },
+      "free_webhook": {
+        "status": 402,
+        "code": "PLAN_REQUIRED",
+        "detail": "{\"error\": {\"code\": \"PLAN_REQUIRED\", \"message\": \"the plan on this account does not include that (webhook needs the pro plan): webhook needs the pro plan\", \"retryable\": true, \"requestId\": \"ae82c6beeda04"
+      },
+      "plan_injection": {
+        "status": 422,
+        "code": "VALIDATION",
+        "plan_read_back": "free",
+        "rules_created": 0
+      },
+      "rule_cap": {
+        "created": 10,
+        "refusal": {
+          "status": 409,
+          "code": "RULE_CAP"
+        }
+      },
+      "forged_update": {
+        "status": 503,
+        "code": "SIGNER_UNAVAILABLE",
+        "claim_rows": 0
+      },
+      "payment_surface": {
+        "declared_paths": "/v1/telegram/webhook",
+        "stars_handler": false
+      }
+    }
+  },
+  "checks": [
+    {
+      "status": "PASS",
+      "name": "a legal order is accepted first, so the refusals below mean something (202)",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "an off-grid price is refused, not rounded (0.5555 on a 0.01 grid): 422 OFF_TICK",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "the off-grid attempt queued nothing and was recorded as rejected (delta {\"rejected\": 1})",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "size below_minimum (0.000001) is refused with a reason",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "size zero (0) is refused with a reason",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "size negative (-5) is refused with a reason",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "size enormous (1000000000) is refused with a reason",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "size not_a_number (ten) is refused with a reason",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "size scientific (1e30) is refused with a reason",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "the enormous size is refused for the *cap* reason, not a generic validation error",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "an order submitted against a book that has aged past the gate's window is refused as stale (503 STALE_QUOTE)",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "the same key with the same body is one order (202 then 202, accepted)",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "the same key with a different body is refused rather than executed (409 IDEM_CONFLICT)",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "eight concurrent over-cap submits produced no 5xx ([[403, \"OVER_ORDER_CAP\"]])",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "every over-cap submit in the race was refused (8 attempt(s))",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "an automation action above the per-order cap is refused by the builder, and the sentence names the cap (['actions[0]: limit of $11000 is above the per-order cap of $2500, so the risk gate would refuse every fire: lower the size or split the rule'])",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "an action under the cap still compiles, so the check is a ceiling and not a ban (clean)",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "the engine's own per-run ceiling is a number the compiler enforces, not a comment",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "each of 500 mirror copiers is capped by its own $25 per-order ceiling (largest copy 45.4545 shares = $25.00)",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "the 500 copiers are 500 distinct orders and 500 distinct idempotency keys (500 keys)",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "replaying the same source fill produces ONE key, so a duplicate WS frame cannot double-place",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "a copier with $1 of daily budget left cannot buy $25 of stock (sized to 1818181 shares, no reason)",
+      "why": ""
+    },
+    {
+      "status": "OPEN",
+      "name": "THE CASCADE WAS BOUNDED ARITHMETICALLY, NOT END TO END: 500 copiers were sized through the engine, but no run placed 500 real orders against a filling venue",
+      "why": "measure the wall-clock and the aggregate notional of a real 500-copier fanout in the P13 chaos suite (which already kills the executor mid-fill), and record both numbers against these caps \u2014 500 configs is a load shape, and the bound that matters is the one the queue enforces"
+    },
+    {
+      "status": "PASS",
+      "name": "no SQLi payload changes the result set, 500s, or surfaces a SQL error (4 payload(s) x 4 routes)",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "the markets table survived `DROP TABLE markets` (the route still answers)",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "a body with __proto__/constructor is refused rather than merged into anything",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "hostile text in a market question, a side, a refusal and a limbo card reaches the chat escaped (3 card(s))",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "the scanner finds no tag-level failure in the escaped cards (3 card(s); 1 cosmetic finding(s))",
+      "why": ""
+    },
+    {
+      "status": "OPEN",
+      "name": "A LEGITIMATE QUESTION CONTAINING `_`, `*`, `[`, `]` OR A BACKTICK TRIPS THE BROADCAST MARKDOWN-CONFETTI WARNING (cosmetic: the text renders literally)",
+      "why": "narrow MARKDOWN_CONFETTI_RE to paired emphasis markers (`**x**`, `__x__`, `[x](y)`, `` `x` ``) rather than any occurrence of the character, and add the underscore-in-a-market-question case as a test beside the confetti one"
+    },
+    {
+      "status": "PASS",
+      "name": "a card assembled without esc() is caught by the scanner (canary: ['a beat has a tag Telegram will reject'])",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "a script payload in a query is never echoed into a JSON response",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "the public market page serves JSON with a no-sniff content type",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "a hostile label survives storage byte-for-byte and is escaped at render, not at save",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "no request parameter or body field can name an address the server fetches (87 declared path(s), 0 URL-ish name(s) found)",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "every endpoint constant points at a known vendor (5 constant(s), 5 host(s): api.telegram.org, clob.polymarket.com, data-api.polymarket.com, gamma-api.polymarket.com, ws-subscriptions-clob.polymarket.com)",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "the fetch call sites are the ingest and executor clients, and each takes a constant rather than a request field (3 site(s))",
+      "why": ""
+    },
+    {
+      "status": "OPEN",
+      "name": "NO OUTBOUND WEBHOOK TRANSPORT EXISTS YET, so the stored-URL SSRF path is latent rather than absent",
+      "why": "the alert channel `webhook` is Pro's and its rows are held, not sent (P10 D9). When a transport lands it must (a) parse the URL, (b) refuse any scheme but https, (c) resolve the host and refuse loopback, link-local 169.254.0.0/16, RFC1918 and IPv6 ULA ranges, (d) re-check after every redirect or refuse redirects outright. The check belongs in this section, and it must be a refusal *before* the socket rather than a timeout after it"
+    },
+    {
+      "status": "PASS",
+      "name": "a 10,000-character pathological parameter is refused or answered quickly (worst 5.3 ms)",
+      "why": ""
+    },
+    {
+      "status": "OPEN",
+      "name": "NO CSV EXPORT ROUTE EXISTS YET, so formula injection could not be probed end to end",
+      "why": "when the tax export ships: write a row whose fields begin `=`, `+`, `-`, `@`, then assert the writer prefixes each with a quote and that the header row is unchanged; add a test next to the wallet's own, and keep this probe as the outside view"
+    },
+    {
+      "status": "PASS",
+      "name": "an account applying its own link is refused as a self-referral (409 SELF_REFERRAL)",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "the self-referral wrote no attribution row",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "the refusal recorded the ground in the audit trail ({\"builder_code_revoked\": true, \"reason\": \"self_referral\", \"referrer\": \"u_attacker_3e8be9f8\", \"review\": 1, \"state\": \"refu)",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "the programme's builder code (polygm-referral) is marked disabled with the reason readable (['polygm-referral', 'disabled', 'manual', 'self-referral detected on account u_attacker_3e8be9f8'])",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "two accounts claiming one referrer from the same funding source: the second is refused for the funding collision (409, record says refused/duplicate_funding)",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "the refused claim is recorded as REFUSED rather than as a live attribution, and earns nothing (refused, $0.0)",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "every one of six fresh accounts claiming one referrer lands in a named state ({\"pending\": 3, \"review\": 3})",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "every held or refused claim carries its reason in the record ([\"velocity\", \"velocity\", \"velocity\"])",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "signup alone earns the referrer $0: no row carries a qualification with no qualifying order behind it (0 earning row(s))",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "the hourly velocity limit is a state the product reaches and names ([\"velocity\", \"velocity\", \"velocity\"])",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "a same-wallet round trip 30s apart at one price is subtracted exactly once ($50.0 of $162.0, 1 pair(s))",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "the wash subtracted the round-tripped leg and NOT the third, genuine $620 trade (verified $112.0)",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "the detector does not erase genuine volume: 1 pair(s) in the window, another wallet's opposite fill washes $0.0",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "the watchlist's own row builder calls the washer on every evidence build",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "twelve fills mirroring another wallet that traded 5s earlier on the same side are named as a copy farm ({\"derivedFrom\": \"0xleaderleader\", \"mirroredFills\": 12, \"mirrorBps\": 10000, \"windowMs\": 120000, \"fills\": 12, \"r)",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "a different market, a different side, and a candidate half an hour earlier are all NOT a farm (None / None / None)",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "nine mirrored fills are below the floor and are not a farm (none)",
+      "why": ""
+    },
+    {
+      "status": "OPEN",
+      "name": "THE COPY-FARM RULE CANNOT TELL A FOLLOWER FROM TWO ACTIVE TRADERS ON THE SAME CADENCE",
+      "why": "measured, not argued: with the candidate's fills moved 200s earlier \u2014 so it is never the one being followed in any pairing sense \u2014 10 of 12 of our fills still matched, because any candidate fill inside 120s counts and a 60s cadence always has one. The row this produces is a public suspicion ('derived from 0x\u2026'), which is a claim about a person. Before the label ships to users: pair the fills one-to-one (a matched candidate cannot match twice), require the pairing to be stable across the window rather than per-fill, or compare each wallet's own inter-fill cadence \u2014 and add this tape as the test, because it currently flags"
+    },
+    {
+      "status": "PASS",
+      "name": "a free account cannot save a Pro channel, and the refusal names the plan (402 PLAN_REQUIRED)",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "declaring `plan: pro` in the body cannot buy a Pro channel (422 VALIDATION) and the account still reads free (free)",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "the concurrent-rule cap binds on the server: 10 created, then {\"status\": 409, \"code\": \"RULE_CAP\"}",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "a Telegram update with the wrong secret is refused and claims nothing (503 SIGNER_UNAVAILABLE, 0 claim row(s))",
+      "why": ""
+    },
+    {
+      "status": "OPEN",
+      "name": "NEITHER STRIPE NOR TELEGRAM-STARS FULFILMENT EXISTS YET, so payment-webhook forgery has no target",
+      "why": "both arrive as attacker-reachable POSTs, so before either ships: verify the signature over the RAW bytes with a constant-time compare (Stripe's `Stripe-Signature` includes a timestamp \u2014 refuse outside a 5-minute tolerance and store every event id to refuse replays; Telegram's is the secret header plus `successful_payment` arriving only in an update, never in a form post), and never read the amount, the user id or the plan from the body without cross-checking the record the provider keeps"
+    },
+    {
+      "status": "OPEN",
+      "name": "THE REVOCATION GROUND IS THE PROGRAMME-WIDE BUILDER CODE, AND NOTHING RE-ENABLES IT IN THE PRODUCT",
+      "why": "one user's self-referral writes `state='disabled', source='manual'` on the single code the whole referral programme earns under (correctly: the venue's affiliate terms are what is at risk, and the row is where ops look). Two gaps to close before launch: (a) `_ref_invalidate_builder_code` returns False when the code is already disabled, so a later self-referral records `builder_code_revoked: false` while the code stays disabled \u2014 an operator reading only the audit line sees 'nothing happened'; (b) there is no route or screen that clears a manual disable after a review clears it, so the only way back is a hand-written UPDATE. Both are small, both are operational, and the fix is a `manual_review_cleared` event plus an admin route rather than a new table"
+    },
+    {
+      "status": "OPEN",
+      "name": "A `close_position` ACTION LARGER THAN THE PER-ORDER CAP IS STILL REFUSED AT FIRE TIME ONLY",
+      "why": "the F19 fix covers sized actions (limit/market). Closing a position is sized by the position itself, so a $25,000 position cannot be closed by a rule while the cap is $2,500 \u2014 the risk review has to decide whether closes are exempt from the entry cap or split into legs, and that decision belongs in the gate's deny table rather than in this probe"
+    }
+  ]
+}

@@ -24,7 +24,8 @@ for p in (str(ROOT / "packages"), str(ROOT / "services" / "api")):
     if p not in sys.path:
         sys.path.insert(0, p)
 
-from conftest import import_app                                                       # noqa: E402
+from conftest import import_app, refresh_flags                                        # noqa: E402
+from polygm_core.config.flags import set_flag                                        # noqa: E402
 
 USER = {"X-User-Id": "u-demo"}
 
@@ -64,6 +65,77 @@ class AutomationTestCase(unittest.TestCase):
 
     def create(self, name="create", **over):
         return self.client.post("/v1/automations", json=self.payload(**over), headers=self.key(name))
+
+    # ------------------------------------------------------------------ F19: a rule the gate would refuse
+
+    def entry(self, **over) -> dict:
+        """A rule that *places*, with a size the caller chooses — the shape F19 was found in."""
+        body = {"kind": "entry", "name": "buy the dip", "match": "all",
+                "triggers": [{"kind": "price_cross", "uses": "mid", "op": "<=", "price_micro": 550_000}],
+                "actions": [{"kind": "limit", "side": "BUY", "price_micro": 550_000,
+                             "size_shares_micro": 5_000_000, "max_slippage_bps": 100}],
+                "targets": [{"marketId": self.market}], "maxPerDay": 12, "minIntervalMs": 60_000,
+                "maxLossMicro": 5_000_000}
+        body.update(over)
+        return body
+
+    def test_an_action_above_the_per_order_cap_is_refused_at_save_time_not_at_fire_time(self):
+        # The finding: 20,000 shares at $0.55 is $11,000 on one order, and the builder accepted it — the rule
+        # saved, the dry run passed (a dry run places nothing, so the gate never saw it), and every live fire
+        # would have been refused by the risk gate with OVER_ORDER_CAP. The user's armed rule was dead and the
+        # product said nothing at the moment they could have acted on it.
+        body = self.entry(actions=[{"kind": "limit", "side": "BUY", "price_micro": 550_000,
+                                    "size_shares_micro": 20_000_000_000, "max_slippage_bps": 100}])
+        r = self.client.post("/v1/automations", json=body, headers=self.key("f19-big"))
+        self.assertEqual(422, r.status_code, r.text)
+        msg = r.json()["error"]["message"]
+        self.assertIn("per-order cap", msg, msg)
+        self.assertIn("11000", msg.replace(",", ""), msg)
+
+    def test_the_cap_is_a_ceiling_and_not_a_ban_on_sized_actions(self):
+        # The other half of a refusal: the same shape just under the cap must save. A rule that refuses every
+        # sized action is a feature that was switched off, not a check that works.
+        body = self.entry(actions=[{"kind": "limit", "side": "BUY", "price_micro": 550_000,
+                                    "size_shares_micro": 4_000_000_000, "max_slippage_bps": 100}])
+        r = self.client.post("/v1/automations", json=body, headers=self.key("f19-ok"))
+        self.assertEqual(200, r.status_code, r.text)
+        self.assertEqual("entry", r.json()["rule"]["kind"])
+
+    def test_a_market_action_is_measured_at_the_most_a_share_can_cost(self):
+        # A market action has no price at save time, so the check must assume the worst (a share at $1) rather
+        # than skip: a market order that *could* exceed the cap is refused before it is armed.
+        body = self.entry(actions=[{"kind": "market", "side": "BUY", "size_shares_micro": 20_000_000_000,
+                                    "max_slippage_bps": 100}])
+        r = self.client.post("/v1/automations", json=body, headers=self.key("f19-market"))
+        self.assertEqual(422, r.status_code, r.text)
+        self.assertIn("per-order cap", r.json()["error"]["message"])
+
+    def test_the_live_flag_moves_the_ceiling_without_a_restart(self):
+        # The limit lives in the flag store, so an incident response that lowers it must bind the next save. This
+        # is the property the API call site exists for: compiled with the constant instead, the lowered flag would
+        # be honoured by the gate and ignored by the builder, and the two doors would disagree.
+        self.set_flag("max_order_notional_micro", 100_000_000)
+        self.app._db.commit()
+        try:
+            refresh_flags(self.app)
+            body = self.entry(actions=[{"kind": "limit", "side": "BUY", "price_micro": 550_000,
+                                        "size_shares_micro": 4_000_000_000, "max_slippage_bps": 100}])
+            r = self.client.post("/v1/automations", json=body, headers=self.key("f19-flag"))
+            self.assertEqual(422, r.status_code, "a $2,200 action passed a $100 cap: %s" % r.text)
+        finally:
+            self.set_flag("max_order_notional_micro", 2_500_000_000)
+            self.app._db.commit()
+            refresh_flags(self.app)
+
+    def set_flag(self, name: str, value) -> None:
+        """Through the sanctioned writer, not a raw UPDATE.
+
+        `config.flags.set_flag` is the only path that appends to `flag_audit`, and a CI gate greps for raw UPDATEs
+        on `feature_flags`. A test that flips a flag behind the audit trail is teaching the next person to do it in
+        production. Note the encoding too: a numeric flag's `value_json` is `{"value": N}`, which is why a bare
+        `'100000000'` loads as nothing and the flag silently keeps its default.
+        """
+        set_flag(self.app._db, name, value, changed_by="p14-test", reason="P14 F19: exercise the live ceiling")
 
     def rules(self):
         r = self.client.get("/v1/automations", headers=USER)

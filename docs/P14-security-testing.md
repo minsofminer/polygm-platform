@@ -120,6 +120,101 @@ Two surfaces the kit names are **not testable over HTTP today**, and that is rec
   refuses an empty or missing secret, and accepts the real one). The executor's own refusal of a foreign intent is
   `tools/p08-gate-check.py`'s drill.
 
+### The trading, injection and business-logic probes
+
+`tools/p14-attack-surface.py` is the second half of D1, and it asks a different question from the matrix. The matrix
+answers *who may do what*; this tool answers **what happens when an authorised user sends the wrong thing on
+purpose**. Every probe in it is made by the rightful owner of a qualified account, because that is the threat model
+the kit names: a user attacking the venue's rules, the risk gate, or another user through the product's own
+surfaces.
+
+**56 checks, 0 failures, 8 OPEN** (`docs/verification/P14-attack-surface.{txt,json}`). The eight OPENs are decisions
+and absences, not soft passes: they are listed at the end of the record with the exact work each one needs.
+
+#### Trading: what a bad order does
+
+| Probe | Result |
+| --- | --- |
+| A legal order is accepted first (the must-accept) | `202`, so the refusals below mean something |
+| Off-grid price (`0.5555` on a `0.01` tick) | `422 OFF_TICK`, **not rounded** — and the refusal left a `rejected` intent row and no live order |
+| Size below the minimum / zero / negative / enormous / not-a-number / `1e30` | `422 BELOW_MIN_SIZE`, `422 ZERO_SIZE`, `422 BAD_AMOUNT`, `403 OVER_ORDER_CAP`, `422`, `422` |
+| TOCTOU: quote, age the book past the gate's 5 s window, then submit | `503 STALE_QUOTE` — the gate re-reads freshness at submit rather than trusting the price the user saw |
+| The same idempotency key with the same body, then with a different body | one order, then `409 IDEM_CONFLICT` |
+| Eight concurrent over-cap submits (the race the gate runs on SQLite) | all `403 OVER_ORDER_CAP`, no 5xx, nothing half-placed |
+| An automation action above the per-order cap | refused at **save** time with a sentence naming the cap (F19) |
+| 500 mirror copiers of one whale fill | each capped at its own $25 order ceiling, 500 distinct keys, a replayed fill producing exactly one key |
+
+#### Injection
+
+| Probe | Result |
+| --- | --- |
+| SQLi (`' OR 1=1 --`, `'; DROP TABLE markets; --`, …) across four routes | no result-set change, no 5xx, no SQL error text, table intact |
+| Prototype pollution (`__proto__`, `constructor` in an order body) | `422 VALIDATION`, refused as unknown properties |
+| Stored XSS through the chat renderer (market question, side, refusal card, limbo card) | escaped at assembly; the renderer's own scanner reports no tag-level failure — **and a deliberately unescaped canary card is caught**, so the green is falsifiable |
+| The same hostile text stored in an alert rule's `params` | round-tripped byte-for-byte, escaped at render rather than at save |
+| SSRF: every declared route (87 paths) enumerated for a caller-supplied fetch target; every endpoint constant walked with an AST | **0 URL-ish parameters**, 5 endpoint constants all pointing at known vendors, 3 socket-opening call sites |
+| ReDoS: 10,000-character pathological parameters | worst 6 ms, all refused or answered |
+| CSV injection in a tax export | no such route exists yet — OPEN with the requirement |
+
+#### Business logic: getting value you did not earn
+
+| Probe | Result |
+| --- | --- |
+| An account applying its own referral link | `409 SELF_REFERRAL`, no attribution row, audit says `builder_code_revoked: true`, and the programme's builder code is `disabled`/`manual` with the account named |
+| Two accounts claiming one referrer from the **same funding source** | the second is refused and recorded as `refused`/`duplicate_funding`, earning nothing |
+| Six fresh accounts claiming one referrer | 3 attributed, 3 held for `velocity`; every held claim carries its reason; **none has earned anything**, because a referral is worth $0 until a matched order clears the threshold |
+| Wash trading: a same-wallet round trip 30 s apart at one price, plus one genuine trade 3 h later | $500 of round-tripped volume subtracted exactly once, the genuine $620 trade kept (verified $1,120 of $1,620) |
+| The washer's controls | another wallet's opposite fill washes $0; a pair outside the window washes $0 |
+| A copy farm (12/12 fills mirroring a wallet that traded 5 s earlier) | named, with the leader, the count and the rule |
+| Free tier: a `webhook` (Pro) alert channel | `402 PLAN_REQUIRED` with an actionable sentence |
+| Declaring `plan: pro` in the request body | `422` as an unknown field, and the account still reads `free` |
+| The concurrent automation-rule cap through the API | 10 created, the 11th refused `409 RULE_CAP` |
+| A forged Telegram update (wrong secret header) | refused, **zero claim rows**: nothing was processed |
+
+#### Findings F18 and F19
+
+**F18 — a zero-size order was an unbreakable 500.** `parse_usdc("0")` is a valid zero, so `"size": "0"` walked past
+the parser, reached the risk gate, was denied `ZERO_SIZE` — and then the refusal could not be *recorded*:
+`order_intents` carries `CHECK (size_micro > 0)` and the schema raised on the deny path's own INSERT. The user saw
+`500 INTERNAL`, whose message is "retry with the same Idempotency-Key", and every retry re-derived the same denial
+and 500'd again. A client-side typo became an infinite loop with no way out.
+
+The fix keeps the schema invariant (a zero-size row must never be storable) and refuses the input *before* anything
+is recorded, exactly as a non-numeric or negative size already was: `422 ZERO_SIZE`, key released, no row. The gate
+keeps its own `ZERO_SIZE` check for every other caller. *Retests:*
+`tests/test_api.py::TestRefusalsThatCouldNotBeRecorded` (4 tests) — the authored refusal, no row written, the key
+still usable for the corrected request, the schema invariant unmoved, and a matrix of thirteen malformed money
+inputs proving none of them can produce a 5xx or an `INTERNAL`.
+
+**F19 — an automation rule could be armed that the gate would refuse on every fire.** The engine validated shape but
+had no per-order ceiling, and the builder's own error message ("a rule needs at least one market to watch") had made
+an earlier version of this probe report a pass. With targets present, a rule whose action was 20,000 shares at $0.55
+— **$11,000 on one order, against a $2,500 per-order cap** — compiled cleanly, saved, and would have dry-run clean
+too (a dry run places nothing, so the gate never sees it). Every live fire would have been refused `OVER_ORDER_CAP`:
+an armed rule that can never trade, with the product silent at the one moment the user could have acted.
+
+The fix is the check the console already claimed its compiler performed: `engine.validate_rule` now refuses an action
+above the per-order ceiling, with a sentence naming the cap, and the ceiling is read from `config.flags` at both save
+and fire time (an incident response that lowers `max_order_notional_micro` must bind every door into the venue, not
+just the hand-placed one). A `market` action is measured at $1 a share — the most a share can cost — so it is
+refused conservatively rather than skipped. *Retests:* `tests/test_automation_api.py` (4 tests: above the cap refused
+with the cap named, just under the cap still saves, a `market` action measured at the worst case, and the live flag
+moving the ceiling without a restart).
+
+#### What the probes found about the product's own detectors
+
+Two limitations are recorded as OPEN rather than as failures, because in both cases the alternative was to change a
+product decision that is not a probe's to make:
+
+* **The copy-farm rule cannot tell a follower from two active traders on the same cadence.** Measured: with the
+  candidate's fills moved 200 s earlier — so it is never the one being followed in any pairing sense — 10 of 12
+  fills still matched, because *any* candidate fill inside 120 s counts and a 60 s cadence always has one. The row
+  this produces is a public suspicion ("derived from 0x…"), which is a claim about a person. The fix needs pairing
+  (a matched candidate cannot match twice) or a cadence comparison, and the tape is in the tool to use as the test.
+* **A market question containing `_`, `*`, `[` or a backtick trips the broadcast "looks like Markdown" warning.**
+  Cosmetic — Telegram renders the characters literally — but an operator warning that fires on ordinary questions is
+  a warning operators learn to skip, which is how the real confetti gets through later.
+
 ---
 
 ## D2 — the six key-compromise drills, with a stopwatch on each
@@ -476,7 +571,7 @@ against the deployed API before launch, with the p95 and error-rate curves attac
 ### D7 — the pre-launch security gate, `docs/P14-security-gate.md`
 
 Written by `tools/p14-security-gate.py` **from the recorded artifacts**, so the verdict cannot drift from the
-evidence: `--check` fails if the document on disk disagrees with what the five harnesses recorded. It carries the
+evidence: `--check` fails if the document on disk disagrees with what the six harnesses recorded. It carries the
 kit's launch conditions as a table, the blocking findings, the open items, a sign-off block that is deliberately
 empty until a human puts a name and a date against it, and the standing rule it inherits — no real funds until
 P13/P14 are green.
@@ -491,8 +586,8 @@ The controls are only worth what their cadence is worth, so the cadence is execu
 
 | Cadence | What runs | What it catches |
 |---|---|---|
-| every PR touching `services/`, `packages/`, `tools/p14-*`, `db/` | `tools/p14-appsec-scan.py`, `tools/p14-authz-matrix.py`, the triage-file diff, and `p14-security-gate.py --check` | a new SAST finding, a route that stops refusing the wrong principal, a triage entry that has gone stale, and a gate document that no longer matches reality |
-| nightly | `make security` — all five harnesses, including the six key drills and the 100-aggressive-users probe | a control that stopped working while nobody was looking |
+| every PR touching `services/`, `packages/`, `tools/p14-*`, `db/` | `tools/p14-appsec-scan.py`, `tools/p14-authz-matrix.py`, `tools/p14-attack-surface.py`, the triage-file diff, and `p14-security-gate.py --check` | a new SAST finding, a route that stops refusing the wrong principal, an order path that accepts what the gate forbids, a triage entry that has gone stale, and a gate document that no longer matches reality |
+| nightly | `make security` — all six harnesses, including the six key drills and the 100-aggressive-users probe | a control that stopped working while nobody was looking |
 | quarterly (and on any advisory touching `cryptography`, `argon2-cffi`, `asyncpg`, `py-clob-client-v2`) | the dependency review in `docs/dependency-review.md`, with a date and an owner per row | the advisory that lands on an unowned package |
 | before any deployment that touches money or keys | `make security-record && make security-gate`, then the sign-off block | shipping on evidence that has expired |
 

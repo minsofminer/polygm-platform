@@ -2455,6 +2455,19 @@ def _order_core(uid: str, body: dict, idempotency_key: str, rid: str):
     except MoneyError as e:                # reclassified inside the money module; kept explicit so a
         idem.abandon(uid, idempotency_key)   # future subclass is still a 422 and never a 500
         return err("BAD_AMOUNT", rid)
+    if size_micro <= 0:
+        # F18 (P14 D1). `parse_usdc("0")` is a *valid* zero, so this input walked past the parser and into the
+        # risk gate, which denied it with ZERO_SIZE — and then the refusal could not be recorded, because
+        # `order_intents.size_micro` carries CHECK (size_micro > 0) and the schema raised. The user got a
+        # retryable 500 that says "retry with the same key", and every retry re-derived ZERO_SIZE and 500'd
+        # again: an unbreakable loop, on the refusal path, for the most obvious typo a client can make.
+        #
+        # The schema invariant stays (a zero-size row must never be storable). What changes is that a size of
+        # zero is refused here, before anything is recorded, exactly as a non-numeric or negative size already
+        # is: it is malformed input, not a risk-gate refusal, and there is no intent to persist. The gate keeps
+        # its own ZERO_SIZE check for every other caller (executor, admin, service-to-service).
+        idem.abandon(uid, idempotency_key)
+        return err("ZERO_SIZE", rid)
 
     mrow = _db.execute("SELECT accepting_orders,seconds_delay,minimum_tick_size,minimum_order_size,"
                        "fee_type,enable_order_book FROM markets WHERE id=?", (body.get("marketId"),)).fetchone()
@@ -4610,7 +4623,10 @@ def create_automation(request: Request, body: dict = Body(...),
 
 
 def _create_automation_work(rid: str, uid: str, body: dict):
-    compiled, errs = _au_console.compile_builder(body)
+    # The ceiling comes from the flag store, not from the constant: an operator who lowers the per-order cap
+    # during an incident must not have to remember that one class of order is saved through a different door.
+    compiled, errs = _au_console.compile_builder(body,
+                                                 max_action_micro=flags().max_order_notional_micro)
     halt = _halt_for(str(uid))
     if halt:
         return err("HALTED", rid, detail=halt["note"], where=["acknowledge the daily-loss halt first"])
@@ -4697,7 +4713,8 @@ def preview_automation(request: Request, body: dict = Body(...),
             return err("NOT_FOUND", rid, detail="no rule %s for this account" % rule_id)
         return _idem_run(str(uid), str(idempotency_key), body, rid,
                          lambda: _dry_run_work(rid, uid, rule_id))
-    compiled, errs = _au_console.compile_builder(body)
+    compiled, errs = _au_console.compile_builder(body,
+                                                 max_action_micro=flags().max_order_notional_micro)
     if errs:
         return err("VALIDATION", rid, detail="; ".join(errs[:4]), where=errs[:4])
     target = (compiled["targets"] or [{}])[0]

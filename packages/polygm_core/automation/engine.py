@@ -25,7 +25,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 
-from ..money.cents import SCALE, notional_floor
+from ..money.cents import SCALE, fmt_usdc, notional_floor
 
 TRIGGER_KINDS = ("price_cross", "time", "signal", "book_imbalance", "new_market")
 ACTION_KINDS = ("limit", "market", "cancel_open", "close_position", "set_alert", "tp_sl_set")
@@ -40,6 +40,12 @@ MAX_LEAVES = 8
 GLOBAL_RUNS_PER_DAY = 288
 GLOBAL_NOTIONAL_PER_DAY_MICRO = 500_000_000          # $500 a day per rule, all users, from automation
 MIN_INTERVAL_MS = 60_000                              # the venue's own rate ceiling, applied to us too
+# F19 (P14 D1). The per-order ceiling, mirrored from `config.flags.max_order_notional_micro`'s default and
+# `risk.gate.Limits`. A rule whose action is above it used to save, dry-run clean and then have every fire
+# refused by the risk gate — an armed rule that can never trade, which is the exact failure the console's own
+# channel check refuses to allow at save time. The flag stays authoritative at runtime: the API and the executor
+# pass the live value in, and this constant is the floor for callers that have no flag store.
+MAX_ACTION_NOTIONAL_MICRO = 2_500_000_000             # $2,500 an order, the same number the gate enforces
 
 
 class RuleError(Exception):
@@ -104,7 +110,7 @@ def _count_leaves(node: dict) -> int:
     return 1
 
 
-def validate_rule(rule: dict) -> list[str]:
+def validate_rule(rule: dict, *, max_action_micro: int | None = None) -> list[str]:
     """Every problem with a rule, in one pass. Returns [] when the rule can be saved.
 
     The checks are exhaustive on purpose: `trigger` and `actions` are the two places a client can send us
@@ -172,6 +178,18 @@ def validate_rule(rule: dict) -> list[str]:
                     errs.append("actions[%d]: limit needs an integer price_micro inside (0, 1000000)" % i)
             if a.get("max_slippage_bps", 0) not in (0,) and not (0 <= int(a.get("max_slippage_bps", 0)) <= 1000):
                 errs.append("actions[%d]: max_slippage_bps must be between 0 and 1000 (10%% is the ceiling)" % i)
+            if isinstance(size, int) and not isinstance(size, bool) and size > 0:
+                # The gate's own ceiling, so a rule cannot be saved that the venue door will refuse. A `market`
+                # action has no price yet, so it is measured at $1 a share — the most any Polymarket share can
+                # cost — which is the conservative direction: a market action that *could* exceed the cap is
+                # refused rather than accepted and refused later.
+                ceiling = int(max_action_micro if max_action_micro is not None else MAX_ACTION_NOTIONAL_MICRO)
+                headroom = size if kind == "market" else notional_floor(
+                    size, int(a.get("price_micro") or 0) or 10**SCALE)
+                if headroom > ceiling:
+                    errs.append("actions[%d]: %s of $%s is above the per-order cap of $%s, so the risk gate would "
+                                "refuse every fire: lower the size or split the rule"
+                                % (i, kind, fmt_usdc(headroom), fmt_usdc(ceiling)))
         elif kind == "cancel_open":
             if a.get("scope") not in ("order", "batch", "market", "all"):
                 errs.append("actions[%d]: cancel_open scope must be order, batch, market or all" % i)
@@ -479,11 +497,11 @@ class AutomationEngine:
     def save_rule(self, *, rule_id: str, user_id: str, kind: str, rule: dict, enabled: bool, at: int,
                   market_ids: list[tuple[str, str]] | None = None, max_per_day: int = 24,
                   min_interval_ms: int = 60_000, human_priority_ms: int = 120_000,
-                  max_loss_micro: int = 0) -> dict:
+                  max_loss_micro: int = 0, max_action_micro: int | None = None) -> dict:
         """Save, but do not silently arm. `enabled=True` here additionally requires that the rule has a
         completed dry run; a brand-new rule cannot have one, so enabling at save time returns a refusal
         rather than quietly doing what the caller asked."""
-        errs = validate_rule(rule)
+        errs = validate_rule(rule, max_action_micro=max_action_micro)
         if errs:
             raise RuleError(errs)
         # The validator requires a positive ceiling for money-moving actions, and it reads it from the rule
@@ -543,12 +561,13 @@ class AutomationEngine:
 
     def run_rule(self, rule: dict, *, facts: Facts, mode: str, at: int, run_count_today: int = 0,
                  notional_today_micro: int = 0, last_fire_ms: int | None = None, human_last_ms: int = 0,
-                 dry_run_completed_ms: int | None = None, enabled: bool | None = None) -> RunResult:
+                 dry_run_completed_ms: int | None = None, enabled: bool | None = None,
+                 max_action_micro: int | None = None) -> RunResult:
         rid = str(rule.get("id") or "?")
         uid = str(rule.get("user_id") or "")
         policy = rule.get("policy") or {}
         res = RunResult(rule_id=rid, mode=mode, outcome="skipped")
-        errs = validate_rule(rule)
+        errs = validate_rule(rule, max_action_micro=max_action_micro)
         if errs:
             res.outcome, res.reason, res.deny_code = "failed", "; ".join(errs), "RULE_INVALID"
             return self._record(res, uid, at)
@@ -640,9 +659,23 @@ class AutomationEngine:
                 res = self.run_rule(view, facts=facts, mode=mode, at=at,
                                    run_count_today=stats["placed"],
                                    notional_today_micro=stats["notional_micro"],
-                                   human_last_ms=self.store.last_human_order_ms(view["user_id"], at=at))
+                                   human_last_ms=self.store.last_human_order_ms(view["user_id"], at=at),
+                                   max_action_micro=self.max_action_micro())
                 outcomes.append(res.as_dict())
         return {"evaluated": len(outcomes), "mode": mode, "outcomes": outcomes}
+
+    def max_action_micro(self) -> int:
+        """The live per-order ceiling, read from the flag store like every other limit on the money path.
+
+        An incident response that lowers `max_order_notional_micro` must reach the *rules* the same way it reaches
+        a hand-placed order; a ceiling that only applies to one of the two doors is a ceiling somebody walks past.
+        """
+        try:
+            f = self.store.current_flags()
+        except AttributeError:                     # stores without flags (the drill harness) use the constant
+            return MAX_ACTION_NOTIONAL_MICRO
+        return int(getattr(f, "max_order_notional_micro", MAX_ACTION_NOTIONAL_MICRO)
+                   or MAX_ACTION_NOTIONAL_MICRO)
 
     def facts_for(self, *, user_id: str, market_id: str, token_id: str, at: int) -> Facts:
         """The facts for one (rule, market) pair, from `automation.facts` — the same function the API's builder

@@ -39,6 +39,8 @@ jobs:
         run: python3 tools/build-sast-triage.py /tmp/triage.json && diff -q /tmp/triage.json tools/sast-triage.json
       - name: the authorisation matrix (the phase's most important control)
         run: python3 tools/p14-authz-matrix.py
+      - name: the attack surface (trading, injection, business logic)
+        run: python3 tools/p14-attack-surface.py
       - name: the security gate document is not stale
         run: python3 tools/p14-security-gate.py --check
 
@@ -55,6 +57,9 @@ jobs:
       - name: SAST toolchain (ruff is the SAST engine, so the pin matters)
         run: ruff --version
       - name: every phase gate, then the security suite
+        # This job is expected to stay RED until the owner closes the two D4 blockers (GitHub MFA, the Supabase
+        # CIDR). That is deliberate and is the gate document's own rule — a verdict that regresses is a red build
+        # — but the evidence still uploads (`if: always()`), so the failure is always readable rather than silent.
         run: make security
       - name: regenerate the gate document from tonight's artifacts
         run: python3 tools/p14-security-gate.py

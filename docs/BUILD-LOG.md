@@ -4,6 +4,49 @@ Format per phase: **built / verified / `[UNVERIFIED]`**. Newest first.
 
 ---
 
+## P14 — Security Testing · 2026-09-22 → 09-23
+
+**Built.** `docs/P14-security-testing.md` (D1–D8) and `docs/P14-audit-bounty-legal.md`, plus six harnesses:
+`tools/p14-authz-matrix.py` (every served operation, against two real accounts, in the production identity shape),
+`tools/p14-attack-surface.py` (trading, injection, business logic — 56 checks made by *empowered* accounts),
+`tools/p14-key-drills.py` (the six compromise drills), `tools/p14-appsec-scan.py` (+`tools/sast-triage.json`,
+20 entries over 80 findings, and `docs/dependency-review.md`), `tools/p14-infra-verify.py`, and
+`tools/p14-abuse-probe.py`. `tools/p14-security-gate.py` generates `docs/P14-security-gate.md` from the recorded
+artifacts and `--check` fails when the document no longer matches them; `make security` / `security-record` /
+`security-gate` and `.github/workflows/security.yml` (PR-fast job, nightly full) wire it into CI.
+
+**Verified.** Authorisation matrix **37/37 PASS** (95 operations served of 109 declared, drift 0; no cross-user
+read, write or escalation; 39-request IDOR fuzz → 404/422 only). Attack surface **56 passed / 0 failed / 8 OPEN**.
+Key drills **15/0/1** (six drills, 0.03–0.2 s each; local break-glass 0.06 s for 500 keys). AppSec **36/0/1**
+(ruff SAST 80 findings → 20 triaged entries; 85 commits and 166,300 added lines of history → 0 secret findings;
+CI log redaction). Infra **20/2/7** — the two failures are owner actions. Abuse **18/0/1** (100 aggressive users,
+600 requests, 0 5xx; the login budget and the timing oracle both found and fixed here). `pytest` **1355 passed**,
+`vitest` 62 files / 560 tests.
+
+**Nineteen findings, F1–F19, every one with a re-test.** The ones that mattered: **F9** the *live* deployment
+accepted a spoofed `X-User-Id` and served its whole schema (fixed by generating the security-plane secrets, setting
+them on the Vercel project and redeploying; re-verified live: 401/404); **F17** a segfault under thread churn from a
+connection proxy keyed on `threading.get_ident()`, where idents are reused (fixed with `threading.local()` + strong
+thread refs); **F18** a zero-size order was an unbreakable 500 — the gate denied it `ZERO_SIZE` and then the schema's
+own `CHECK (size_micro > 0)` killed the refusal path, so the client got "retry with the same key" forever (fixed:
+refused as malformed input before anything is recorded, schema invariant untouched); **F19** an automation rule
+whose action was $11,000 against a $2,500 per-order cap compiled, saved and dry-ran clean, and would have been
+refused by the gate on every fire — an armed rule that could never trade (fixed: the engine's validator enforces the
+ceiling, read from `config.flags` at both save and fire time).
+
+**Verdict, in writing.** `docs/P14-security-gate.md` is **NO-GO**: two recorded failures, both owner actions —
+GitHub 2FA is off on the account whose token holds `admin:org` and `delete_repo` (F13), and the Supabase project
+allows `0.0.0.0/0` (F14). Eight OPEN items are measurements rather than decisions: the provider-bound half of
+break-glass (Turnkey's revoke/rewrap rate), container image contents, managed-Postgres restore, deployed-subnet
+egress, the three provider MFA statuses, the 500-copier cascade end to end, the copy-farm cadence limitation, and
+the missing payment-webhook surfaces. All are carried in the gate document with the exact work each needs.
+
+**`[UNVERIFIED]`.** No real funds: per `docs/AGENTS-BUILD.md`, money waits for P13 **and** P14, and P14's gate is
+NO-GO until the owner acts. `PGM_TELEGRAM_BOT_TOKEN` is still unset on `polygm-api`, the BotFather Mini App URL is
+still a manual step, and no real-phone acceptance run has happened.
+
+---
+
 ## P13 — Test Strategy & Implementation · 2026-09-21
 
 **Built.** `docs/P13-testing.md` (D1–D8, ~330 lines) plus the machinery it documents:

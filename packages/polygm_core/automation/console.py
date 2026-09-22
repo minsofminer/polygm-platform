@@ -161,7 +161,7 @@ def _leaf_from_row(row: dict) -> tuple[dict | None, str | None]:
     return out, None
 
 
-def compile_builder(payload: dict) -> tuple[dict, list[str]]:
+def compile_builder(payload: dict, *, max_action_micro: int | None = None) -> tuple[dict, list[str]]:
     """Rows -> the engine's rule document, plus every problem found. Never raises, never returns the first
     problem only: a form that names one error per submit teaches people to submit four times.
 
@@ -231,7 +231,7 @@ def compile_builder(payload: dict) -> tuple[dict, list[str]]:
         rule_doc["max_loss_micro"] = payload["maxLossMicro"]
     # The engine's own validator is the authority on fields, ops, ranges and ceilings. Running it here means the
     # builder cannot accept a document the engine would refuse — one vocabulary, checked in one place.
-    errs.extend(validate_rule(rule_doc))
+    errs.extend(validate_rule(rule_doc, max_action_micro=max_action_micro))
     return {"rule": rule_doc, "targets": targets}, errs
 
 

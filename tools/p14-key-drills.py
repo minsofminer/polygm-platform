@@ -157,6 +157,17 @@ class Bench:
                                      tag=sealed["tag"], kek_version=kek_version, dek_version=dek_version,
                                      policy_hash="drill", at=self.now)
 
+    def refresh_book(self, market: str) -> int:
+        """Re-stamp `book_levels.updated_ms` so the risk gate's freshness window does not refuse a probe for a
+        reason the probe is not about. `PGM_STALE_MS_TAPE` widens the *response* staleness stamp, not the gate: the
+        gate reads `now - book_levels.updated_ms` against `LIMITS.max_snap_age_ms` (5 s), so any run that takes
+        longer than five seconds must keep the book fresh rather than widen the window it is measured against.
+        """
+        cur = self.con.execute("UPDATE book_levels SET updated_ms=? WHERE market_id=?",
+                               (self.app._now_ms(), market))
+        self.con.commit()
+        return int(cur.rowcount or 0)
+
     def login(self, uid: str) -> str:
         r = self.client.post("/v1/auth/login", json={"identifier": uid,
                                                      "password": "correct horse battery staple 7!"})

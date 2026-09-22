@@ -2,11 +2,11 @@
   "verdict": "PASS",
   "facts": {
     "accounts": {
-      "a": "u_a_c1462698",
-      "b": "u_b_32e2f5f2"
+      "a": "u_a_e9c3a44c",
+      "b": "u_b_9ab37bc0"
     },
     "b_seed": {
-      "uid": "u_b_32e2f5f2",
+      "uid": "u_b_9ab37bc0",
       "markets": [
         "0xM1",
         "0xM2",
@@ -20,27 +20,27 @@
       "address": "0x9999999999999999999999999999999999999999",
       "proxy": "0x8888888888888888888888888888888888888888",
       "market": "0xM1",
-      "intent": "int_needle_404767ba",
-      "order": "ord_needle_cb84bc73",
+      "intent": "int_needle_a417c051",
+      "order": "ord_needle_6e8f8491",
       "token_id": "0xT10",
       "deposit": "918273645",
-      "rule": "rule_needle_3db77bb6",
+      "rule": "rule_needle_9a30b92a",
       "signal": "1",
       "allow": "0x7777777777777777777777777777777777777777",
-      "referral_code": "needlef5f2",
+      "referral_code": "needle7bc0",
       "handle": "needle_handle",
-      "email": "u_b_32e2f5f2@example.test",
-      "session": "ses_4aff49aa04f918d0",
-      "address_id": "wa_needle_4769e7",
+      "email": "u_b_9ab37bc0@example.test",
+      "session": "ses_9f88b7c83a3594b7",
+      "address_id": "wa_needle_6ad077",
       "_fixtures_skipped": [],
       "_seeds_skipped": [],
-      "alert": "al-271cd72939e4",
-      "whale_view": "wv-2d8491c5273f",
-      "radar_run": "rr-505d3b6d86b5",
+      "alert": "al-0ff4eeeb4daa",
+      "whale_view": "wv-e1aa977b803e",
+      "radar_run": "rr-a38130931b8d",
       "identity": "needle_b",
       "follow": "w_01711c019b",
-      "copy_config": "cfg-b34c32b2bc81",
-      "automation": "rule-b3f77c465d61",
+      "copy_config": "cfg-75f2e03629fc",
+      "automation": "rule-7ea67b483175",
       "order_amount": "49019607"
     },
     "registry": {
@@ -449,7 +449,7 @@
       "attacks": 20,
       "rows": [
         {
-          "op": "POST /v1/orders/int_needle_404767ba/cancel",
+          "op": "POST /v1/orders/int_needle_a417c051/cancel",
           "as": "A",
           "status": 404,
           "refused": true,
@@ -458,11 +458,11 @@
           "mutated": false,
           "before": [
             "queued",
-            "u_b_32e2f5f2"
+            "u_b_9ab37bc0"
           ],
           "after": [
             "queued",
-            "u_b_32e2f5f2"
+            "u_b_9ab37bc0"
           ],
           "code": "",
           "first": "{\"detail\":\"Not Found\"}"
@@ -477,14 +477,14 @@
           "mutated": false,
           "before": [
             null,
-            "u_b_32e2f5f2"
+            "u_b_9ab37bc0"
           ],
           "after": [
             null,
-            "u_b_32e2f5f2"
+            "u_b_9ab37bc0"
           ],
           "code": "TOTP_REQUIRED",
-          "first": "{\"error\":{\"code\":\"TOTP_REQUIRED\",\"message\":\"a 6-digit code is needed for this action\",\"retryable\":false,\"requestId\":\"e49"
+          "first": "{\"error\":{\"code\":\"TOTP_REQUIRED\",\"message\":\"a 6-digit code is needed for this action\",\"retryable\":false,\"requestId\":\"94c"
         },
         {
           "op": "POST /v1/wallet/withdraw",
@@ -503,7 +503,7 @@
             0
           ],
           "code": "NOT_FOUND",
-          "first": "{\"error\":{\"code\":\"NOT_FOUND\",\"message\":\"no such market\",\"retryable\":false,\"requestId\":\"740fcd3a58544239\"}}"
+          "first": "{\"error\":{\"code\":\"NOT_FOUND\",\"message\":\"no such market\",\"retryable\":false,\"requestId\":\"d5bc18efbee74f58\"}}"
         },
         {
           "op": "POST /v1/wallet/keys/export",
@@ -516,7 +516,7 @@
           "before": null,
           "after": null,
           "code": "TOTP_REQUIRED",
-          "first": "{\"error\":{\"code\":\"TOTP_REQUIRED\",\"message\":\"a 6-digit code is needed for this action\",\"retryable\":false,\"requestId\":\"77d"
+          "first": "{\"error\":{\"code\":\"TOTP_REQUIRED\",\"message\":\"a 6-digit code is needed for this action\",\"retryable\":false,\"requestId\":\"f70"
         },
         {
           "op": "POST /v1/auth/sessions/revoke",
@@ -527,13 +527,13 @@
           "leaked": [],
           "mutated": false,
           "before": [
-            1790108346583
+            1790109796275
           ],
           "after": [
-            1790108346583
+            1790109796275
           ],
           "code": "NO_SUCH_RESOURCE",
-          "first": "{\"error\":{\"code\":\"NO_SUCH_RESOURCE\",\"message\":\"no such resource\",\"retryable\":false,\"requestId\":\"062792e83dfb4d16\"}}"
+          "first": "{\"error\":{\"code\":\"NO_SUCH_RESOURCE\",\"message\":\"no such resource\",\"retryable\":false,\"requestId\":\"befc3c4b92354512\"}}"
         },
         {
           "op": "POST /v1/leaderboard/identity",
@@ -552,7 +552,7 @@
             "needle_b"
           ],
           "code": "",
-          "first": "{\"identity\":{\"state\":\"private\",\"handle\":\"\",\"listedMs\":null,\"updatedMs\":1790108350454,\"decided\":true,\"note\":\"private: you"
+          "first": "{\"identity\":{\"state\":\"private\",\"handle\":\"\",\"listedMs\":null,\"updatedMs\":1790109800208,\"decided\":true,\"note\":\"private: you"
         },
         {
           "op": "POST /v1/automations",
@@ -591,7 +591,7 @@
           "before": null,
           "after": null,
           "code": "NOT_FOUND",
-          "first": "{\"error\":{\"code\":\"NOT_FOUND\",\"message\":\"no such market\",\"retryable\":false,\"requestId\":\"3f347ca714b64788\"}}"
+          "first": "{\"error\":{\"code\":\"NOT_FOUND\",\"message\":\"no such market\",\"retryable\":false,\"requestId\":\"c632a8c082d5434d\"}}"
         },
         {
           "op": "POST /v1/alerts/test",
@@ -604,7 +604,7 @@
           "before": null,
           "after": null,
           "code": "NOT_FOUND",
-          "first": "{\"error\":{\"code\":\"NOT_FOUND\",\"message\":\"no such market\",\"retryable\":false,\"requestId\":\"15a7eeeba9a74014\"}}"
+          "first": "{\"error\":{\"code\":\"NOT_FOUND\",\"message\":\"no such market\",\"retryable\":false,\"requestId\":\"dae9fe5e46de45ae\"}}"
         },
         {
           "op": "POST /v1/copy/configs",
@@ -633,7 +633,7 @@
           "first": "{\"error\":{\"code\":\"VALIDATION\",\"message\":\"request body or parameters are not valid for this endpoint (unknown: state)\",\"r"
         },
         {
-          "op": "GET /v1/orders/intents/int_needle_404767ba",
+          "op": "GET /v1/orders/intents/int_needle_a417c051",
           "as": "A",
           "status": 404,
           "refused": true,
@@ -643,7 +643,7 @@
           "before": null,
           "after": null,
           "code": "NOT_FOUND",
-          "first": "{\"error\":{\"code\":\"NOT_FOUND\",\"message\":\"no such market\",\"retryable\":false,\"requestId\":\"ced88e958fa04d08\"}}"
+          "first": "{\"error\":{\"code\":\"NOT_FOUND\",\"message\":\"no such market\",\"retryable\":false,\"requestId\":\"b65863886b9d4434\"}}"
         },
         {
           "op": "GET /v1/wallet/deposit/918273645",
@@ -656,10 +656,10 @@
           "before": null,
           "after": null,
           "code": "NOT_FOUND",
-          "first": "{\"error\":{\"code\":\"NOT_FOUND\",\"message\":\"no such market\",\"retryable\":false,\"requestId\":\"7133bf35c659461c\"}}"
+          "first": "{\"error\":{\"code\":\"NOT_FOUND\",\"message\":\"no such market\",\"retryable\":false,\"requestId\":\"12b755e53c904026\"}}"
         },
         {
-          "op": "GET /v1/copy/configs/monitor?configId=cfg-b34c32b2bc81",
+          "op": "GET /v1/copy/configs/monitor?configId=cfg-75f2e03629fc",
           "as": "A",
           "status": 404,
           "refused": true,
@@ -669,10 +669,10 @@
           "before": null,
           "after": null,
           "code": "NOT_FOUND",
-          "first": "{\"error\":{\"code\":\"NOT_FOUND\",\"message\":\"no such market\",\"retryable\":false,\"requestId\":\"9635b5b04b2f4c3d\"}}"
+          "first": "{\"error\":{\"code\":\"NOT_FOUND\",\"message\":\"no such market\",\"retryable\":false,\"requestId\":\"6f3b88d424874b85\"}}"
         },
         {
-          "op": "GET /v1/automations/runs?ruleId=rule-b3f77c465d61",
+          "op": "GET /v1/automations/runs?ruleId=rule-7ea67b483175",
           "as": "A",
           "status": 404,
           "refused": true,
@@ -682,10 +682,10 @@
           "before": null,
           "after": null,
           "code": "NOT_FOUND",
-          "first": "{\"error\":{\"code\":\"NOT_FOUND\",\"message\":\"no such market\",\"retryable\":false,\"requestId\":\"1b50c8036f514493\"}}"
+          "first": "{\"error\":{\"code\":\"NOT_FOUND\",\"message\":\"no such market\",\"retryable\":false,\"requestId\":\"0354faeda9e144ba\"}}"
         },
         {
-          "op": "GET /v1/radar/runs/rr-505d3b6d86b5",
+          "op": "GET /v1/radar/runs/rr-a38130931b8d",
           "as": "A",
           "status": 404,
           "refused": true,
@@ -695,10 +695,10 @@
           "before": null,
           "after": null,
           "code": "NO_SUCH_RESOURCE",
-          "first": "{\"error\":{\"code\":\"NO_SUCH_RESOURCE\",\"message\":\"no such resource\",\"retryable\":false,\"requestId\":\"fb1646b0588c44c1\"}}"
+          "first": "{\"error\":{\"code\":\"NO_SUCH_RESOURCE\",\"message\":\"no such resource\",\"retryable\":false,\"requestId\":\"6f60c6f2ff77454d\"}}"
         },
         {
-          "op": "GET /v1/alerts?ruleId=al-271cd72939e4",
+          "op": "GET /v1/alerts?ruleId=al-0ff4eeeb4daa",
           "as": "A",
           "status": 200,
           "refused": null,
@@ -721,7 +721,7 @@
           "before": null,
           "after": [
             "intent owner",
-            "u_a_c1462698"
+            "u_a_e9c3a44c"
           ],
           "code": "BODY_OWNER",
           "first": "a body naming an account answers 422"

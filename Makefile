@@ -313,17 +313,19 @@ p03:
 	$(PY) tools/p03-gate-check.py
 	$(PY) tools/p03-mutation-test.py
 
-# P14's five harnesses. `security` is the whole phase in one command — it is what CI runs nightly and what a
+# P14's six harnesses. `security` is the whole phase in one command — it is what CI runs nightly and what a
 # human runs before signing the gate document. `security-gate` regenerates the document and then *checks* it, so a
 # verdict that no longer matches the artifacts is a failing target rather than a stale page.
 security:
 	$(PY) tools/p14-authz-matrix.py
+	$(PY) tools/p14-attack-surface.py
 	$(PY) tools/p14-key-drills.py --scale 500
 	$(PY) tools/p14-appsec-scan.py
 	$(PY) tools/p14-infra-verify.py
 	$(PY) tools/p14-abuse-probe.py
 security-record:
 	$(PY) tools/p14-authz-matrix.py --record docs/verification/P14-authz-matrix.txt --json docs/verification/P14-authz-matrix.json
+	$(PY) tools/p14-attack-surface.py --record docs/verification/P14-attack-surface.txt --json docs/verification/P14-attack-surface.json
 	$(PY) tools/p14-key-drills.py --scale 500 --record docs/verification/P14-key-drills.txt --json docs/verification/P14-key-drills.json
 	$(PY) tools/p14-appsec-scan.py --record docs/verification/P14-appsec-scan.txt --json docs/verification/P14-appsec-scan.json
 	$(PY) tools/p14-infra-verify.py --record docs/verification/P14-infra-verify.txt --json docs/verification/P14-infra-verify.json

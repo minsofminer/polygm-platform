@@ -31,7 +31,7 @@
     }
   ],
   "facts": {
-    "at_ms": 1790101837020,
+    "at_ms": 1790109968813,
     "api_live": "https://polygm-api.vercel.app",
     "mini_app_live": "https://polygm-mini-app.vercel.app",
     "egress": {
@@ -146,7 +146,7 @@
       },
       "anonymous_order": {
         "status": 401,
-        "body": "{\"error\":{\"code\":\"UNAUTHENTICATED\",\"message\":\"a session is required\",\"retryable\":false,\"requestId\":\"5c3245ae13b942a1\"}}"
+        "body": "{\"error\":{\"code\":\"UNAUTHENTICATED\",\"message\":\"a session is required\",\"retryable\":false,\"requestId\":\"b9324cbc492a4f2a\"}}"
       },
       "mini_app": {
         "status": 200,

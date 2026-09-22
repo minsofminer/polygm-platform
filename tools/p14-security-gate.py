@@ -28,6 +28,8 @@ OUT = ROOT / "docs" / "P14-security-gate.md"
 #: section -> (artifact, what it decides, which rows gate a launch)
 ARTIFACTS = (
     ("D1 authorisation", "P14-authz-matrix.json", "every served operation refuses the wrong principal"),
+    ("D1 attack surface", "P14-attack-surface.json",
+     "trading, injection and business-logic probes, made by empowered accounts"),
     ("D2 key-compromise drills", "P14-key-drills.json", "six drills, each with a recorded time"),
     ("D3 AppSec", "P14-appsec-scan.json", "SAST, DAST, all-history secrets, logs, deps, IaC, containers"),
     ("D4 infrastructure", "P14-infra-verify.json", "egress, runtime, the database, a tested restore, IAM, headers"),

@@ -7,7 +7,7 @@
     }
   ],
   "facts": {
-    "at_ms": 1790108562389,
+    "at_ms": 1790109940388,
     "sast": {
       "tool": "ruff ruff 0.8.4",
       "select": "S",
@@ -34,9 +34,9 @@
       "untriaged": []
     },
     "secrets_history": {
-      "commits": 90,
-      "added_lines_scanned": 168413,
-      "lines_skipped_by_path_allowlist": 123545,
+      "commits": 91,
+      "added_lines_scanned": 168670,
+      "lines_skipped_by_path_allowlist": 124052,
       "path_allowlist": [
         {
           "path": "tests/fixtures/",
@@ -80,9 +80,9 @@
     "log_redaction": {
       "ci_sources_exit": 0,
       "ci_sources_tail": [
-        "ci-log-scan: 452 file(s) scanned, 0 finding(s)"
+        "ci-log-scan: 454 file(s) scanned, 0 finding(s)"
       ],
-      "live_line": "{\"dur_ms\":11.7,\"ev\":\"http\",\"level\":\"info\",\"method\":\"GET\",\"path\":\"/v1/markets\",\"rid\":\"fd55b36a3afe46be\",\"status\":200,\"ts\":1790108589302}",
+      "live_line": "{\"dur_ms\":11.4,\"ev\":\"http\",\"level\":\"info\",\"method\":\"GET\",\"path\":\"/v1/markets\",\"rid\":\"647443e993064d8c\",\"status\":200,\"ts\":1790109968435}",
       "live_hits": []
     },
     "dependencies": {
@@ -214,7 +214,7 @@
     },
     {
       "status": "PASS",
-      "name": "the history scan read every commit git knows about (90 commits, 168413 added lines)",
+      "name": "the history scan read every commit git knows about (91 commits, 168670 added lines)",
       "why": ""
     },
     {

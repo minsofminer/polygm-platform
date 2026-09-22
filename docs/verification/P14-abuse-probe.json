@@ -7,7 +7,7 @@
     }
   ],
   "facts": {
-    "at_ms": 1790107408979,
+    "at_ms": 1790109983833,
     "per_ip": {
       "codes": [
         200,
@@ -58,18 +58,18 @@
       "other_account_status": 200
     },
     "own_budget": {
-      "baseline_p50_ms": 8.9,
+      "baseline_p50_ms": 10.6,
       "users": 100,
       "requests": 600,
-      "wall_ms": 6457.6,
+      "wall_ms": 6993.3,
       "statuses": {
         "200": 600
       },
-      "p50_ms": 311.2,
-      "p95_ms": 608.4,
-      "max_ms": 961.2,
-      "rps": 92.9,
-      "p50_vs_baseline": 34.9
+      "p50_ms": 329.6,
+      "p95_ms": 737.0,
+      "max_ms": 1010.3,
+      "rps": 85.8,
+      "p50_vs_baseline": 31.2
     },
     "victim_lockout": {
       "attacker_codes": [
@@ -151,7 +151,7 @@
     },
     {
       "status": "PASS",
-      "name": "the platform degrades gracefully, not collapses: p50 311.2 ms loaded vs 8.9 ms unloaded (34.9x), p95 608.4 ms, max 961.2 ms, 93 req/s",
+      "name": "the platform degrades gracefully, not collapses: p50 329.6 ms loaded vs 10.6 ms unloaded (31.2x), p95 737.0 ms, max 1010.3 ms, 86 req/s",
       "why": ""
     },
     {

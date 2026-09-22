@@ -16,7 +16,7 @@ PASS every SAST finding is either fixed or triaged with a written reason (20 tri
 PASS no triage entry is stale — a suppressed finding that no longer exists is deleted, not left behind (0 stale)
 PASS every triage entry carries a reason and a reviewer
 PASS the triage covers a minority of the rules in play (not a wholesale suppression)
-PASS the history scan read every commit git knows about (90 commits, 168413 added lines)
+PASS the history scan read every commit git knows about (91 commits, 168670 added lines)
 PASS no secret shape in any commit's added lines (0 findings; 6 lines carry a written `lint-allow` exemption: …` / `// lint-allow: …`). Matching the bare string x1, shape only, never a real token x5)
 PASS canary: a token committed to a git history is found by this scanner (['github_pat'])
 PASS the CI log scanner passes its own self-test

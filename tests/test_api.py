@@ -651,6 +651,64 @@ class TestBodyShape(ApiBase):
         self.assertEqual((short.status_code, short.json()["error"]["code"]), (422, "BAD_REASON"))
 
 
+class TestRefusalsThatCouldNotBeRecorded(ApiBase):
+    """F18 (P14 D1): a refusal has to be *sayable*.
+
+    `order_intents` carries `CHECK (size_micro > 0)`, and the deny path records every risk-gate refusal as a row.
+    A size of zero is a valid parse (`parse_usdc("0") == 0`), so it reached the gate, got denied `ZERO_SIZE`, and
+    then died on the INSERT: the user saw `500 INTERNAL`, whose message is "retry with the same Idempotency-Key" —
+    and every retry re-derived the same denial and 500'd again. The loop was unbreakable from the client side.
+
+    The class name is the property, not the input: *any* input the gate denies must produce either an authored
+    refusal or a record of it, never a crash on the way to the record. The matrix below is the cheapest way to
+    keep that true as new gates are added.
+    """
+
+    app_name = "api-refusals"
+
+    def test_a_zero_size_is_an_authored_refusal_and_not_a_500(self):
+        for size in ("0", "0.0", "0.000000"):
+            with self.subTest(size=size):
+                r = self.post_order(size=size)
+                self.assertEqual(r.status_code, 422, r.text)
+                self.assertEqual(r.json()["error"]["code"], "ZERO_SIZE", r.text)
+                self.assertFalse(r.json()["error"]["retryable"],
+                                 "a zero size is not retryable — the same request cannot succeed")
+
+    def test_the_zero_size_refusal_leaves_no_row_and_does_not_burn_the_key(self):
+        k = self.key("zero")
+        r1 = self.post_order(key=k, size="0")
+        self.assertEqual(r1.status_code, 422, r1.text)
+        rows = self.con.execute("SELECT COUNT(*) FROM order_intents WHERE idempotency_key=?", (k,)).fetchone()[0]
+        self.assertEqual(rows, 0, "the refusal wrote an intent row it could not have written")
+        r2 = self.post_order(key=k, size="10")
+        self.assertEqual(r2.status_code, 202, "the fixed retry must be accepted: %s" % r2.text)
+
+    def test_the_schema_invariant_is_unmoved_so_a_zero_row_is_still_unstorable(self):
+        import sqlite3
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.con.execute("INSERT INTO order_intents (id,user_id,market_id,token_id,side,price_micro,"
+                             "size_micro,notional_micro,state,idempotency_key,created_ms,updated_ms) "
+                             "VALUES ('x-zero','u-demo','0xM1','0xT10','BUY',500000,0,0,'rejected','x-zero',1,1)")
+        self.con.rollback()
+
+    def test_no_malformed_money_input_produces_a_5xx(self):
+        # The shapes a client gets wrong: an off-grid price, an out-of-range price, a size that is not a number,
+        # and both ends of the size range. Each one has an authored answer; none of them is "INTERNAL".
+        cases = [{"price": "0.5555"}, {"price": "0"}, {"price": "1"}, {"price": "1.5"}, {"price": "-0.5"},
+                 {"price": 0.55}, {"size": "0"}, {"size": "-5"}, {"size": "ten"}, {"size": "1e30"},
+                 {"size": 10}, {"size": "0.0000001"}, {"size": "1000000000"}]
+        seen = set()
+        for case in cases:
+            with self.subTest(**case):
+                r = self.post_order(**case)
+                self.assertLess(r.status_code, 500, "%s answered %s: %s" % (case, r.status_code, r.text))
+                self.assertNotEqual(r.json()["error"]["code"], "INTERNAL", r.text)
+                seen.add(r.json()["error"]["code"])
+        self.assertTrue(seen <= {"OFF_TICK", "BAD_AMOUNT", "ZERO_SIZE", "BELOW_MIN_SIZE", "OVER_ORDER_CAP",
+                                 "VALIDATION"}, "unexpected refusal codes: %s" % sorted(seen))
+
+
 class TestKillSwitch(ApiBase):
     app_name = "api-kill"
 
