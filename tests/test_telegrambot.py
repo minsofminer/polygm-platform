@@ -557,7 +557,7 @@ class TestMiniAppInitData(unittest.TestCase):
         self.assertEqual("bad_signature", bad.reason)
         # …and the same payload signed with a *different* bot token is refused: the signature is the bot's, so a
         # payload lifted from another bot cannot open a session here.
-        other = sec_tg.verify(q, "987654321:AAF-other-token-that-is-shape-valid-87654321", at=now + 10_000,
+        other = sec_tg.verify(q, "987654321:AAF-other-token-that-is-shape-valid-87654321", at=now + 10_000, # lint-allow: a second shape-valid fixture token, never issued by any bot
                               purpose="login", seen_hashes=())
         self.assertFalse(other.ok)
 

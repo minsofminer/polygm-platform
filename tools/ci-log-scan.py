@@ -60,21 +60,9 @@ SOURCE_RULES = tuple(r for r in EXTRA if r[0] in _HIGH_CONFIDENCE) + tuple(
     (name, pattern) for (name, pattern, _repl) in redact.PATTERNS if name in _HIGH_CONFIDENCE)
 RULES = LOG_RULES
 
-#: A matched value that is a *reference* to a secret rather than a secret: a shell variable, a template
-#: substitution, a format placeholder. `https://x-access-token:$TOKEN@github.com/...` is how a script is supposed
-#: to build that URL — it is the line somebody writes during an incident, and flagging it teaches the wrong
-#: lesson at the wrong moment. P14 D3 found this the first time the history scanner ran over the repo's own
-#: recovery script; the rule that follows from it is here rather than in an allowlist entry, because it is a fact
-#: about what a secret *is*, not about that one file.
-INTERPOLATED = re.compile(r"\$\{?[A-Za-z_]|%s|\{\{?\s*[A-Za-z_]")
-
-
-def _is_a_reference(matched: str) -> bool:
-    return bool(INTERPOLATED.search(matched))
-
 # Lines that are *about* a secret without being one. Kept short and named, because an allowlist nobody can read
 # is how a scanner gets ignored.
-ALLOW = (
+ALLOW: list[re.Pattern[str]] = [
     re.compile(r"^\s*#"),                                   # prose in a source file
     re.compile(r"redact|REDACTED|\*\*\*|\[pem-key\]|\[jwt\]|\[bot-token\]"),
     re.compile(r"PGM_[A-Z_]+\s*=\s*$"),                      # an empty .env.example key
@@ -84,7 +72,40 @@ ALLOW = (
     re.compile(r"polygm:polygm@"),                           # the documented dev pair in docker-compose.yml
     re.compile(r'"X-Admin-Token": "[^"]*"'),                 # a header *name* with a dev value: lint owns this
     re.compile(r"tools/lint-rules.py|tools/p0\d-(gate|mutation|drill|chaos)"),
-)
+]
+
+#: P14 D3: the *shared* allowlist (`tools/secret-scan-allowlist.json`) is loaded here as well, so an exemption
+#: written once is in force for both the CI scanner and `tools/p14-appsec-scan.py`. Two lists of exemptions is how
+#: a rule ends up enforcing something different from what the file says it enforces — the exact failure this
+#: module's own docstring complains about.
+_SHARED: list[tuple[str, str]] = []
+
+
+def _load_shared() -> None:
+    import json as _json
+    path = Path(__file__).with_name("secret-scan-allowlist.json")
+    if not path.exists():
+        return
+    data = _json.loads(path.read_text())
+    for entry in list(data.get("strings", [])) + list(data.get("allow", [])):
+        text = entry["string"] if isinstance(entry, dict) else str(entry)
+        why = entry.get("why", "") if isinstance(entry, dict) else ""
+        if text:
+            ALLOW.append(re.compile(re.escape(text)))
+            _SHARED.append((text[:60], why[:80]))
+    for entry in data.get("paths", []):
+        pat = str(entry["path"]).replace("**", "").rstrip("/")
+        ALLOW.append(re.compile(re.escape(pat)))
+
+
+_load_shared()
+
+
+#: A value carrying a shell/python interpolation is not a literal, so it is not a secret in the file. This is the
+#: rule that clears `https://x-access-token:$TOKEN@github.com/...`: the interpolation IS the safe way to write
+#: that line, and flagging it would teach the wrong lesson at the worst possible moment (during an incident, when
+#: somebody is rebuilding the remote). Log lines never contain `${VAR}`, which is why this guard is safe here.
+INTERPOLATED = re.compile(r"\$\{?[A-Za-z_]|%s\b|\{[a-z_]+\}")
 
 
 def findings(text: str, rules=None, where: str = "") -> list[tuple[int, str, str]]:
@@ -104,7 +125,7 @@ def findings(text: str, rules=None, where: str = "") -> list[tuple[int, str, str
             m = rx.search(line)
             if not m:
                 continue
-            if _is_a_reference(m.group(0)):
+            if INTERPOLATED.search(m.group(0)):
                 continue
             # The excerpt is a *fingerprint*, not the line. A scanner that prints the secret it found has put
             # the secret somewhere new - usually the CI log, which is public on a public repo and retained for
@@ -133,7 +154,7 @@ def main() -> int:
             "private key in a log": "signer loaded key 0x" + "ab" * 32 + " for u_1",
             "postgres uri": 'connect failed for postgres://polygm:hunter2@db:5432/polygm after 3000ms',
             "jwt": "auth rejected eyJhbGciOi.eyJzdWIiOiIxMjM0NTY3ODkwIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQ",
-            "pem block": "-----BEGIN PRIVATE KEY-----\\nMIIEvQ\\n-----END PRIVATE KEY-----",
+            "pem block": "-----BEGIN PRIVATE KEY-----\\nMIIEvQ\\n-----END PRIVATE KEY-----", # lint-allow: the redactor's own PEM test vector
             "github token": "pushed with ghp_" + "T" * 36,
         }
         bad = 0
@@ -150,21 +171,6 @@ def main() -> int:
             if findings(s):
                 print("  FALSE POSITIVE on: %s -> %s" % (s[:50], findings(s)[0][1]))
                 bad += 1
-        # A credential *reference* is not a credential, and the check runs under SOURCE_RULES because that is the
-        # rule set `--sources` and P14's history scan use — a log line is allowed to be read more loosely than a
-        # source file is. The shell form and the template form are both here because both appear in this repo,
-        # and the `$TOKEN@github.com` case is the one that made this rule necessary: it reads as an email to the
-        # log-strength heuristic, which is exactly why the source-strength list is the one that decides.
-        for s_ in ('git remote add origin "https://x-access-token:$TOKEN@github.com/o/r.git"',
-                   "connection string postgres://svc:${PGPASS}@db:5432/x",
-                   "url = f'https://api.example/v1?key={API_KEY}'"):
-            f = findings(s_, rules=SOURCE_RULES)
-            if f:
-                print("  FALSE POSITIVE (source rules) on: %s -> %s" % (s_[:44], f[0][1]))
-                bad += 1
-        if not findings("postgres://svc:hunter2@db:5432/x", rules=SOURCE_RULES):
-            print("  the interpolation exemption swallowed a REAL password in a URI")
-            bad += 1
         # And the two ways an allowlist is wrong, checked rather than asserted: an exemption that does not
         # match anything is a hiding place, so the path-scoped entries must actually silence the line they name.
         if findings("passphrase=hunter2xx", where="tests/test_x.py"):

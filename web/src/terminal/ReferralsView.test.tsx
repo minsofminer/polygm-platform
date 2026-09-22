@@ -32,7 +32,7 @@ const terms = {
 
 const me = {
   ...stamp,
-  link: { token: "ref_abcdefghijklmnopqrstuv", url: "https://polygm.app/r/ref_abcdefghijklmnopqrstuv", code: "", shortUrl: "", created: true },
+  link: { token: "ref_abcdefghijklmnopqrstuv", url: "https://polygm.app/r/ref_abcdefghijklmnopqrstuv", code: "", shortUrl: "", created: true }, // lint-allow: a fixture referral code, not a credential
   funnel: { clicks: 40, signups: 9, funded: 4, trading: 3, earned: 2 },
   earnings: {
     accruedMicro: 31_000_000,

@@ -626,7 +626,7 @@ def c12_redaction_covers_every_shape_we_emit(p: Plane) -> tuple[str, bool, str]:
         "jwt": "eyJhbGciOiJIUzI1NiJ9." + "A" * 24 + "." + "B" * 24,
         "initData": "?initData=" + "q" * 40 + "&hash=" + "e" * 64,
         "postgres uri": "pool exhausted for postgres://pguser:***" + "p" * 12 + "@db:5432/p",
-        "pem": "-----BEGIN PRIVATE KEY-----\nMIIE\n-----END PRIVATE KEY-----",
+        "pem": "-----BEGIN PRIVATE KEY-----\nMIIE\n-----END PRIVATE KEY-----", # lint-allow: the redactor's own PEM test vector, quoted as the string it must catch
         "password field": '{"password": "hunter2hunter2"}',
     }
     leaked = {}
@@ -700,12 +700,12 @@ def c15_ci_greps_every_log_line_before_it_lands(p: Plane) -> tuple[str, bool, st
     """The scanner must fail on a planted key, pass on this repository, and prove it can fail at all."""
     probe = TMP / ("planted-%s.py" % uuid.uuid4().hex[:8])
     probe.write_text('CFG = {"aws": "AKIA" + "ABCDEFGHIJKLMNOP"}  # not real, and shaped like it\n'
-                     'KEY = "AKIAABCDEFGHIJKLMNOP"\n')
+                     'KEY = "AKIAABCDEFGHIJKLMNOP"\n') # lint-allow: the planted fake AWS key the log scan must catch
     rc_probe, out_probe = sh([PY, "tools/ci-log-scan.py", "--file", str(probe.relative_to(ROOT))])
     rc_src, out_src = sh([PY, "tools/ci-log-scan.py", "--sources"])
     rc_self, out_self = sh([PY, "tools/ci-log-scan.py", "--self-test"])
     probe.unlink(missing_ok=True)
-    leaks_secret = "AKIAABCDEFGHIJKLMNOP" in out_probe
+    leaks_secret = "AKIAABCDEFGHIJKLMNOP" in out_probe # lint-allow: asserting on the fake key above, not holding one
     ci_steps = CI.read_text() if CI.is_file() else ""
     in_ci = "ci-log-scan.py" in ci_steps and "dependency-scan.py" in ci_steps
     ok = rc_probe == 1 and rc_src == 0 and rc_self == 0 and not leaks_secret and in_ci

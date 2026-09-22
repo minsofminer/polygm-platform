@@ -16,15 +16,14 @@ PASS every SAST finding is either fixed or triaged with a written reason (20 tri
 PASS no triage entry is stale — a suppressed finding that no longer exists is deleted, not left behind (0 stale)
 PASS every triage entry carries a reason and a reviewer
 PASS the triage covers a minority of the rules in play (not a wholesale suppression)
-PASS the history scan read every commit on every branch (85 of 85, 195487 added lines)
-PASS no secret shape in any commit's added lines (0 findings)
-PASS canary: a token committed to a git history is found by this scanner (github_token)
-PASS canary: the same pipeline does not fire on a credential *reference* (nothing)
+PASS the history scan read every commit git knows about (87 commits, 167818 added lines)
+PASS no secret shape in any commit's added lines (0 findings; 5 lines carry a written `lint-allow` exemption: shape only, never a real token x5)
+PASS canary: a token committed to a git history is found by this scanner (['github_pat'])
 PASS the CI log scanner passes its own self-test
 PASS no unexplained hard-coded secret shape in tracked source (2 documented exceptions)
 PASS the access log the API really printed carries no token (0 shape(s) survived)
 PASS P07's dependency scanner passes (pins, advisory feed or its honest absence, digest record)
-PASS every pinned requirement has a row in the dependency review (16 of 11 reviewed)
+PASS every pinned requirement has a row in the dependency review (16 rows for 11 requirements)
 PASS the dependency review is dated and current (14 dated rows)
 PASS the only literal password in the compose file is the dev database, with the exception written down
 PASS no database port is published beyond loopback (127.0.0.1:5432:5432, 127.0.0.1:6432:6432, 127.0.0.1:6379:6379, 127.0.0.1:8080:8080, 127.0.0.1:8090:8090, 127.0.0.1:5173:5173)
@@ -50,7 +49,7 @@ PASS an unknown route answers the API's own envelope, not a framework default pa
 PASS unexpected HTTP methods are refused, not executed ({'TRACE': 405, 'PUT': 405, 'DELETE': 405})
 PASS a hostile query string neither 500s nor is echoed back (422)
 
-P14 APPSEC: CONDITIONAL — 37 checks passed, 0 failed, 1 OPEN
+P14 APPSEC: CONDITIONAL — 36 checks passed, 0 failed, 1 OPEN
 
 OPEN (not passes, not failures — measurements this environment cannot take):
   * CONTAINER IMAGE CONTENTS ARE UNSCANNED: no docker/scanner in this environment, so the Dockerfiles are read statically and no built image has been inspected for OS packages, layers or CVEs

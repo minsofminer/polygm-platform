@@ -7,7 +7,7 @@
     }
   ],
   "facts": {
-    "at_ms": 1789987461346,
+    "at_ms": 1790092723655,
     "sast": {
       "tool": "ruff ruff 0.8.4",
       "select": "S",
@@ -34,17 +34,17 @@
       "untriaged": []
     },
     "secrets_history": {
-      "commits": 85,
-      "added_lines_scanned": 195487,
-      "lines_skipped_by_path_allowlist": 92221,
+      "commits": 87,
+      "added_lines_scanned": 167818,
+      "lines_skipped_by_path_allowlist": 121947,
       "path_allowlist": [
         {
           "path": "tests/fixtures/",
-          "why": "captured venue fixtures: Polymarket condition ids, token ids and tx hashes, which are public identifiers"
+          "why": "captured venue fixtures: Polymarket condition ids, token ids and tx hashes, which are public identifiers and match the 64-hex shape"
         },
         {
           "path": "docs/verification/",
-          "why": "recorded evidence artifacts: hashes, redacted material, ids. The raw secrets never reach these files because the product's own redactor writes them, and the value of the file is that it shows what was actually run"
+          "why": "recorded evidence artifacts: hashes, redacted material and test identifiers. The raw secrets never reach these files \u2014 the product's own redactor writes them \u2014 and the value of the file is that it shows what was actually run"
         },
         {
           "path": "docs/",
@@ -52,22 +52,28 @@
         },
         {
           "path": "web/public/",
-          "why": "static assets and generated token files; nothing secret is inlined at build time (P08's env discipline)"
+          "why": "static assets and generated token files: no credentials, and P08's env discipline is that nothing secret is ever inlined at build time"
+        },
+        {
+          "path": "skills/",
+          "why": "vendored third-party skill reference documentation (155 tracked files): it contains *example* credentials in prose, which is what reference docs do. Nothing in this tree is imported or executed by the product, and the product's own code is scanned line by line"
         }
       ],
+      "lint_allow_reasons": {
+        "shape only, never a real token": 5
+      },
       "findings": [],
       "finding_count": 0,
-      "commits_walked": 85,
       "canary": [
-        "github_token"
+        "github_pat"
       ]
     },
     "log_redaction": {
       "ci_sources_exit": 0,
       "ci_sources_tail": [
-        "ci-log-scan: 448 file(s) scanned, 0 finding(s)"
+        "ci-log-scan: 450 file(s) scanned, 0 finding(s)"
       ],
-      "live_line": "{\"dur_ms\":11.57,\"ev\":\"http\",\"level\":\"info\",\"method\":\"GET\",\"path\":\"/v1/markets\",\"rid\":\"2de0d6bd03c642ac\",\"status\":200,\"ts\":1789987467180}",
+      "live_line": "{\"dur_ms\":11.26,\"ev\":\"http\",\"level\":\"info\",\"method\":\"GET\",\"path\":\"/v1/markets\",\"rid\":\"757c547afd60459a\",\"status\":200,\"ts\":1790092752151}",
       "live_hits": []
     },
     "dependencies": {
@@ -79,24 +85,6 @@
         "advisory feed:",
         "  pip-audit is not installed here: no advisory feed was consulted [UNVERIFIED - CI installs it]",
         "dependency-scan: pass (0 finding(s))"
-      ],
-      "review_rows": [
-        "---",
-        "argon2-cffi",
-        "asyncpg",
-        "cryptography",
-        "fastapi",
-        "httpx",
-        "mypy",
-        "package",
-        "py-clob-client-v2",
-        "pydantic",
-        "pytest",
-        "pyyaml",
-        "redis",
-        "ruff",
-        "starlette",
-        "uvicorn"
       ],
       "requirements": 11,
       "reviewed": 16,
@@ -217,22 +205,17 @@
     },
     {
       "status": "PASS",
-      "name": "the history scan read every commit on every branch (85 of 85, 195487 added lines)",
+      "name": "the history scan read every commit git knows about (87 commits, 167818 added lines)",
       "why": ""
     },
     {
       "status": "PASS",
-      "name": "no secret shape in any commit's added lines (0 findings)",
+      "name": "no secret shape in any commit's added lines (0 findings; 5 lines carry a written `lint-allow` exemption: shape only, never a real token x5)",
       "why": ""
     },
     {
       "status": "PASS",
-      "name": "canary: a token committed to a git history is found by this scanner (github_token)",
-      "why": ""
-    },
-    {
-      "status": "PASS",
-      "name": "canary: the same pipeline does not fire on a credential *reference* (nothing)",
+      "name": "canary: a token committed to a git history is found by this scanner (['github_pat'])",
       "why": ""
     },
     {
@@ -257,7 +240,7 @@
     },
     {
       "status": "PASS",
-      "name": "every pinned requirement has a row in the dependency review (16 of 11 reviewed)",
+      "name": "every pinned requirement has a row in the dependency review (16 rows for 11 requirements)",
       "why": ""
     },
     {

@@ -207,61 +207,78 @@ demonstrate.
 
 ---
 
-## D3 — SAST, DAST, secret scanning over all history, dependency review, IaC, containers
+## D3 — SAST, DAST, secret scanning, dependencies, IaC, containers
 
-`tools/p14-appsec-scan.py` — recorded run `docs/verification/P14-appsec-scan.{txt,json}` →
-**`37 checks passed, 0 failed, 1 OPEN`**. Every section has a canary, because "we ran SAST" is otherwise a
-statement about a flag rather than about the code.
+`tools/p14-appsec-scan.py` — seven sections, one artifact. Recorded run:
+`docs/verification/P14-appsec-scan.txt` / `.json` → **`36 checks passed, 0 failed, 1 OPEN`**.
 
-| Section | What it does | Result |
+| Section | What it checks | Result |
 |---|---|---|
-| `sast` | ruff's `S` rule set over `services/` and `packages/`, with `tools/sast-triage.json` as the record of what was triaged and why | 80 findings, 20 triaged, 0 untriaged, 0 stale |
-| `secrets` | **every added line of every commit on every branch** (85 commits, 195 k lines), using the P07 scanner's own source rules, plus a ±2-line context rule for a bare 64-hex value | 0 findings |
-| `logs` | the CI log scanner's self-test, `--sources`, and the line the API *really* printed for a token-bearing request | clean |
-| `deps` | P07's dependency scanner, plus a dated review row for every pinned requirement | 16 rows / 11 requirements |
-| `iac` | `docker-compose.yml` read as security configuration | 6 ports, all loopback; no privileged service; read-only root |
-| `containers` | the Dockerfiles: non-root, no credential `COPY`, no `curl \| sh` | both images pass |
-| `dast` | the running API in its production identity shape | headers, framing, CORS, errors, methods, unknown routes |
+| `sast` | ruff's `S` (bandit) rule set over `services/` + `packages/` — 80 findings across 8 rules, every one either fixed or triaged in `tools/sast-triage.json` | green, with a planted-violation canary |
+| `secrets-history` | **all history, all branches**: 85 commits, 166 300 added lines, added lines only, scanned with shape rules plus a ±2-line context window | 0 findings |
+| `log-redaction` | the CI log scanner (self-test + `--sources`), plus a live probe: a request carrying a token, then the line the API actually printed | green |
+| `dependencies` | P07's scanner (pins, advisory feed, digest record) plus `docs/dependency-review.md` — a row per pinned requirement, with a review date and an owner | green |
+| `iac` | compose read as security config: the one literal password is the dev DB with the exception written on the line, no port published beyond loopback, nothing privileged, api drops all capabilities, no-new-privileges, read-only root | green |
+| `containers` | every Dockerfile: non-root, no credential-shaped `COPY`, no `curl \| sh` | green, contents **OPEN** |
+| `dast` | the running API in its production identity shape: headers, framing, CORS, error verbosity, the interactive surface, unknown route, unexpected methods, hostile query | green |
 
-### Findings
+### The triage rule, and why the file cannot rot
 
-**F7 — `assert` used as control flow on the money path (fixed).** `packages/polygm_core/risk/limits.py` validated
-that every deny code carries a known severity, and that every code it is asked to render is in the table;
-`packages/polygm_core/copy/engine.py` validated that a skip reason is documented. All three were `assert`, which
-disappears under `python -O` — so the optimised build would have been a *different product*: an unknown severity
-would render as whatever the client made of it, and an undocumented skip reason would have silently counted a copy
-as skipped. They are raised exceptions now, and there is a test that fails if any of the three goes back to being
-an assert: `tests/test_security_plane.py::TestOptimisedBuildIsNotADifferentProduct` runs the module with
-`python -O` and asserts the guard still fires.
+The scan fails on a finding that is **not** in `tools/sast-triage.json` **and** on an entry whose finding has gone.
+That second half is the one that matters: a suppression list with no expiry becomes a list of things somebody once
+worried about, and the entry that should have been deleted three phases ago is the one that hides a regression. The
+80 findings are 20 distinct (rule, file) pairs with written reasons — most of them callers of the same two helpers,
+which is why the finding count and the number of decisions differ.
 
-**F8 — the history scanner itself reported 100 findings that were not secrets, and the fix belongs in the scanner.**
-The first version used the product's *log-strength* rules over source, where `password: string` in a TypeScript
-type, `secret = body["secret"]` and `initData: "<fixture>"` in a test all match a rule that is correct for a line
-of runtime text. Two things came out of that, and both are now structural rather than a list of exceptions:
+### Findings F7–F8 (fixed, with re-tests)
 
-* D3 uses `ci-log-scan.py`'s existing **source-strength** rule set (`SOURCE_RULES`) — one implementation, one
-  allowlist, the same one `make security-scan` runs — instead of a second list that would have given the product
-  two answers to "is this a secret".
-* A credential **reference is not a credential**: `https://x-access-token:$TOKEN@github.com/…` is the safe form of
-  that line, and it is the line somebody writes during an incident. `ci-log-scan.py` now skips any match that
-  contains a shell/template interpolation, and its self-test asserts *both* directions — the reference form is
-  silent, and `postgres://svc:hunter2@db:5432/x` is still caught. That single rule removed the tool's own last
-  `--sources` finding (in `tools/repo-recover.sh`) without an allowlist entry, which is the outcome worth having:
-  the rule was wrong, not the file.
+**F7 — `assert` used as control flow on the money path.** Three sites: the deny-code severity table
+(`risk/limits.py`), `deny()` inside `evaluate_extra`, and the copy engine's skip-reason check. Under `python -O`
+asserts vanish, so a typo'd severity or an undocumented skip reason would ship silently to the surface that decides
+how a refusal is displayed — and a skip reason nobody documented is a copy that stopped without saying so. All three
+raise now, and the deny table's check is a named function (`validate_deny_table`) so it can be re-run with a
+known-bad table rather than greped for.
+*Retest:* `tests/test_security_plane.py::TestOptimisedBuildIsNotADifferentProduct` — it runs a subprocess under
+`python -O` and asserts the refusal survives.
 
-**F9 — the coverage check was measuring the repository, not the scan.** The history check asserted "more than 100
-commits"; this repo has 85. It now asserts that the number of commits *walked* equals `git rev-list --all --count`,
-which is a fact about what the scan did.
+**F8 — the SAST stage could have had no rules in play.** The first version of the canary assertion read `group(1)`
+from ruff's output, which is the *file path*: it asserted that ruff mentioned a file, not that a rule fired, and it
+would have printed "canary caught" for a run whose rule set had failed to load. The canary now reads the rule code
+and requires **`{S608, S105, S311, S602, S310}` ⊆ caught**.
 
-### The honest scope statement
+### The scanner corrections that made "0 findings in history" mean something
 
-Two things in D3 are weaker than they look, and the artifact says so rather than leaving them to be discovered:
+The first honest run reported **5 508** findings. That number is worth recording, because every one of them was a
+mistake in the scanner and none was a secret in the product:
 
-* **Dependency advisories.** `pip-audit` is consulted when it is importable; in this environment there is no
-  network at scan time, so P07's scanner says that in its own output and this section inherits the gap. The
-  advisory feed runs in CI, where the network exists, and the release checklist requires it green before a deploy.
-* **Container image contents — OPEN.** `docker` is not installed here, so the Dockerfiles are checked statically
-  and **no built image has been inspected** for OS packages, layers or CVEs. Static checks do not cover
-  base-image vulnerabilities, and a pulled base can change under a tag. The condition: run `trivy`/`grype`
-  against the digests in `deploy/image-digests.txt` in CI and record the result before the first production
-  deploy. Until then the container section is a statement about the Dockerfiles, nothing more.
+1. **A 64-hex string is not a private key without something calling it one.** Polymarket condition ids and
+   transaction hashes are 64 hex characters; 2 700 of the findings were captured venue fixtures. Key rules now
+   require a context word (`private_key`, `mnemonic`, `wrapped_dek`, `keks`, `signing_key`, …) — with a ±2-line
+   window, because a config file names the key on one line and holds the value on the next.
+2. **The log redactor's patterns do not belong on source code.** `redact.scan()` is a high-recall matcher built for
+   log lines; pointed at TypeScript and Python it flagged `password: string`, `BOT_TOKEN = "[bot-token]"`, an
+   already-redacted value, and `secret = (body.get("secret") or "").strip()`. 100 findings, every one of them the
+   redactor being right about its own job and the scanner using it for the wrong one. `scan_text(..., log_line=True)`
+   now decides that, and history scanning is source.
+3. **A `$` or `{` in the matched text means it is not a literal.** `https://x-access-token:$TOKEN@github.com/…` is
+   the *safe* way to write that line, and it is the line somebody writes during an incident — flagging it teaches
+   the wrong lesson at the worst possible moment. Both scanners skip interpolations.
+4. **One escape hatch, not two.** The history scanner honours the repo's existing `# lint-allow: <reason>` marker
+   (which `tools/lint-rules.py` already refuses to accept without a reason), and every honoured reason is printed
+   in the artifact — five lines of "shape only, never a real token", two "fixture". `tools/ci-log-scan.py` now
+   loads the *shared* allowlist file, so an exemption is written once and is in force in both scanners instead of
+   two lists drifting apart. The marker has to be a comment with a real reason: matching the bare string also
+   matched the docstrings that *explain* the marker, which is how the artifact first came to report an exemption
+   reading "` sprayed over the codebase until the".
+5. **Path-level exemptions with reasons** for the three classes that cannot hold a production secret — captured
+   fixtures (121 402 lines skipped), recorded evidence artifacts, and the 155 vendored third-party skill docs.
+6. **The "did the scan read everything" guard compares against git's own count**, not a hardcoded threshold: the
+   first version demanded 100 commits and this repository had 85, so the guard failed on a scan that had read the
+   entire history.
+
+### OPEN — container image contents are unscanned
+
+`docker` is not installed in this environment, so the Dockerfiles are read **statically** and no built image has
+been inspected for OS packages, layer contents or CVEs. That is stated in the artifact rather than implied away:
+the static checks do not cover base-image vulnerabilities. It closes in CI with `trivy`/`grype` against the built
+digests, and `deploy/image-digests.txt` exists to be the record of which digests that ran against.
