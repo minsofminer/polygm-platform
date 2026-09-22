@@ -859,6 +859,158 @@ class TestAnonymousWriterGetsAnIdentityAnswer(RouteBase):
         self.assertNotEqual(r2.status_code, 401, r2.text)
 
 
+class TestLoginThrottleCountsTheRightKey(RouteBase):
+    """P14 D5. The account-side lockout counted failures on the *typed identifier* and recorded them against the
+    *resolved user id*, so for the ordinary case — a real account, a wrong password typed as an email — the two
+    keys never met and the 10-attempt budget never fired. The only remaining bound was the IP bucket, which is
+    deliberately four times looser because carrier NAT exits share addresses.
+    """
+
+    app_name = "sec-login-budget"
+
+    def _bad(self, identifier: str, n: int = 1) -> int:
+        code = 0
+        for i in range(n):
+            r = self.client.post("/v1/auth/login", json={"identifier": identifier, "password": "wrong-%d" % i})
+            code = r.status_code
+            self.last = r
+        return code
+
+    def test_eleven_wrong_passwords_on_a_real_account_reach_the_account_budget(self):
+        self.SEC.set_password(self.uid, self.phc, at=self.now)      # `self.phc` hashes self.pw once per test
+        self.SEC.link_identity(self.uid, "email", "trader@example.test", at=self.now)
+        codes = [self._bad("trader@example.test") for _ in range(11)]     # noqa: B007 - the last one matters
+        self.assertEqual(codes[-1], 429, "attempt 11 must be refused by the account budget: %s" % self.last.text)
+        self.assertEqual((self.last.json()["error"])["code"], "ACCOUNT_LOCKED")
+        self.assertTrue(self.last.headers.get("retry-after"), "a lock with no Retry-After is a mystery")
+
+    def test_eleven_wrong_passwords_on_an_unknown_identifier_also_reach_it(self):
+        # The unknown path was already counted (keyed on the identifier); asserting it keeps the two paths from
+        # drifting apart again, which is exactly how the original bug happened. The *same* identifier 11 times,
+        # because the budget is per identifier: eleven different addresses is a spray, and the spray test below
+        # is the one that covers it.
+        codes = [self._bad("nobody@example.test") for _ in range(11)]
+        self.assertEqual(codes[10], 429, self.last.text)
+
+    def test_a_spray_across_accounts_from_one_address_is_bounded_too(self):
+        # 40 failures from one address is the IP budget. Ten accounts x 4 attempts each stays under the account
+        # budgets and must still hit the address bound — otherwise an attacker spreads and never locks.
+        self.SEC.set_password(self.uid, self.phc, at=self.now)
+        seen = []
+        for i in range(45):
+            ident = "trader@example.test" if i % 9 == 0 else "nobody-%d@example.test" % i
+            seen.append(self._bad(ident))
+        self.assertIn(429, seen, "45 failures from one address must trip the address budget")
+
+
+class TestLoginTimingIsEqual(RouteBase):
+    """P14 D5: the code said "a missing user and a wrong password run the same code path" — and it was not true.
+
+    The missing-account path returned *before* `_hasher().verify()`, so an unknown identifier answered in single
+    milliseconds while a real one paid the full Argon2id cost. That is a user-enumeration oracle at the front door
+    of a product whose identifiers are email addresses. The fix spends the same hash against a fixed dummy
+    envelope, so the two paths are indistinguishable by the clock.
+    """
+
+    app_name = "sec-login-timing"
+
+    def test_the_unknown_identifier_path_costs_the_same_as_a_wrong_password(self):
+        self.SEC.set_password(self.uid, self.phc, at=self.now)
+        self.SEC.link_identity(self.uid, "email", "timing@example.test", at=self.now)
+
+        def timed(body: dict) -> float:
+            import time
+            t0 = time.perf_counter()
+            self.client.post("/v1/auth/login", json=body)
+            return time.perf_counter() - t0
+
+        # One warm-up each: the first request in a process pays import and connection costs.
+        timed({"identifier": "timing@example.test", "password": "nope-0"})
+        timed({"identifier": "ghost@example.test", "password": "nope-0"})
+        real = min(timed({"identifier": "timing@example.test", "password": "nope-%d" % i}) for i in range(3))
+        ghost = min(timed({"identifier": "ghost@example.test", "password": "nope-%d" % i}) for i in range(3))
+        ratio = max(real, ghost) / max(1e-6, min(real, ghost))
+        self.assertLess(ratio, 2.0, "real=%.4fs ghost=%.4fs — the clock distinguishes them" % (real, ghost))
+        # ...and both are doing real work, so the equality is not "both are fast".
+        self.assertGreater(min(real, ghost), 0.001, "neither path spent any hash time (real=%.4f ghost=%.4f)"
+                           % (real, ghost))
+
+
+class TestConnectionProxySurvivesThreadChurn(RouteBase):
+    """P14 D5, found by the 100-aggressive-users probe: a **segfault** under concurrent load.
+
+    The connection proxy keyed its bookkeeping on `threading.get_ident()` and reaped the connections of
+    not-alive threads by that same key. Idents are reused as soon as a thread exits, so a freshly started
+    thread could be handed the connection of a thread that had already died, or have its own connection closed
+    underneath it by a reap triggered from a third thread. The visible damage was `Cannot operate on a closed
+    database` on ordinary reads; with concurrent use and close, sqlite3 (a C library) segfaulted, which in a
+    server is a worker dying rather than a 500.
+
+    The properties asserted here are the two that make the fix work: a connection belongs to the *thread*, not
+    to a number a new thread can inherit, and a reap never touches a connection whose owner is still running.
+    """
+
+    app_name = "sec-conn-proxy"
+
+    def test_every_thread_gets_its_own_connection_and_churn_does_not_break_it(self):
+        import threading
+        seen: list[tuple[int, int]] = []
+        errors: list[str] = []
+        barrier = threading.Barrier(8)
+
+        def worker() -> None:
+            try:
+                barrier.wait(timeout=5)
+                for _ in range(20):
+                    c = self.app._db._conn()
+                    c.execute("SELECT 1").fetchone()
+                    seen.append((threading.get_ident(), id(c)))
+            except Exception as e:                                        # noqa: BLE001 - the point of the test
+                errors.append("%s: %s" % (type(e).__name__, e))
+
+        # Two waves, so the second wave starts while the first wave's threads are exiting: that overlap is
+        # exactly where an ident gets reused.
+        threads = [threading.Thread(target=worker) for _ in range(16)]
+        for t in threads[:8]:
+            t.start()
+        for t in threads[8:]:
+            t.start()
+        for t in threads:
+            t.join(timeout=20)
+        self.assertEqual(errors, [], "thread churn broke the connection proxy: %s" % errors[:3])
+        self.assertGreater(len(seen), 100)
+        # One connection per *live* thread: distinct ids for distinct threads, and no thread sharing another's.
+        by_thread: dict[int, set[int]] = {}
+        for tid, cid in seen:
+            by_thread.setdefault(tid, set()).add(cid)
+        self.assertTrue(all(len(v) == 1 for v in by_thread.values()),
+                        "a thread was handed more than one connection: %s" % {k: len(v) for k, v in by_thread.items()})
+        self.assertGreaterEqual(len({next(iter(v)) for v in by_thread.values()}), 8,
+                                "threads shared a connection: %s" % by_thread)
+
+    def test_a_reap_never_closes_a_connection_whose_thread_is_alive(self):
+        import threading
+        # Hold a connection on this thread, start a short-lived thread that also takes one, let it die, and then
+        # force a reap. The live thread's connection must still work: this is the assertion that fails on the old
+        # ident-keyed design whenever the dead thread's ident is reused by the next thread.
+        mine = self.app._db._conn()
+        self.app._db._reap()
+        done = threading.Event()
+
+        def short() -> None:
+            self.app._db._conn().execute("SELECT 1").fetchone()
+            done.set()
+
+        t = threading.Thread(target=short)
+        t.start()
+        t.join(timeout=10)
+        self.assertTrue(done.is_set())
+        self.app._db._reap()                       # reaps the dead thread's connection
+        r = self.client.get("/v1/markets")          # ...and this thread's own connection still works
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertIs(self.app._db._conn(), mine)
+
+
 class TestAuthzTable(RouteBase):
     app_name = "sec-authz"
 

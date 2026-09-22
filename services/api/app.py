@@ -402,35 +402,66 @@ class ThreadConnection:
     def __init__(self, factory) -> None:
         self._factory = factory
         self._lock = threading.Lock()
-        self._conns: dict[int, sqlite3.Connection] = {}
+        # The connection lives in `threading.local()`, and the *thread object* is what the bookkeeping keys on.
+        # P14 D5 found why the previous shape was wrong, under 100 concurrent users: it keyed on
+        # `threading.get_ident()`, and an ident is **reused** the moment a thread exits. `_reap()` closed the
+        # connections of threads that were no longer alive, keyed by that same ident — so a freshly started
+        # thread could be handed the connection of a thread that had already died (ident collision), or have its
+        # own connection closed underneath it by a reap triggered from another thread. The observed damage was
+        # `Cannot operate on a closed database` on ordinary reads and, with concurrent use and close, a
+        # **segmentation fault**: sqlite3 is a C library, and `sqlite3_close` on a connection another thread is
+        # mid-`execute` on is undefined behaviour. Two properties fix it and both are load-bearing:
+        # `threading.local()` is keyed per *thread*, never per ident, so the wrong connection cannot be handed
+        # out even if idents collide; and the registry holds a strong reference to the thread object, so
+        # `is_alive()` is asked about the thread that actually owns the connection.
+        self._local = threading.local()
+        self._live: list[tuple[threading.Thread, sqlite3.Connection]] = []
         self._trace = None
 
     def _conn(self) -> sqlite3.Connection:
-        tid = threading.get_ident()
-        c = self._conns.get(tid)
+        c = getattr(self._local, "conn", None)
         if c is None:
-            self._reap()
             c = self._factory()
             if self._trace is not None:
                 c.set_trace_callback(self._trace)
-            self._conns[tid] = c
+            self._local.conn = c
+            self._retain(threading.current_thread(), c)
         return c
 
     def _reap(self) -> None:
-        """Close the connections of threads that have exited.
+        """Close the connections whose owning thread has exited, and touch nothing else.
+
+        Kept as its own method (rather than folded into the registration) because it is also the cleanup a
+        long-lived process can run on a timer, and because the property worth testing is exactly this one: a reap
+        never closes a connection whose owner is still running. The old design reaped by thread *ident*, which is
+        reused the moment a thread exits — a new thread inheriting a dead one's number could be handed (or lose)
+        a connection it never opened.
+        """
+        with self._lock:
+            keep = []
+            for t, c in self._live:
+                if t.is_alive():
+                    keep.append((t, c))
+                    continue
+                try:
+                    c.close()
+                except Exception:                      # already closed: nothing to reap
+                    pass
+            self._live = keep
+
+    def _retain(self, thread: threading.Thread, conn: sqlite3.Connection) -> None:
+        """Register a connection and close the ones whose owning thread has exited.
 
         A connection is three file descriptors (the db, the WAL and the shm), and both a test run and a server
-        churn threads — one per `TestClient`, one per uvicorn worker that retires. Without this the suite reached
-        `OSError: [Errno 24] Too many open files` after a thousand tests, which is a leak wearing a resource
-        limit's clothes: the thread that owned the connection is gone, so nothing can ever use it again.
+        churn threads — one per `TestClient`, one per uvicorn worker that retires. Without the reap the suite
+        reached `OSError: [Errno 24] Too many open files` after a thousand tests, which is a leak wearing a
+        resource limit's clothes: the thread that owned the connection is gone, so nothing can ever use it again.
+        The reap only ever closes a connection whose owner is *provably* gone, and a thread that is still running
+        keeps its own connection regardless of what any other thread is doing.
         """
-        alive = {t.ident for t in threading.enumerate()}
         with self._lock:
-            for tid in [t for t in self._conns if t not in alive]:
-                try:
-                    self._conns.pop(tid).close()
-                except Exception:                      # already closed: nothing to reap
-                    self._conns.pop(tid, None)
+            self._live.append((thread, conn))
+        self._reap()
 
     def set_trace_callback(self, cb) -> None:
         """A trace that only sees the calling thread's queries is a trace that reports zero queries.
@@ -443,7 +474,7 @@ class ThreadConnection:
         """
         self._trace = cb
         with self._lock:
-            conns = list(self._conns.values())
+            conns = [c for _t, c in self._live]
         for c in conns:
             c.set_trace_callback(cb)
         self._conn().set_trace_callback(cb)
@@ -451,7 +482,7 @@ class ThreadConnection:
     def close(self) -> None:
         """Close every connection this process opened — used by tests that tear a database down."""
         with self._lock:
-            conns, self._conns = list(self._conns.values()), {}
+            conns, self._live = [c for _t, c in self._live], []
         for c in conns:
             try:
                 c.close()
@@ -835,6 +866,17 @@ SEC = SecStore(_db)
 
 
 _HASHER = None
+
+
+_DUMMY_PHC: list[str] = []
+
+
+def _dummy_phc() -> str:
+    """A fixed Argon2id envelope whose only job is to be *verified*, so the unknown-identifier path costs the same
+    as a wrong password. It guards no account: nothing hashes to it, and verifying against it always fails."""
+    if not _DUMMY_PHC:
+        _DUMMY_PHC.append(_hasher().hash("polygm-login-timing-equaliser"))
+    return _DUMMY_PHC[0]
 
 
 def _hasher():
@@ -1953,8 +1995,18 @@ def auth_login(request: Request, body: dict = Body(...)):
     # the id we resolved), the address bucket is looser and only stops *password guessing*.
     win_from = _now_ms() - _pwd.LOCK["window_ms"]
     iph = _ip_hash(request)
-    acct = SEC.one("SELECT COUNT(*) AS n, MIN(at_ms) AS first_ms FROM auth_events WHERE kind=? AND user_id=?"
-                   " AND at_ms>=?", ("login_bad_password", ident, win_from)) or {}
+    # P14 D5 found this: the account bucket was counted on the *typed identifier* while the failure was recorded
+    # against the *resolved user id*, so for the ordinary case — a real account, a wrong password typed as an
+    # email — the two keys never met and the 10-attempt account budget never fired. The IP bucket was the only
+    # bound left, and it is deliberately 4x looser because carrier NAT exits share addresses. Both keys are
+    # counted now, and the resolution is a lookup on an indexed identity table (no hashing, no timing signal).
+    who_first = (SEC.identity_user("email", ident) or SEC.identity_user("handle", ident)
+                 or (ident if SEC.one("SELECT id FROM users WHERE id=?", (ident,)) else ""))
+    acct_keys = tuple(sorted({str(ident), str(who_first)} - {""}))
+    marks = ",".join("?" * len(acct_keys))
+    acct = SEC.one("SELECT COUNT(*) AS n, MIN(at_ms) AS first_ms FROM auth_events WHERE kind=? AND user_id IN"
+                   " (%s) AND at_ms>=?" % marks,
+                   ("login_bad_password", *acct_keys, win_from)) or {}
     from_ip = SEC.one("SELECT COUNT(*) AS n, MIN(at_ms) AS first_ms FROM auth_events WHERE kind=? AND ip_hash=?"
                       " AND at_ms>=?", ("login_bad_password", iph, win_from)) or {}
     st = _pwd.lock_state(int(acct.get("n") or 0), int(acct.get("first_ms") or _now_ms()), _now_ms())
@@ -1967,22 +2019,32 @@ def auth_login(request: Request, body: dict = Body(...)):
                        detail={"retry_after_ms": wait, "bucket": which})
         return err("ACCOUNT_LOCKED", rid, detail="retry in %ds" % (wait // 1000),
                    retry_after_s=max(1, wait // 1000))
-    who = SEC.identity_user("email", ident) or SEC.identity_user("handle", ident) or (
-        ident if SEC.one("SELECT id FROM users WHERE id=?", (ident,)) else None)
+    who = who_first or None
     row = {"user_id": who} if who else None
     cred = SEC.credential(str((row or {}).get("user_id") or ""))
     t0 = time.perf_counter()
     # A missing user and a wrong password run the *same* code path, and the same body: the difference between
     # "no such account" and "wrong password" is a user-enumeration oracle on a product where the identifier is
     # an email address.
+    #
+    # P14 D5 found that the second half of that claim was not true either: the missing-account path returned
+    # *before* `_hasher().verify()`, so an unknown identifier answered in milliseconds while a real one paid the
+    # full Argon2id cost (~100 ms here). The wording was right and the work was not. The dummy verify below
+    # spends the same hash on a fixed envelope — the cost is the control, not the result — so the two paths are
+    # indistinguishable by the clock. The envelope is built once and cached: deriving it per request would give
+    # the attacker a cheaper request again.
     if not row or not cred:
-        # Keyed on the identifier when no account matched: that is what makes "10 tries for THIS email"
-        # countable, and the identifier never reaches a log line (see `redact.py`).
+        _hasher().verify(_dummy_phc(), pw)
         SEC.auth_event(ident, "login_bad_password", at=_now_ms(), ip_hash=_ip_hash(request))
         return err("LOGIN_FAILED", rid)
     verdict = _hasher().verify(str(cred["phc"]), pw)
     if verdict.startswith("bad"):
-        SEC.auth_event(str(row["user_id"]), "login_bad_password", at=_now_ms(), ip_hash=_ip_hash(request))
+        SEC.auth_event(str(row["user_id"]), "login_bad_password", at=_now_ms(), ip_hash=_ip_hash(request),
+                       detail={"as": ident})
+        # The typed identifier carries its own row as well: a spray across many accounts from one address must be
+        # visible as "these identifiers were tried", and the lock check above counts both keys.
+        if ident != str(row["user_id"]):
+            SEC.auth_event(ident, "login_bad_password", at=_now_ms(), ip_hash=_ip_hash(request))
         return err("LOGIN_FAILED", rid)
     fam = "fam_" + uuid.uuid4().hex[:12]
     acc, ref = _token_string(), _token_string()

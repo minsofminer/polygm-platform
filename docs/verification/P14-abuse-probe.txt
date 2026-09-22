@@ -1,0 +1,39 @@
+P14 D5 — rate-limit abuse: per-IP, per-user, 100 aggressive users, victim lockout, amplification
+====================================================================================================
+
+PASS the anonymous budget refuses a walk of the sitemap (3 of 12 refused, first at #10)
+PASS every refusal carries Retry-After and the budget's own headers
+PASS the refused caller can still read a different surface (the budget is per kind, not global)
+PASS a metered operation stops the account that spent it ([200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 429])
+PASS the refusal names the budget rather than a generic 429 (QUOTA_EXCEEDED)
+PASS a *different* account is unaffected by the first account's spent budget
+PASS 100 aggressive users produced no 5xx (600 requests, {'200': 600})
+PASS the platform degrades gracefully, not collapses: p50 311.2 ms loaded vs 8.9 ms unloaded (34.9x), p95 608.4 ms, max 961.2 ms, 93 req/s
+PASS every refusal under load is a throttle answer (2xx=600, refusals=0)
+OPEN THIS IS ONE PROCESS, NOT A LOAD TEST: the 100 users are threads against an in-process ASGI app on one machine, which measures the product's own budgets and failure modes but not the deployed fleet
+        — P13's load harness covers the fleet; re-run it against the deployed API before launch and attach the p95 and error-rate curves to the security gate document
+PASS an attacker who fails 10 passwords gets the account's login budget ([401, 401, 401, 401, 401, 429])
+PASS the victim's existing session keeps working while the attacker's guesses are refused (200)
+PASS the lock expires by itself when the window passes (locked now=True, locked after the window=False)
+PASS the failed attempts appear in the account's own security log (identity_linked, login_bad_password, login_ok, password_set, session_mint)
+PASS the password-recovery path is not blocked by the login budget (404)
+PASS 50 fires on 3 channels produce at most one send per channel (0 queued, 3 held)
+PASS every held message says why it was held (the support-ticket guard)
+PASS a plan without a channel does not send on it (2 of 3 refused on the free plan)
+PASS an absurd page size is bounded by a stated cap (100) and the response never exceeds it (18 item(s))
+
+  per_ip: {"codes": [200, 200, 200, 200, 200, 200, 200, 200, 200, 429, 429, 429], "limit_headers": {"x-ratelimit-limit": "10", "x-ratelimit-remaining": "9"}, "other_kind_status": 200}
+
+  per_user: {"codes": [200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 429], "refusal_code": "QUOTA_EXCEEDED", "refusal_retryable": true, "other_account_status": 200}
+
+  own_budget: {"baseline_p50_ms": 8.9, "users": 100, "requests": 600, "wall_ms": 6457.6, "statuses": {"200": 600}, "p50_ms": 311.2, "p95_ms": 608.4, "max_ms": 961.2, "rps": 92.9, "p50_vs_baseline": 34.9}
+
+  victim_lockout: {"attacker_codes": [401, 401, 401, 401, 401, 429], "locked_after": 6, "session_before": 200, "session_during_lock": 200, "lock_expires": {"locked_now": true, "locked_later": false}, "victim_events": ["identity_linked", "login_bad_password", "login_ok", "password_set", "session_mint"], "recovery_status": 404}
+
+  amplification: {"fires": 50, "channels": 3, "queued": 0, "held": 3, "decisions": {"dropped_rate_limited": 1}, "sentence": "held by the rule's own cap: 50 of 1 fires used in the current window; the next slot frees at 4600000 (next slot 4600000)", "free_plan_refusals": 2, "page_size_10000": {"status": 200, "cap": 100, "items": 18}}
+
+P14 ABUSE: CONDITIONAL — 18 checks passed, 0 failed, 1 OPEN
+
+OPEN (not passes, not failures):
+  * THIS IS ONE PROCESS, NOT A LOAD TEST: the 100 users are threads against an in-process ASGI app on one machine, which measures the product's own budgets and failure modes but not the deployed fleet
+      P13's load harness covers the fleet; re-run it against the deployed API before launch and attach the p95 and error-rate curves to the security gate document

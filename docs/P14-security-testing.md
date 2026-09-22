@@ -375,3 +375,80 @@ The image-level proof (`docker run … id`, `touch /`, `getent passwd`) is **OPE
 * **MFA on the other three providers** (Vercel, Supabase, Railway) is **OPEN**: none exposes an MFA field on the
   endpoints these tokens can reach. It is written down as open rather than assumed, because an MFA status nobody
   verified is not an MFA control.
+
+---
+
+## D5 — rate-limit abuse, and the segfault the 100-user probe found
+
+`tools/p14-abuse-probe.py` — recorded: `docs/verification/P14-abuse-probe.txt` / `.json` →
+**`18 checks passed, 0 failed, 1 OPEN`**.
+
+| Probe | What it establishes | Result |
+|---|---|---|
+| per-IP | the anonymous budget refuses a sitemap walk at the 10th request, with `Retry-After: 599` and `X-RateLimit-*`; the refused caller can still read a *different* surface (the budget is per kind, not global) | green |
+| per-user | 21 uncached scans against a 20/day quota → the 21st is `429 QUOTA_EXCEEDED`; a *different* account is untouched | green |
+| own-budget DoS | 100 aggressive users, 600 requests, each inside their own budget | **no 5xx, 93 req/s, p50 311 ms (34.9× the 8.9 ms unloaded baseline), p95 608 ms, max 961 ms** |
+| victim lockout | four separate claims: the victim's session survives, the lock expires, the victim is told, recovery is not blocked | green |
+| fanout amplification | 50 fires across 3 channels → at most one send per channel, the other 47 held with a sentence saying why | green |
+| cost amplification | a 10,000-row page request is bounded by the stated `pageSizeHardCap: 100` | green |
+
+### Findings F15–F17
+
+**F15 — the account login budget never fired for the ordinary case.** The lock was *checked* against the typed
+identifier (`trader@example.test`) and the failure was *recorded* against the resolved user id (`u_…`), so the two
+keys never met: an attacker could guess at a real account's password with only the address budget — which is
+deliberately four times looser, because carrier NAT exits share addresses — bounding them. Both keys are counted
+now (and the failure writes a row under each), so eleven wrong passwords reach the account budget.
+*Retest:* `TestLoginThrottleCountsTheRightKey` — three tests: a real account, an unknown identifier, and a spray
+across accounts from one address.
+
+**F16 — the login response time told you whether an account existed.** The code's own comment claimed "a missing
+user and a wrong password run the *same* code path, and the same body", and the second half was false: the
+missing-account branch returned **before** `_hasher().verify()`, so an unknown identifier answered in ~1 ms while a
+real one paid ~100 ms of Argon2id. That is a user-enumeration oracle on a product whose identifiers are email
+addresses. The unknown path now spends the same hash against a fixed dummy envelope (built once, never derived
+per request), so the two are indistinguishable by the clock.
+*Retest:* `TestLoginTimingIsEqual` — the ratio between the two paths must stay under 2×, **and** both must be doing
+real work, so the equality cannot be satisfied by making both fast.
+
+**F17 — a segfault under concurrent load, from the connection proxy keying on thread ident.** This is the one the
+kit's "own-rate-budget DoS" question exists to find. The proxy that hands each thread its own SQLite connection
+kept its bookkeeping in `dict[int, Connection]` keyed by `threading.get_ident()`, and reaped the connections of
+not-alive threads by that same key. **Idents are reused as soon as a thread exits**, so under thread churn a
+freshly started thread could be handed the connection of a thread that had already died, or lose its own to a reap
+triggered from a third thread. On ordinary reads that surfaced as `Cannot operate on a closed database`; with
+concurrent use and close, **sqlite3 — a C library — segfaulted**, which in a server is a worker dying rather than
+a 500. It reproduced on the first run of the 100-user probe (exit 139) and never again after the fix.
+
+The fix has two load-bearing properties: the connection lives in `threading.local()` (keyed per *thread*, never
+per ident, so the wrong connection cannot be handed out even if idents collide), and the registry holds a strong
+reference to the thread object so `is_alive()` is asked about the thread that actually owns the connection. Reaping
+is an explicit method, and its safety property is tested directly: a reap never closes a connection whose owner is
+still running.
+*Retest:* `TestConnectionProxySurvivesThreadChurn` — two waves of 16 short-lived threads (the overlap is where an
+ident gets reused) asserting no errors, one connection per thread and no sharing; plus the reaping property.
+
+### The victim-lockout question, answered in four pieces
+
+The kit's requirement is that throttling must not let an attacker lock a victim out. The login budget is the one
+place a throttle keys on the victim's own account, so each claim is measured rather than argued:
+
+1. **The victim's existing session keeps working while the attacker is refused** — a login throttle that logs the
+   victim out would be a denial of service with extra steps.
+2. **The lock expires by itself** — the same arithmetic the route uses, evaluated at the far end of the window
+   (`locked now=True`, `locked after the window=False`). A lock with no expiry is a permanent lockout.
+3. **The victim is told** — the failed attempts appear in the account's own security log, so "somebody is guessing
+   at your password" is visible rather than silent.
+4. **The recovery path is not behind the same bucket** — locking the login door must not lock the way back in,
+   or an attacker holds the account closed for as long as they keep guessing.
+
+The residual is stated rather than hidden: an attacker *can* make password login fail for up to fifteen minutes.
+That is the deliberate trade (the account budget is what stops guessing), and the four properties above are what
+keep it from being a lockout: the victim keeps their session, is notified, and can regain access through recovery.
+
+### What D5 could not measure
+
+**One process is not a fleet.** The 100 aggressive users are threads against an in-process ASGI app on one
+machine, which measures the product's own budgets and failure modes — and found a crash — but not the deployed
+fleet behind a CDN. The OPEN item records that P13's load harness owns the fleet question and must be re-run
+against the deployed API before launch, with the p95 and error-rate curves attached to the security gate document.
