@@ -44,6 +44,48 @@ BLOCKING = {
 }
 
 
+#: The kit's D7 checklist, in its own words and order. Each row names its evidence, and every evidence path is
+#: asserted to exist below — a checklist that cites a file nobody wrote is a checklist that reads green and means
+#: nothing. The statuses are deliberately prose: several of these are decisions only the owner can take, and this
+#: document's job is to say which ones are still open rather than to imply they were handled.
+CHECKLIST = (
+    ("All Critical and High findings remediated and re-tested",
+     "met — F1–F19, every one with the re-test named beside it",
+     "docs/P14-security-testing.md"),
+    ("Every authorisation test in D1 passing",
+     "met — 37/37, 95 operations served of 109 declared, drift 0",
+     "docs/verification/P14-authz-matrix.json"),
+    ("All six key-compromise drills run, with times recorded",
+     "met — six drills, 0.03–0.2 s each; local break-glass 0.06 s for 500 keys; the provider-bound half is OPEN",
+     "docs/verification/P14-key-drills.json"),
+    ("Log-redaction CI check passing",
+     "met — the log scanner runs on every PR and honours the shared allowlist",
+     "tools/ci-log-scan.py"),
+    ("Secret scan clean on all history",
+     "met — 85 commits and 166,300 added lines scanned, 0 findings",
+     "docs/verification/P14-appsec-scan.json"),
+    ("Executor network isolation verified by test",
+     "OPEN — the executor has no deployed subnet yet; recorded with the exact probe to run when it lands",
+     "docs/verification/P14-infra-verify.json"),
+    ("Backup restore tested within the last 30 days",
+     "met for the environment this machine has (SQLite twin: 17 ms backup, 8 ms restore, identical money queries); "
+     "the managed-Postgres restore is OPEN", "docs/verification/P14-infra-verify.json"),
+    ("Incident response runbook written, and the on-call rotation staffed",
+     "runbook written (D6). The rotation is a staffing decision and belongs to the owner — recorded, not assumed",
+     "docs/P14-audit-bounty-legal.md"),
+    ("Risk disclosure, terms and privacy policy reviewed by counsel",
+     "NOT DONE — drafted and recorded as an owner action with cost; counsel review is outside this machine",
+     "docs/P14-audit-bounty-legal.md"),
+    ("Kill switch drilled",
+     "met — P13's chaos drills stop trading through the switch, and the order-path refusal is re-asserted here",
+     "docs/verification/P13-chaos-1-executor-kill.txt"),
+    ("Canary: $50 of our own money, real orders, full reconciliation, for 72 hours",
+     "BLOCKED — the canary spends real money, and the standing rule is that no real funds move until P13 and P14 "
+     "are green. This document says NO-GO, so the canary has not started and cannot start until it says GO",
+     "docs/AGENTS-BUILD.md"),
+)
+
+
 def load(artifact: str) -> dict:
     p = VERIF / artifact
     if not p.exists():
@@ -72,6 +114,12 @@ def main(argv: list[str] | None = None) -> int:
         for o in opened:
             opens.append((name, o.get("check", ""), o.get("why", "")))
 
+    #    A dangling citation is a fail, not a warning: the checklist is the part a human signs, so it is the last
+    #    place that should be allowed to point at something imaginary.
+    dangling = [item for item, _st, ev in CHECKLIST if not (ROOT / ev).exists()]
+    if dangling:
+        print("security gate: the checklist cites evidence that does not exist: %s" % ", ".join(dangling))
+        return 2
     failed_total = sum(r["failed"] for r in rows)
     launchable = failed_total == 0 and not any(r["verdict"] == "MISSING" for r in rows)
     verdict_line = ("**GO** — every recorded check passes; the open items are listed with their owners below"
@@ -79,6 +127,14 @@ def main(argv: list[str] | None = None) -> int:
                     "**NO-GO** — %d recorded check(s) are failing. By the kit's own rule, a failing authorisation "
                     "test or a break-glass over an hour means the product does not launch, and this document is "
                     "that statement in writing." % failed_total)
+
+    checklist_lines = [
+        "",
+        "## The kit's D7 checklist, with this run's status",
+        "",
+        "| Item | Status | Evidence |",
+        "|---|---|---|",
+    ] + ["| %s | %s | `%s` |" % (i, st, ev) for i, st, ev in CHECKLIST]
 
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     lines = [
@@ -116,7 +172,8 @@ def main(argv: list[str] | None = None) -> int:
         for section, name, why in blockers:
             lines += ["* **%s**: %s" % (section, name), "  %s" % (why or "")[:400]]
         lines.append("")
-    lines += ["## Open items — not passes, not failures: measurements somebody with the credential must take", ""]
+    lines += checklist_lines
+    lines += ["", "## Open items — not passes, not failures: measurements somebody with the credential must take", ""]
     if opens:
         for section, name, why in opens:
             lines += ["* **%s**: %s" % (section, name[:160]), "  %s" % (why or "")[:400]]
@@ -143,9 +200,11 @@ def main(argv: list[str] | None = None) -> int:
               "",
               "## How this document is kept true",
               "",
-              "`make security-gate` regenerates it; `make security` re-runs all five P14 harnesses and then the",
+              "`make security-gate` regenerates it; `make security` re-runs all six P14 harnesses and then the",
               "gate. The nightly CI job (`.github/workflows/security.yml`) runs the same five and fails if the",
-              "verdict regresses, so a control that stops working is a red build rather than a page that is still",
+              "verdict regresses, and the D7 checklist above refuses to generate at all if any row cites evidence "
+              "that does not exist (verified by canary: a row pointing at a missing file exits 2). A control that "
+              "stops working is a red build rather than a page that is still",
               "green because nobody looked.",
               ""]
     text = "\n".join(lines)
