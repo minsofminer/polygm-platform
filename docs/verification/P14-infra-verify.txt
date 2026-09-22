@@ -1,0 +1,59 @@
+P14 D4 — infra verification: egress, runtime, database, restore, IAM, headers
+================================================================================================
+
+PASS no outbound call site builds its URL from a request value (5 call site(s) total)
+PASS every configured vendor endpoint is https/wss (clob.polymarket.com, data-api.polymarket.com, gamma-api.polymarket.com, ws-subscriptions-clob.polymarket.com) and any plain-http one is loopback
+OPEN DEPLOYED-SUBNET EGRESS IS UNPROVEN: the executor is not deployed and there is no subnet to try from, so the firewall allowlist has not been tested by trying
+        — when the executor lands: from inside its subnet, curl a non-allowlisted host and a non-allowlisted port and record both refusals (the kit's 'proved by trying'), plus an allowed vendor call
+PASS services/api/Dockerfile: the app user has no login shell
+PASS services/api/Dockerfile: no additional OS packages are installed
+PASS services/executor-mock/Dockerfile: the app user has no login shell
+PASS services/executor-mock/Dockerfile: no additional OS packages are installed
+PASS the api container is read-only, drops all capabilities and cannot gain privileges
+OPEN NO IMAGE-LEVEL PROOF OF THE RUNTIME HARDENING: no docker here, so the Dockerfiles and compose are read as text; nobody has yet run `id` inside the built image or tried to write to `/`
+        — run the kit's own probes on the built image: `docker run … id` (expect uid 10001, not 0), `touch /srv/app/x` (expect permission denied), `nc -l` (absent), `getent passwd polygm` (expect nologin), then record the output
+PASS the Supabase account was queried and lists 1 project(s)
+FAIL database hashcats-mining (jyefbqxnxxfoitstgdzi) is not open to the internet (v4=['0.0.0.0/0'] v6=['::/0'])
+        — 0.0.0.0/0 means every host on the internet can reach the Postgres port; the password is then the only control and the log fills with credential-stuffing attempts
+OPEN NO PRODUCTION DATABASE FOR THIS PRODUCT EXISTS YET: the deployed API runs the SQLite demo engine in /tmp (`api/index.py`), so there is nothing to be public or private
+        — when the real Postgres lands: create it with network restrictions set to the app's egress IPs (never 0.0.0.0/0), enable PITR, and re-run this section — the check above then applies to it
+PASS a consistent backup of the migrated database was taken (17 ms, 1761280 bytes)
+PASS the restored copy holds every table and every row (123 tables, 3273 rows, 8 ms)
+PASS the restored copy answers the money-path reads identically (balances, ledger sum, open orders, intents, key wraps)
+PASS the restored database satisfies the API's boot schema guard
+OPEN MANAGED-POSTGRES RESTORE UNPROVEN: the drill above is the SQLite twin, which is what this environment runs; no restore has been performed against the managed Postgres that production will use
+        — on the managed instance: take a PITR snapshot, restore to a scratch branch at a known timestamp, run the same money-path queries, and record the wall-clock time and the recovery point
+FAIL the GitHub account that owns this repository has MFA enabled (minsofminer)
+        — two_factor_authentication is false: the account that can rewrite every commit, and whose token holds admin:org and delete_repo, is protected by a password alone
+PASS the token scopes are recorded, and the dangerous ones are named ( admin:org,  admin:public_key,  delete_repo)
+OPEN VERCEL_TOKEN: MFA could not be read from Vercel account (deploys the API and the Mini App)'s API
+        — the provider exposes no MFA field on the endpoints this token can reach; check it in the dashboard and record the answer in docs/P14-security-testing.md (an MFA status nobody verified is not an MFA control)
+OPEN SUPABASE_ACCESS_TOKEN: MFA could not be read from Supabase account (will hold the production database)'s API
+        — the provider exposes no MFA field on the endpoints this token can reach; check it in the dashboard and record the answer in docs/P14-security-testing.md (an MFA status nobody verified is not an MFA control)
+OPEN RAILWAY_TOKEN: MFA could not be read from Railway account (compose/host)'s API
+        — the provider exposes no MFA field on the endpoints this token can reach; check it in the dashboard and record the answer in docs/P14-security-testing.md (an MFA status nobody verified is not an MFA control)
+PASS the deployed API sends a CSP with frame-ancestors 'none'
+PASS the deployed API sends HSTS with preload
+PASS no wildcard CORS on the API (absent)
+PASS the deployed API serves no interactive surface ({'/docs': 404, '/redoc': 404, '/openapi.json': 404})
+PASS the deployed API refuses a spoofed X-User-Id header on every user route ({"/v1/referrals/me": 401, "/v1/auth/sessions": 401, "/v1/wallet/balance": 401})
+PASS an anonymous writer is refused with an identity answer, not a retryable signing error (401)
+PASS the Mini App sends a CSP that frames only Telegram, and no wildcard CORS
+
+P14 INFRA: FAIL — 20 checks passed, 2 failed, 7 OPEN
+
+OPEN (not passes, not failures — measurements this machine cannot take):
+  * DEPLOYED-SUBNET EGRESS IS UNPROVEN: the executor is not deployed and there is no subnet to try from, so the firewall allowlist has not been tested by trying
+      when the executor lands: from inside its subnet, curl a non-allowlisted host and a non-allowlisted port and record both refusals (the kit's 'proved by trying'), plus an allowed vendor call
+  * NO IMAGE-LEVEL PROOF OF THE RUNTIME HARDENING: no docker here, so the Dockerfiles and compose are read as text; nobody has yet run `id` inside the built image or tried to write to `/`
+      run the kit's own probes on the built image: `docker run … id` (expect uid 10001, not 0), `touch /srv/app/x` (expect permission denied), `nc -l` (absent), `getent passwd polygm` (expect nologin), then record the output
+  * NO PRODUCTION DATABASE FOR THIS PRODUCT EXISTS YET: the deployed API runs the SQLite demo engine in /tmp (`api/index.py`), so there is nothing to be public or private
+      when the real Postgres lands: create it with network restrictions set to the app's egress IPs (never 0.0.0.0/0), enable PITR, and re-run this section — the check above then applies to it
+  * MANAGED-POSTGRES RESTORE UNPROVEN: the drill above is the SQLite twin, which is what this environment runs; no restore has been performed against the managed Postgres that production will use
+      on the managed instance: take a PITR snapshot, restore to a scratch branch at a known timestamp, run the same money-path queries, and record the wall-clock time and the recovery point
+  * VERCEL_TOKEN: MFA could not be read from Vercel account (deploys the API and the Mini App)'s API
+      the provider exposes no MFA field on the endpoints this token can reach; check it in the dashboard and record the answer in docs/P14-security-testing.md (an MFA status nobody verified is not an MFA control)
+  * SUPABASE_ACCESS_TOKEN: MFA could not be read from Supabase account (will hold the production database)'s API
+      the provider exposes no MFA field on the endpoints this token can reach; check it in the dashboard and record the answer in docs/P14-security-testing.md (an MFA status nobody verified is not an MFA control)
+  * RAILWAY_TOKEN: MFA could not be read from Railway account (compose/host)'s API
+      the provider exposes no MFA field on the endpoints this token can reach; check it in the dashboard and record the answer in docs/P14-security-testing.md (an MFA status nobody verified is not an MFA control)

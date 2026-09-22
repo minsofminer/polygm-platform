@@ -1,0 +1,308 @@
+{
+  "verdict": "FAIL",
+  "open_conditions": [
+    {
+      "check": "DEPLOYED-SUBNET EGRESS IS UNPROVEN: the executor is not deployed and there is no subnet to try from, so the firewall allowlist has not been tested by trying",
+      "why": "when the executor lands: from inside its subnet, curl a non-allowlisted host and a non-allowlisted port and record both refusals (the kit's 'proved by trying'), plus an allowed vendor call"
+    },
+    {
+      "check": "NO IMAGE-LEVEL PROOF OF THE RUNTIME HARDENING: no docker here, so the Dockerfiles and compose are read as text; nobody has yet run `id` inside the built image or tried to write to `/`",
+      "why": "run the kit's own probes on the built image: `docker run \u2026 id` (expect uid 10001, not 0), `touch /srv/app/x` (expect permission denied), `nc -l` (absent), `getent passwd polygm` (expect nologin), then record the output"
+    },
+    {
+      "check": "NO PRODUCTION DATABASE FOR THIS PRODUCT EXISTS YET: the deployed API runs the SQLite demo engine in /tmp (`api/index.py`), so there is nothing to be public or private",
+      "why": "when the real Postgres lands: create it with network restrictions set to the app's egress IPs (never 0.0.0.0/0), enable PITR, and re-run this section \u2014 the check above then applies to it"
+    },
+    {
+      "check": "MANAGED-POSTGRES RESTORE UNPROVEN: the drill above is the SQLite twin, which is what this environment runs; no restore has been performed against the managed Postgres that production will use",
+      "why": "on the managed instance: take a PITR snapshot, restore to a scratch branch at a known timestamp, run the same money-path queries, and record the wall-clock time and the recovery point"
+    },
+    {
+      "check": "VERCEL_TOKEN: MFA could not be read from Vercel account (deploys the API and the Mini App)'s API",
+      "why": "the provider exposes no MFA field on the endpoints this token can reach; check it in the dashboard and record the answer in docs/P14-security-testing.md (an MFA status nobody verified is not an MFA control)"
+    },
+    {
+      "check": "SUPABASE_ACCESS_TOKEN: MFA could not be read from Supabase account (will hold the production database)'s API",
+      "why": "the provider exposes no MFA field on the endpoints this token can reach; check it in the dashboard and record the answer in docs/P14-security-testing.md (an MFA status nobody verified is not an MFA control)"
+    },
+    {
+      "check": "RAILWAY_TOKEN: MFA could not be read from Railway account (compose/host)'s API",
+      "why": "the provider exposes no MFA field on the endpoints this token can reach; check it in the dashboard and record the answer in docs/P14-security-testing.md (an MFA status nobody verified is not an MFA control)"
+    }
+  ],
+  "facts": {
+    "at_ms": 1790101837020,
+    "api_live": "https://polygm-api.vercel.app",
+    "mini_app_live": "https://polygm-mini-app.vercel.app",
+    "egress": {
+      "call_sites": [
+        "services/executor-mock/transport.py:31:            with urllib.request.urlopen(req, timeout=timeout_ms / 1000) as r:",
+        "services/ingest/net.py:3:Three rules, and they are the reason this module exists rather than a `urllib.request.urlopen` at each call",
+        "services/ingest/net.py:232:            with urllib.request.urlopen(req, timeout=timeout[1]) as r:     # read timeout; see note above",
+        "services/executor-mock/transport.py:31:            with urllib.request.urlopen(req, timeout=timeout_ms / 1000) as r:",
+        "services/ingest/net.py:232:            with urllib.request.urlopen(req, timeout=timeout[1]) as r:     # read timeout; see note above"
+      ],
+      "count": 5,
+      "config_urls": [
+        "https://clob.polymarket.com",
+        "https://data-api.polymarket.com",
+        "https://gamma-api.polymarket.com",
+        "wss://ws-subscriptions-clob.polymarket.com"
+      ],
+      "plain_http": []
+    },
+    "runtime": {
+      "services/api/Dockerfile": {
+        "non_root_user": true,
+        "no_login_shell": true,
+        "no_added_packages": true,
+        "no_credential_copy": true
+      },
+      "services/executor-mock/Dockerfile": {
+        "non_root_user": true,
+        "no_login_shell": true,
+        "no_added_packages": true,
+        "no_credential_copy": true
+      },
+      "compose_api": {
+        "read_only": true,
+        "cap_drop_all": true,
+        "no_new_privileges": true,
+        "user": false
+      }
+    },
+    "database": {
+      "providers": {
+        "supabase": [
+          {
+            "id": "jyefbqxnxxfoitstgdzi",
+            "name": "hashcats-mining",
+            "region": "ap-south-1"
+          }
+        ],
+        "supabase_cidrs": {
+          "jyefbqxnxxfoitstgdzi": {
+            "v4": [
+              "0.0.0.0/0"
+            ],
+            "v6": [
+              "::/0"
+            ],
+            "status": 200
+          }
+        }
+      }
+    },
+    "restore": {
+      "backup_ms": 17,
+      "restore_ms": 8,
+      "tables": 123,
+      "rows": 3273,
+      "mismatches": {},
+      "money_answers_identical": true
+    },
+    "iam": {
+      "github": {
+        "login": "minsofminer",
+        "two_factor_authentication": false,
+        "token_scopes": "admin:enterprise, admin:gpg_key, admin:org, admin:org_hook, admin:public_key, admin:repo_hook, admin:ssh_signing_key, audit_log, codespace, copilot, delete:packages, delete_repo, gist, notifications, project, repo, user, workflow, write:discussion, write:network_configurations, write:packages",
+        "over_scoped": [
+          " admin:org",
+          " admin:public_key",
+          " delete_repo"
+        ]
+      }
+    },
+    "headers": {
+      "api": {
+        "status": 200,
+        "headers": {
+          "content-security-policy": "default-src 'self'; script-src 'self' https://telegram.org https://web.telegram.org; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self'; connect-src 'self' https://clob.polymarket.com wss://ws-subscriptions-clob.polymarket.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'; upgrade-insecure-requests",
+          "strict-transport-security": "max-age=31536000; includeSubDomains; preload",
+          "x-content-type-options": "nosniff",
+          "referrer-policy": "no-referrer",
+          "access-control-allow-origin": null,
+          "server": "Vercel"
+        }
+      },
+      "docs": {
+        "/docs": 404,
+        "/redoc": 404,
+        "/openapi.json": 404
+      },
+      "spoofed_identity": {
+        "/v1/referrals/me": {
+          "status": 401,
+          "code": "UNAUTHENTICATED"
+        },
+        "/v1/auth/sessions": {
+          "status": 401,
+          "code": "UNAUTHENTICATED"
+        },
+        "/v1/wallet/balance": {
+          "status": 401,
+          "code": "UNAUTHENTICATED"
+        }
+      },
+      "anonymous_order": {
+        "status": 401,
+        "body": "{\"error\":{\"code\":\"UNAUTHENTICATED\",\"message\":\"a session is required\",\"retryable\":false,\"requestId\":\"5c3245ae13b942a1\"}}"
+      },
+      "mini_app": {
+        "status": 200,
+        "headers": {
+          "content-security-policy": "default-src 'self'; script-src 'self' https://telegram.org 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; frame-src 'none'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'self' https://web.telegram.org https://telegram.org https://t.me; require-trusted-types-for 'script'",
+          "strict-transport-security": "max-age=63072000; includeSubDomains; preload",
+          "access-control-allow-origin": null
+        }
+      }
+    }
+  },
+  "checks": [
+    {
+      "status": "PASS",
+      "name": "no outbound call site builds its URL from a request value (5 call site(s) total)",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "every configured vendor endpoint is https/wss (clob.polymarket.com, data-api.polymarket.com, gamma-api.polymarket.com, ws-subscriptions-clob.polymarket.com) and any plain-http one is loopback",
+      "why": ""
+    },
+    {
+      "status": "OPEN",
+      "name": "DEPLOYED-SUBNET EGRESS IS UNPROVEN: the executor is not deployed and there is no subnet to try from, so the firewall allowlist has not been tested by trying",
+      "why": "when the executor lands: from inside its subnet, curl a non-allowlisted host and a non-allowlisted port and record both refusals (the kit's 'proved by trying'), plus an allowed vendor call"
+    },
+    {
+      "status": "PASS",
+      "name": "services/api/Dockerfile: the app user has no login shell",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "services/api/Dockerfile: no additional OS packages are installed",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "services/executor-mock/Dockerfile: the app user has no login shell",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "services/executor-mock/Dockerfile: no additional OS packages are installed",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "the api container is read-only, drops all capabilities and cannot gain privileges",
+      "why": ""
+    },
+    {
+      "status": "OPEN",
+      "name": "NO IMAGE-LEVEL PROOF OF THE RUNTIME HARDENING: no docker here, so the Dockerfiles and compose are read as text; nobody has yet run `id` inside the built image or tried to write to `/`",
+      "why": "run the kit's own probes on the built image: `docker run \u2026 id` (expect uid 10001, not 0), `touch /srv/app/x` (expect permission denied), `nc -l` (absent), `getent passwd polygm` (expect nologin), then record the output"
+    },
+    {
+      "status": "PASS",
+      "name": "the Supabase account was queried and lists 1 project(s)",
+      "why": ""
+    },
+    {
+      "status": "FAIL",
+      "name": "database hashcats-mining (jyefbqxnxxfoitstgdzi) is not open to the internet (v4=['0.0.0.0/0'] v6=['::/0'])",
+      "why": "0.0.0.0/0 means every host on the internet can reach the Postgres port; the password is then the only control and the log fills with credential-stuffing attempts"
+    },
+    {
+      "status": "OPEN",
+      "name": "NO PRODUCTION DATABASE FOR THIS PRODUCT EXISTS YET: the deployed API runs the SQLite demo engine in /tmp (`api/index.py`), so there is nothing to be public or private",
+      "why": "when the real Postgres lands: create it with network restrictions set to the app's egress IPs (never 0.0.0.0/0), enable PITR, and re-run this section \u2014 the check above then applies to it"
+    },
+    {
+      "status": "PASS",
+      "name": "a consistent backup of the migrated database was taken (17 ms, 1761280 bytes)",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "the restored copy holds every table and every row (123 tables, 3273 rows, 8 ms)",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "the restored copy answers the money-path reads identically (balances, ledger sum, open orders, intents, key wraps)",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "the restored database satisfies the API's boot schema guard",
+      "why": ""
+    },
+    {
+      "status": "OPEN",
+      "name": "MANAGED-POSTGRES RESTORE UNPROVEN: the drill above is the SQLite twin, which is what this environment runs; no restore has been performed against the managed Postgres that production will use",
+      "why": "on the managed instance: take a PITR snapshot, restore to a scratch branch at a known timestamp, run the same money-path queries, and record the wall-clock time and the recovery point"
+    },
+    {
+      "status": "FAIL",
+      "name": "the GitHub account that owns this repository has MFA enabled (minsofminer)",
+      "why": "two_factor_authentication is false: the account that can rewrite every commit, and whose token holds admin:org and delete_repo, is protected by a password alone"
+    },
+    {
+      "status": "PASS",
+      "name": "the token scopes are recorded, and the dangerous ones are named ( admin:org,  admin:public_key,  delete_repo)",
+      "why": ""
+    },
+    {
+      "status": "OPEN",
+      "name": "VERCEL_TOKEN: MFA could not be read from Vercel account (deploys the API and the Mini App)'s API",
+      "why": "the provider exposes no MFA field on the endpoints this token can reach; check it in the dashboard and record the answer in docs/P14-security-testing.md (an MFA status nobody verified is not an MFA control)"
+    },
+    {
+      "status": "OPEN",
+      "name": "SUPABASE_ACCESS_TOKEN: MFA could not be read from Supabase account (will hold the production database)'s API",
+      "why": "the provider exposes no MFA field on the endpoints this token can reach; check it in the dashboard and record the answer in docs/P14-security-testing.md (an MFA status nobody verified is not an MFA control)"
+    },
+    {
+      "status": "OPEN",
+      "name": "RAILWAY_TOKEN: MFA could not be read from Railway account (compose/host)'s API",
+      "why": "the provider exposes no MFA field on the endpoints this token can reach; check it in the dashboard and record the answer in docs/P14-security-testing.md (an MFA status nobody verified is not an MFA control)"
+    },
+    {
+      "status": "PASS",
+      "name": "the deployed API sends a CSP with frame-ancestors 'none'",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "the deployed API sends HSTS with preload",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "no wildcard CORS on the API (absent)",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "the deployed API serves no interactive surface ({'/docs': 404, '/redoc': 404, '/openapi.json': 404})",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "the deployed API refuses a spoofed X-User-Id header on every user route ({\"/v1/referrals/me\": 401, \"/v1/auth/sessions\": 401, \"/v1/wallet/balance\": 401})",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "an anonymous writer is refused with an identity answer, not a retryable signing error (401)",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "the Mini App sends a CSP that frames only Telegram, and no wildcard CORS",
+      "why": ""
+    }
+  ]
+}

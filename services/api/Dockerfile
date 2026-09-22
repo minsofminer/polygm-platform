@@ -15,7 +15,11 @@ COPY brand /srv/app/brand
 COPY tools /srv/app/tools
 
 # Runs as non-root; binds 0.0.0.0 because compose maps it to 127.0.0.1 on the host.
-RUN useradd -r -u 10001 polygm && mkdir -p /srv/app/var && chown -R polygm /srv/app
+# `-s /usr/sbin/nologin` (P14 D4): the app user needs no login shell, and the default for
+# `useradd -r` is /bin/sh. Nothing in the image needs an interactive shell to run — uvicorn is
+# the CMD and the healthcheck is a `python3 -c` — so an attacker who gets code execution has to
+# bring their own shell rather than inheriting one from the user record.
+RUN useradd -r -u 10001 -s /usr/sbin/nologin polygm && mkdir -p /srv/app/var && chown -R polygm /srv/app
 USER polygm
 EXPOSE 8080
 HEALTHCHECK --interval=5s --timeout=3s --retries=5 \

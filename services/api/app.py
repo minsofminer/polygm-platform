@@ -2317,7 +2317,15 @@ def place_order(request: Request, body: dict = Body(...),
             return err("SESSION_MISMATCH", rid)
         x_user_id = uid2
     if not x_user_id:
-        return err("SIGNER_UNAVAILABLE", rid, detail="no user context")     # in prod: 401 from auth middleware
+        # P14 D4 found this on the live deployment: an anonymous `POST /v1/orders` answered
+        # `503 SIGNER_UNAVAILABLE retryable:true`. Nothing was placed — the order path refuses either way — but
+        # the answer was wrong twice over. It named a *signing* problem for an *identity* problem, and it was
+        # marked retryable, i.e. it told a client to retry a call that cannot succeed without a session. The
+        # comment that used to sit here said "in prod: 401 from auth middleware"; there is no auth middleware,
+        # which is exactly the kind of assumption a penetration test exists to find.
+        if not _trust_header():
+            return err("UNAUTHENTICATED", rid, detail="a session is required to place an order")
+        return err("SIGNER_UNAVAILABLE", rid, detail="no user context")     # dev identity shape only
     return _order_core(uid=str(x_user_id), body=body, idempotency_key=str(idempotency_key or ""), rid=rid)
 
 

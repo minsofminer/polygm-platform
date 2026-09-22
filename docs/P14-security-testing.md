@@ -282,3 +282,96 @@ mistake in the scanner and none was a secret in the product:
 been inspected for OS packages, layer contents or CVEs. That is stated in the artifact rather than implied away:
 the static checks do not cover base-image vulnerabilities. It closes in CI with `trivy`/`grype` against the built
 digests, and `deploy/image-digests.txt` exists to be the record of which digests that ran against.
+
+---
+
+## D4 — infra verification, and the defect it found on the live deployment
+
+`tools/p14-infra-verify.py` — six sections, every network check made by the tool rather than typed into this
+document. Recorded: `docs/verification/P14-infra-verify.txt` / `.json` → **`20 checks passed, 2 failed, 7 OPEN`**.
+
+### F9 — the deployed API accepted a spoofed identity header (found, fixed, re-tested live)
+
+This is the worst defect of the phase and it was live on a public URL.
+
+`https://polygm-api.vercel.app` was running with **no `PGM_REQUIRE_SECURITY_ENV`**, which put it in the
+*development identity shape*: `X-User-Id` was trusted as the caller's identity. Probed from this machine, before
+the fix:
+
+```
+GET /v1/referrals/me   -H "X-User-Id: u-demo"   -> 200  {"link":{"token":"ref_n3p3obixucx4nvhb7k5l57", …}}
+GET /v1/auth/sessions  -H "X-User-Id: u-demo"   -> 200  {"items":[] …}
+GET /docs                                        -> 200  (the interactive surface, 80 paths)
+GET /openapi.json                                -> 200  (123 KB of schema)
+```
+
+Anyone on the internet could read any account by setting one header. The kit's rule for this class is absolute —
+**nothing on authorisation may be deferred to after launch** — so the finding gated the launch *and* was fixed in
+the same session, in this order:
+
+1. **Said in writing**, in the artifact and here, before touching anything: the authorisation test failed, so the
+   product does not launch. That is the kit's own sentence, applied.
+2. **The security plane's required environment** was generated and set on the Vercel project
+   (`PGM_KEK_v1`, `PGM_IP_PEPPER`, `PGM_SERVICE_TOKEN`, `PGM_IMAGE_PROXY_SECRET`, `PGM_REQUIRE_SECURITY_ENV=1`) —
+   values written to `~/.secrets/polygm-prod.env`, never the repository, because the production shape refuses to
+   boot without them and a boot-time refusal is the correct failure.
+3. **The deployment was rebuilt from the current source.** The build that was live predated the docs gate and the
+   session-checking work; the identity shape alone would not have fixed `/docs`, and the older build is why the
+   first redeploy still served the schema.
+4. **Re-tested live, and the re-test is now a permanent check in the tool** (`section_headers`), because this is
+   the one defect that must never come back quietly:
+
+```
+spoofed /v1/referrals/me  -> 401 UNAUTHENTICATED      /docs        -> 404
+spoofed /v1/auth/sessions -> 401 UNAUTHENTICATED      /redoc       -> 404
+spoofed /v1/wallet/*      -> 401 UNAUTHENTICATED      /openapi.json-> 404
+```
+
+### F10 — an anonymous writer got a retryable *signing* error instead of an identity answer
+
+Found by the D4 header probe on the same live box: `POST /v1/orders` with no session answered
+`503 SIGNER_UNAVAILABLE retryable:true`. Nothing was placed — the D1 matrix's "anonymous is refused" check passed
+on it, which is exactly how a wrong refusal hides inside a green run — but the answer was wrong twice: it named a
+*signing* problem for an *identity* problem, and it told the client to retry a call that can never succeed without
+a session. The source carried the comment `# in prod: 401 from auth middleware`, and **there is no auth
+middleware** — the assumption is precisely what a penetration test exists to find. It answers `401 UNAUTHENTICATED`
+in the production shape now, and keeps the dev-shape behaviour the repo's harnesses depend on.
+*Retest:* `tests/test_security_plane.py::TestAnonymousWriterGetsAnIdentityAnswer` (both shapes, in one test).
+
+### F11 — the deployed API served its whole schema (fixed with F9, re-tested)
+
+`/openapi.json` was 123 KB: every path, parameter, enum and error code, to any caller. The docs gate existed in
+the source; the **deployed build predated it**, which is the lesson worth keeping — a control that is in `main` is
+not a control that is on the box. The tool now checks all three paths on every run.
+
+### F12 — the container users had login shells
+
+`useradd -r` gives `/bin/sh` by default, and neither image needs a shell: the CMD is `uvicorn`/`python3` and the
+healthcheck is a `python3 -c`. Both images now create their user with `-s /usr/sbin/nologin`, so code execution in
+the container does not come with an interpreter to type into.
+The image-level proof (`docker run … id`, `touch /`, `getent passwd`) is **OPEN** — there is no docker here.
+
+### What else D4 found, and what it could not measure
+
+* **F13 — the GitHub account that owns this repository has MFA disabled** (`two_factor_authentication: false`),
+  and its token holds `admin:org`, `admin:public_key` and `delete_repo`. Enabling MFA needs a phone, so this is an
+  owner action, and it is a launch blocker: the account that can rewrite every commit is protected by a password.
+* **F14 — a database on the linked Supabase account accepts connections from `0.0.0.0/0` and `::/0`**
+  (`hashcats-mining`). It is not this product's database, and it is still a finding because it is the same account
+  and the same token: the default is what a new project inherits. The honest fix has a trade-off — restricting the
+  CIDRs to the app's egress is only possible once that egress is static (the Supavisor pooler or an IPv4 add-on),
+  so it is stated as a decision to make rather than a setting to flip. When the PolyGM Postgres lands it must be
+  created with restrictions set, never with the default.
+* **A restore that actually ran**: a consistent logical backup (`VACUUM INTO`), restored to a second file, checking
+  that 123 tables and 3 273 rows match, that the money-path queries (balances, ledger sum, open orders, intents,
+  key wraps) return identical answers, and that the API's own boot schema guard accepts the copy — 17 ms to back
+  up, 8 ms to restore. The managed-Postgres PITR drill is **OPEN** with the exact procedure written down.
+* **Egress**: no outbound call site builds its URL from a request value (the SSRF surface is absent by
+  construction), and every configured vendor endpoint is `https`/`wss`. The deployed-subnet proof is **OPEN**: the
+  executor is not deployed, so there is no subnet to try from, and a pass here means "one allowlist to write", not
+  "the firewall was tested".
+* **Headers, live**: API and Mini App both send HSTS with `preload`, `frame-ancestors` scoped
+  (`'none'` for the API, Telegram-only for the Mini App), and **no wildcard CORS** anywhere.
+* **MFA on the other three providers** (Vercel, Supabase, Railway) is **OPEN**: none exposes an MFA field on the
+  endpoints these tokens can reach. It is written down as open rather than assumed, because an MFA status nobody
+  verified is not an MFA control.

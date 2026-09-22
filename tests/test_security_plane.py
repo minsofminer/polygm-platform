@@ -821,6 +821,44 @@ class TestOperationIsTheTemplate(RouteBase):
         self.assertEqual((theirs.json().get("error") or {}).get("code"), "NOT_FOUND")
         self.assertNotIn("0xintent1", theirs.text)
 
+class TestAnonymousWriterGetsAnIdentityAnswer(RouteBase):
+    """P14 D4, found on the *live* deployment: an anonymous `POST /v1/orders` answered
+    `503 SIGNER_UNAVAILABLE retryable:true`.
+
+    Nothing was placed — the order path refuses either way, which is why the D1 matrix's "anonymous is refused"
+    check passed on it. But the answer was wrong twice: it named a *signing* problem for an *identity* problem, and
+    `retryable: true` told a client to retry a call that can never succeed without a session. The code carried the
+    comment "in prod: 401 from auth middleware", and there is no auth middleware — the assumption is exactly what a
+    penetration test exists to find.
+    """
+
+    app_name = "sec-anonymous-writer"
+
+    def test_the_production_shape_answers_401_and_not_a_retryable_503(self):
+        import os
+        prior = os.environ.get("PGM_REQUIRE_SECURITY_ENV")
+        os.environ["PGM_REQUIRE_SECURITY_ENV"] = "1"
+        try:
+            r = self.client.post("/v1/orders", headers={"Content-Type": "application/json",
+                                                        "Idempotency-Key": "anon-writer-1"},
+                                 json={"marketId": "0xM1", "tokenId": "0xT10", "side": "BUY",
+                                       "price": "0.5", "size": "5"})
+        finally:
+            if prior is None:
+                os.environ.pop("PGM_REQUIRE_SECURITY_ENV", None)
+            else:
+                os.environ["PGM_REQUIRE_SECURITY_ENV"] = prior
+        self.assertEqual(r.status_code, 401, r.text)
+        self.assertEqual((r.json().get("error") or {}).get("code"), "UNAUTHENTICATED")
+        self.assertFalse((r.json().get("error") or {}).get("retryable"))
+        # ...and the dev shape keeps working as it did, because the harnesses in this repo depend on it.
+        r2 = self.client.post("/v1/orders", headers={"Content-Type": "application/json",
+                                                     "Idempotency-Key": "anon-writer-2"},
+                              json={"marketId": "0xM1", "tokenId": "0xT10", "side": "BUY",
+                                    "price": "0.5", "size": "5"})
+        self.assertNotEqual(r2.status_code, 401, r2.text)
+
+
 class TestAuthzTable(RouteBase):
     app_name = "sec-authz"
 
