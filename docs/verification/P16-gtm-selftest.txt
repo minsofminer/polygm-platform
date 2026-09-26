@@ -1,0 +1,20 @@
+  caught  a population input loses its provenance                    -> c1
+  caught  the reachable number stops matching its inputs             -> c1
+  caught  a funnel step loses its intervention                       -> c1
+  caught  the activation number stops matching the funnel            -> c1
+  caught  a kit gate is quietly lowered                              -> c2
+  caught  a gate loses its decision                                  -> c2
+  caught  a third channel is chosen                                  -> c3
+  caught  the daily budget exceeds what the cadence allows           -> c3
+  caught  the plan's cadence drifts from the engine's                -> c3
+  caught  paid ads become a chosen channel                           -> c3
+  caught  the fee ramp breaches the venue's spacing rule             -> c4
+  caught  builder fees become most of revenue                        -> c4
+  caught  the venue mechanics are edited to look faster than they are -> c4
+  caught  a banned word reaches the disclaimer                       -> c5
+  caught  a required phrase loses the word that matters              -> c5
+  caught  the /start message loses its affiliation line              -> c5
+  caught  the fourth answer to the quality gate goes vague           -> c6
+  caught  a metric points at a table that does not exist             -> c7
+
+p16 gtm check self-test: 18 caught, 0 missed

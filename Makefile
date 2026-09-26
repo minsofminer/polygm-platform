@@ -225,6 +225,16 @@ p09-offline: web-deps    ## the 6 checks that need no build artefact
 p09-selftest: web-deps   ## prove the 7 checks can fail, one planted violation at a time
 	$(PY) tools/p09-gate-check.py --self-test
 
+# P16 · launch, distribution and growth — the plan is the artefact, so the gate is a checker that holds the plan
+# to the repository: the population and the funnel must multiply out, the message budget must be the channel
+# engine's own constants, the fee ramp must pass the venue mechanics, the required phrases must exist in the copy
+# that ships, and every gate must say what happens when it is missed. `--self-test` plants each failure once.
+p16:
+	$(PY) tools/p16-gtm-check.py --record docs/verification/P16-gtm.txt
+
+p16-selftest:       ## prove the plan checks can fail, one planted violation at a time
+	$(PY) tools/p16-gtm-check.py --self-test
+
 p08: web-build
 	$(PY) tools/p08-gate-check.py --record docs/verification/P08-gate.txt
 
@@ -424,7 +434,7 @@ p15: p15-migrations p15-alerts p15-runbooks p15-cost p15-dashboards p15-2am   ##
 infra-check: infra-envs infra-fmt infra-validate
 	@echo "INFRA GREEN"
 
-check: test lint lint-canary openapi-selftest sql-sqlite-check seed-sql-check gate gate-mutate p01 p02 p03 p04 p05 p06 p07 p08 p09 p10 p12 p12-selftest p13-read infra-check p15-migrations p15-pipeline p15-alerts p15-runbooks p15-cost p15-dashboards probe-fresh
+check: test lint lint-canary openapi-selftest sql-sqlite-check seed-sql-check gate gate-mutate p01 p02 p03 p04 p05 p06 p07 p08 p09 p10 p12 p12-selftest p13-read p15-migrations p15-pipeline p15-alerts p15-runbooks p15-cost p15-dashboards p16 p16-selftest probe-fresh
 	@echo "ALL GREEN"
 
 # ------------------------------------------------------------------ diagnostics

@@ -3,12 +3,12 @@ Numbers are gzipped bytes the browser fetches for that document, not a build-log
 
 budget for the initial route: 200 KB of first-party JS
 excluded from the budget: https://telegram.org/js/telegram-web-app.js — fetched from telegram.org, required by the Mini App platform (initData, MainButton, haptics), and not built by us. Its bytes are printed above.
-  /          http 200 · 9 chunk(s) · JS 184.2 KB · CSS 6.6 KB · money layer absent
-  /markets   http 200 · 10 chunk(s) · JS 192.6 KB · CSS 6.6 KB · money layer present
-  /tma       http 200 · 11 chunk(s) · JS 196.1 KB · CSS 6.6 KB · money layer absent · platform bridge 18.0 KB (not budgeted)
-  /profile   http 200 · 10 chunk(s) · JS 184.9 KB · CSS 6.6 KB · money layer absent
+  /          http 200 · 9 chunk(s) · JS 184.2 KB · CSS 6.7 KB · money layer absent
+  /markets   http 200 · 10 chunk(s) · JS 192.6 KB · CSS 6.7 KB · money layer present
+  /tma       http 200 · 11 chunk(s) · JS 196.5 KB · CSS 6.7 KB · money layer absent · platform bridge 18.0 KB (not budgeted)
+  /profile   http 200 · 10 chunk(s) · JS 184.9 KB · CSS 6.7 KB · money layer absent
 
-sources-sha256: eb4702203410c1db
+sources-sha256: 487239bd499fde28
 routes over budget: none
 route-level splitting: proven — the landing document does not fetch the money module and /markets does
 status: pass

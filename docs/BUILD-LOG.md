@@ -800,3 +800,73 @@ from a real phone, and a cost dashboard showing actuals rather than a projection
 steps: GitHub 2FA, the Supabase CIDR, the Turnkey provider rate, real image digests, provider credentials for
 `terraform apply`, the domain and Cloudflare delegation, `PGM_TELEGRAM_BOT_TOKEN`, the BotFather Mini App URL,
 real-phone acceptance — and the $50/72 h canary, which stays blocked while the P14 gate reads NO-GO.
+
+## P16 — launch, distribution and growth · 2026-09-26
+
+The last phase, and the only one whose artefact is not code. Its deliverable is a plan, and a plan cannot be tested
+the way a money path can — so the phase is built the way the rest of this repository is: the plan lives in
+`config/gtm.json`, everything it claims about the product is recomputed by a checker, and the documents are held to
+the config rather than the other way round.
+
+**D1, the beachhead.** One audience, chosen and defended: **the 5-minute crypto Up/Down trader who already lives in
+Telegram**. Reachable ≈ **18,000** people, from 300,000 monthly venue wallets × 0.20 hourly crypto × 0.60 in
+Telegram × 0.50 reachable organically, every input a range with a provenance tag — two of them `[ASSUMPTION]`,
+written as ranges so the estimate moves with the reasoning instead of being asserted as fact. The whale-follower,
+the sports trader (kept as the named fallback) and the analytics power user are rejected with reasons, and the
+mechanism is stated so it cannot drift: this market's shape — $125M/week across ~114 builders, Gini 0.83, six
+builders holding 81% of lifetime volume — says a new entrant wins with a distribution surface the incumbents are
+not using, which is a Telegram alert channel, not founder visibility.
+
+**D2–D3, two channels.** Ranked by cost per activated user, **exactly two chosen** (the free alert channel at $0
+and the public pages' organic search at $0) and six refused with named failure modes — including paid acquisition,
+refused on arithmetic ($120 per activated user against a $12/month subscription is a twelve-month payback before
+churn) rather than on taste. The free channel carries a **12-message daily budget** that is the channel engine's own
+cadence (4/hour, 2 of a kind/hour, 6-minute gap, read out of `telegrambot/channel.py` by the checker), and the free
+tier never withholds the exit, the withdrawal path, the kill switch or the loss numbers.
+
+**D4–D5, activation and retention.** Activation is a funded wallet plus one matched order inside 7 days; the funnel
+multiplies out to **1.25%** of channel members (0.06 × 0.95 × 0.97 × 0.35 × 0.70 × 0.92), with an intervention
+named at every step the user can leave from, and the day-1/3/7 plan deliberately excludes the one message every
+consumer product sends (`never: a "we miss you" message, a streak, or anything that implies a comeback is likely`). Retention is alerts, watchlists, self-ranking
+and automation, plus the losing-streak rules: the halt fires with the P&L, rules pause with the reason stated, the
+exit and kill switch are on the same screen — and churn is defined as 30 days with no position, no live alert, no
+live rule and no session, because that is the definition we cannot accidentally satisfy.
+
+**D6, the ramp in code.** `revenue/schedule.py` loads the plan and refuses an illegal one: **0 bps at launch**, 10
+bps at day 90 only if D7 retention ≥ 0.15 and ≥30 users traded twice, 25 bps at day 180 only if the month-6 volume
+gate is met — inside the venue's own mechanics (7 days between changes, 3 days notice, one pending change), with
+increases gated on retention and cuts deliberately exempt. Never a token; builder fees never above 60% of revenue,
+because the venue can revoke the privilege at its discretion.
+
+**D7–D9, the gates and the words.** Five gates, each carrying the kit's numbers and each stating what happens when
+it is missed; the month-12 miss is written out as a procedure (what users are told, what keeps running read-only,
+how money gets out) rather than left as a sentence. The words are three documents: the plan, the launch assets
+(landing hero, `/start`, the pinned post, X, Telegram, Product Hunt, Hacker News with an honest audience assessment
+that predicts 0–2 activated users, the cross-promo DM, ten support macros) and the community document (useful before
+promotional, transparent loss handling, a status page that reads the same sources the alert engine pages on, and
+impersonation defence as a five-point, checkable differentiator).
+
+**The new thing in the codebase: the disclosure, on every surface.** `web/src/legal/disclaimer.tsx` holds the three
+sentences once — not affiliated with Polymarket; odds are a market, not a forecast; this is a market that resolves to
+zero and you can lose everything you deposit — and the landing page, the Mini App and the public page frame each
+render it. `web/src/legal/disclaimer.test.tsx` asserts the phrases against `config/gtm.json` rather than restating
+them, renders the component, proves it is server-safe, and checks that the three surfaces actually render it rather
+than merely import it. The P08 gate's c5 then caught the first version of its stylesheet, which used `px` fallbacks
+inside `var()` — five design-token violations — and the fix removed them rather than the check.
+
+**Verified at close.** `make p16` → **75 passed, 0 failed** (`docs/verification/P16-gtm.txt`); `--self-test` →
+**18 caught, 0 missed** (`docs/verification/P16-gtm-selftest.txt`), including two canaries aimed at the checker
+itself: the first draft of c5 read the disclaimer *with its comments*, so a deleted sentence could still pass on a
+docstring, and c4 validated `config/gtm.json` from disk instead of the config it was handed, so a mutation was
+invisible to it. Both were found by the canaries and fixed in the checker — the plan was right and the test lied,
+which is the failure mode this phase's self-test exists for. Web: `npm test` **65 files / 580 tests**, `npm run
+build` clean, `npm run measure` inside budget at `/` 184.2 KB and `/tma` **196.5 KB** of 200 KB, the disclosure
+costing 0.4 KB of JS on the Mini App and 0.1 KB of CSS everywhere. Python: the full suite at **1529 passed**
+(180.2 s), and the P08 gate back to **16/16** on the re-measured bundle record (`sources-sha256`
+`487239bd499fde28`), because adding a footer to three surfaces invalidates a budget record and a record that is not
+re-measured is a number nobody should read.
+
+**`[UNVERIFIED]`, carried forward for the last time.** Everything in P15's list, plus the four things this phase
+cannot run from a workspace: the channel has no members yet, no alert has reached a real phone, the launch posts
+have not been published anywhere, and the five gates are dated in the future. P16 ships the plan and the machinery
+that keeps it honest; the numbers in it are the owner's to earn.

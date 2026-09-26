@@ -1,0 +1,172 @@
+{
+  "version": 1,
+  "brand": "Openout",
+  "_provenance": {
+    "note": "Every external number below carries its provenance in `source`: [CTX] comes from the shared context / kit briefs and is not ours to re-derive, [PROBE] was measured by this repository (see docs/verification), [ASSUMPTION] is ours and is written as a range with the reasoning beside it. A number with no source is a number this plan is not allowed to use, and tools/p16-gtm-check.py fails on one.",
+    "kinds": ["[CTX]", "[PROBE]", "[ASSUMPTION]"]
+  },
+  "docs": {
+    "plan": "docs/P16-gtm.md",
+    "assets": "docs/P16-launch-assets.md",
+    "community": "docs/P16-community.md"
+  },
+
+  "beachhead": {
+    "id": "updown-telegram",
+    "one_line": "The 5-minute crypto Up/Down trader who already lives in Telegram.",
+    "why": [
+      "highest order frequency of the four candidate audiences, and frequency is what makes a $12 subscription sensible",
+      "the venue's own fee schedule charges the most on hourly crypto (crypto_fees_v2, 0.07 on the winning side), so the platform's incentives and this trader's behaviour point the same way",
+      "worst served by existing tooling: button-menu bots post a link, and the trade still happens on a website in a browser",
+      "already inside Telegram, which is where our free channel, our alerts and the Mini App live - no new distribution surface to earn",
+      "the alert is the product: a fill worth watching is news to this audience in a way it is not to a holder of a long-dated political position"
+    ],
+    "rejected": [
+      {"id": "whale-follower", "why": "real and reachable, but the behaviour is copy-the-whale, which is the one thing P14's anti-gaming and P11's leaderboard work spend their time refusing to look like a promise. It is also the audience every incumbent already targets, which is the opposite of the instruction to take a channel nobody is using."},
+      {"id": "sports-trader", "why": "the volume is real and seasonal, and it is the most crowded Telegram niche in the market - we would be the ninth-fastest-moving bot in a race that rewards being first. Kept as the second wedge if the first gate fails."},
+      {"id": "analytics-power-user", "why": "highest LTV per user and the smallest population, with eleven existing competitors (the kit's own count). It is also the audience that would judge us on data depth we do not yet have, and it is where the Pro tier already has substitutes."}
+    ],
+    "population": {
+      "arithmetic": "reachable = monthly traders x share_updown x share_in_telegram x share_reachable_organically",
+      "inputs": [
+        {"id": "monthly_traders", "value": 300000, "range": [200000, 450000], "source": "[ASSUMPTION]", "note": "Polymarket monthly active wallets, order of magnitude only. We cannot measure it and do not pretend to; the tools treat it as an input with a range, so the reachable estimate moves with it instead of being a fact."},
+        {"id": "share_updown", "value": 0.2, "range": [0.1, 0.3], "source": "[CTX]", "note": "hourly crypto Up/Down is the highest-frequency segment; the venue's fee table names it separately (crypto_fees_v2)"},
+        {"id": "share_in_telegram", "value": 0.6, "range": [0.45, 0.75], "source": "[ASSUMPTION]", "note": "this segment skews crypto-native and mobile-first; the kit's own wedge argument ('lives in Telegram already') is the reason to pick it, so a share below half would contradict the choice"},
+        {"id": "share_reachable_organically", "value": 0.5, "range": [0.3, 0.7], "source": "[ASSUMPTION]", "note": "the share we can reach with no ad budget: channel membership plus cross-promotion plus the public odds pages. The other half never joins a channel they did not already follow."}
+      ],
+      "reachable": 18000,
+      "_reachable_check": "300000 x 0.2 x 0.6 x 0.5 = 18,000. The 30-day target of 2,000 channel members is 11% of that reachable pool, which is the number the week-4 gate is really testing."
+    },
+    "gathers_at": {
+      "note": "Named by kind, not by invented handle: this repository cannot verify that a specific group exists today, and a plan that lists a group it has not looked at is a plan with a dead link in it. The launch checklist owns resolving each to a live, checked target before it is used (docs/P16-launch-assets.md, section 'where we show up first').",
+      "kinds": [
+        {"kind": "telegram_groups", "how_found": "search by market name and by 'polymarket'; the groups that quote Polymarket odds are the ones whose members already trade them", "first_move": "be useful for two weeks before posting a link - answer the odds question with a live number from a public page"},
+        {"kind": "telegram_channels", "how_found": "channels that aggregate 'polymarket alerts' or copy-trading signals", "first_move": "cross-promotion DM (docs/P16-launch-assets.md), one ask, no follow-up"},
+        {"kind": "x_accounts", "how_found": "accounts that quote Polymarket odds in news threads", "first_move": "reply with the public market page for the exact market being quoted, no CTA"},
+        {"kind": "reddit", "how_found": "r/Polymarket and r/PredictionMarkets", "first_move": "one methodology post per month (the leaderboard's anti-gaming rules are genuinely interesting to that crowd), never a launch post"},
+        {"kind": "discords", "how_found": "trading and sports-card communities that already discuss event odds", "first_move": "presence only; the channel link goes in a profile, not a post"}
+      ]
+    },
+    "switch_in_one_session": [
+      "a one-tap trade from the alert itself (the channel's button is a startapp deep link - the personal copy of the same alert carries a callback button that places the order without leaving the chat)",
+      "a visible price age on every number, so the trader can trust the alert is not yesterday's price",
+      "a kill switch they can see and a withdrawal they can do without talking to anyone"
+    ]
+  },
+
+  "channels": {
+    "policy": "Two channels maximum until the first one works. The kit's own arithmetic is why: the ecosystem's Gini is 0.83 and six builders hold 81% of lifetime volume, so the distribution that matters is the one channel we take completely.",
+    "ranked": [
+      {"id": "free_alert_channel", "rank": 1, "chosen": true, "mechanism": "the public Telegram channel is the product's front door; every alert is one market, a scannable line, a price with its age, and a deep link that opens the Mini App with that market pre-filled", "cost_per_activated_usd": 0, "time_to_effect": "2-6 weeks", "failure_mode": "the channel becomes noise (muted) or junk (P07's broadcast gate lets through a market an attacker created) - both are permanent, which is why the gate and the cadence caps run before composition rather than after"},
+      {"id": "public_pages_seo", "rank": 2, "chosen": true, "mechanism": "the P11 D6 public pages: /market/<slug> and /leaderboard/<board> answer 'what are the current odds', which is a query news coverage keeps generating; a crawler-visible page with a fresh number is durable distribution with no per-user cost", "cost_per_activated_usd": 0, "time_to_effect": "6-16 weeks", "failure_mode": "stale or thin pages get ignored by crawlers and by people; the freshness rule on every price is what keeps them worth indexing"},
+      {"id": "referrals", "rank": 3, "chosen": false, "mechanism": "P11 D5's referral terms, paid from observed builder fees only", "cost_per_activated_usd": 8, "time_to_effect": "3-8 weeks", "failure_mode": "self-referral and wash volume; P11 D7 and P14's anti-gaming rules exist because this is the loop that most easily becomes fraud. Not before the first two work."},
+      {"id": "x_twitter", "rank": 4, "chosen": false, "mechanism": "reply-and-quote presence where odds are being discussed", "cost_per_activated_usd": 25, "time_to_effect": "weeks, with high variance", "failure_mode": "founder-visibility theatre: only 25 of 114 builders score above 1 on visibility and the volume leader has none, so follower count is not the mechanism"},
+      {"id": "telegram_cross_promo", "rank": 5, "chosen": false, "mechanism": "mutual mentions with non-competing, similarly-sized channels", "cost_per_activated_usd": 0, "time_to_effect": "1-3 weeks", "failure_mode": "one-sided asks burn the relationship; it is a channel-2 tactic, not a start"},
+      {"id": "short_form_video", "rank": 6, "chosen": false, "mechanism": "30-60s 'here is the trade the alert called' clips", "cost_per_activated_usd": 40, "time_to_effect": "months", "failure_mode": "needs a face and a cadence we do not have; also the one channel where an implied win is easiest to publish by accident, which the no-expected-returns rule forbids"},
+      {"id": "community_participation", "rank": 7, "chosen": false, "mechanism": "being a useful participant in groups we do not own", "cost_per_activated_usd": 15, "time_to_effect": "4-12 weeks", "failure_mode": "reads as astroturfing if it starts the week we launch; it works after the product has something to show"},
+      {"id": "paid_ads", "rank": 8, "chosen": false, "mechanism": "paid acquisition", "cost_per_activated_usd": 120, "time_to_effect": "immediate", "failure_mode": "the arithmetic: at $120 per activated user against a $12/month subscription, payback is a year before churn. It is also forbidden by this phase's constraints until activation clears its gate. Argued against, not merely deprioritised."}
+    ],
+    "chosen": ["free_alert_channel", "public_pages_seo"],
+    "reason_for_pausing_rest": "spreading $10k across six channels buys zero of anything; the two chosen are the only ones with a zero marginal cost per activated user, and both compound (a channel and an index) rather than being rented."
+  },
+
+  "message_budget": {
+    "channel_per_day_max": 12,
+    "per_kind_per_hour_max": 2,
+    "per_hour_max": 4,
+    "min_gap_minutes": 6,
+    "quiet_hours_local": [0, 6],
+    "why": "A channel people mute acquires nobody, so the budget is the acquisition strategy rather than a constraint on it. Twelve a day is the point where the preview line is still worth reading: four event kinds (large fill, volume spike, new market, resolution soon) at up to three each, inside the engine's own caps (max 4/hour, 2 of a kind/hour, 6-minute gap - packages/polygm_core/telegrambot/channel.py). Personal alerts are NOT capped here: a user's own follows are theirs, and the per-user throttle lives in notification settings.",
+    "fails_when": "more than 12 in a rolling 24h, a kind over its hourly share, or a gap under 6 minutes - the checker reads the engine's own constants so the plan cannot drift from the code that enforces it"
+  },
+
+  "free_vs_personal_vs_pro": {
+    "policy": "The free channel must be genuinely good: the upsell is depth and automation, never withholding something a trader needs to act.",
+    "free_channel": ["large fills above the venue-visible floor", "volume spikes", "new markets worth knowing", "markets resolving within six hours"],
+    "personal_alerts": ["everything in free, filtered to markets the user follows", "fills by wallets they watch", "price and spread moves on their own positions", "the losing case: their own position moving against them, with the max-loss number attached"],
+    "pro": ["automation rules (a live rule is checked daily, which is the strongest retention mechanic we have)", "unlimited watchlists and follows", "API access", "depth: order-book history, wallet dossiers", "priority delivery"],
+    "never_paywalled": ["exiting a position", "the withdrawal path", "the kill switch", "risk and loss information about a position the user already holds", "their own data"]
+  },
+
+  "funnel": {
+    "definition": "activation = a funded wallet plus one matched order within 7 days of signup",
+    "steps": [
+      {"id": "channel_sees_alert", "label": "member sees an alert", "share": 1.0, "source": "[ASSUMPTION]"},
+      {"id": "opens_app", "label": "taps the deep link", "share": 0.06, "range": [0.03, 0.1], "source": "[ASSUMPTION]", "intervention": "one market per message, the whole thing legible in the preview line, and a button that works for a stranger (no callback_data)"},
+      {"id": "value_in_two_lines", "label": "reads /start and understands the product", "share": 0.95, "source": "[ASSUMPTION]", "intervention": "the /start message states what this is, what it costs, and what a loss looks like - in two lines"},
+      {"id": "wallet_ready", "label": "wallet auto-created, deposit address shown", "share": 0.97, "source": "[ASSUMPTION]", "intervention": "no signup, no password prompt before value; the wallet exists before the user decides anything"},
+      {"id": "deposit", "label": "funds the wallet", "share": 0.35, "range": [0.2, 0.5], "source": "[ASSUMPTION]", "intervention": "minimum framing ($10 is enough to trade), multi-chain detection, and a live 'waiting for your deposit' state that shows the chain scan rather than a spinner"},
+      {"id": "first_trade", "label": "places the first order", "share": 0.7, "range": [0.5, 0.85], "source": "[ASSUMPTION]", "intervention": "the market arrives pre-filled from the alert the user tapped; the ticket shows the max loss before the confirm"},
+      {"id": "first_fill", "label": "the order matches", "share": 0.92, "source": "[ASSUMPTION]", "intervention": "fill notification with the position view and /stop pointed out in the same message"}
+    ],
+    "activation": 0.0125,
+    "_activation_check": "0.06 x 0.95 x 0.97 x 0.35 x 0.70 x 0.92 = 1.2462% of channel members, stated as 1.25%. The checker recomputes this product and fails if the stated number drifts from it by more than 0.02 of a point: a funnel that multiplies out to something else is a funnel nobody did the arithmetic on. 2,000 members is ~25 activated users in month 1, which is why the week-4 gate is members-or-MAU and the week-8 gate is the first real test.",
+    "second_session": {
+      "day_1": "an alert about a market they already touched - not a welcome-back message",
+      "day_3": "the first signal on a market they viewed but did not trade, with the reason it fired",
+      "day_7": "their own week in numbers (trades, volume, P&L including the losses) plus one suggested alert to create",
+      "never": "a 'we miss you' message, a streak, or anything that implies a comeback is likely"
+    }
+  },
+
+  "metrics": [
+    {"id": "activation_rate", "formula": "users with a deposit and >=1 matched order within 7d of signup / signups", "source": "users, deposits, orders, fills", "gate_at": "week 8", "target": 0.3},
+    {"id": "routed_volume_per_active_user", "formula": "sum(fill notional) in the month / distinct users with >=1 fill in the month", "source": "fills", "target": 2000},
+    {"id": "alert_to_trade", "formula": "orders placed within 30 minutes of an alert delivery / alert deliveries that were opened", "source": "alert_deliveries, telegram_outbox, orders", "target": 0.05},
+    {"id": "retention_d1_d7_d30", "formula": "users active in the window / users whose first activity is N days earlier (cohort by first fill)", "source": "users, fills", "target": [0.35, 0.15, 0.07]},
+    {"id": "pro_conversion", "formula": "active subscriptions / 30-day active users", "source": "subscriptions, entitlements", "target": 0.05},
+    {"id": "arpu", "formula": "subscription revenue in the month / 30-day active users", "source": "subscriptions", "target": 12.0},
+    {"id": "attributed_volume_share", "formula": "our attributed volume / platform builder volume for the week (external input, entered by the operator)", "source": "builder_attribution x operator input", "target": 0.01},
+    {"id": "revenue_per_1000_routed", "formula": "observed builder fees + subscription revenue, per $1,000 of routed volume", "source": "builder_revenue_daily, venue_fees, subscriptions", "target": 6.0},
+    {"id": "cac_per_channel", "formula": "channel spend / users activated from that channel", "source": "operator input + utm/start parameter on the deep link", "target": 0.0}
+  ],
+
+  "gates": [
+    {"when": "week 4", "checks": [{"metric": "channel_members", "at_least": 2000}, {"metric": "mini_app_mau", "at_least": 500, "or": true}], "if_missed": "The wedge is wrong, not the execution. Change the audience (sports trader is the named fallback), keep the channel and the public pages running (they cost nothing), and do not build trading features for an audience that did not arrive."},
+    {"when": "week 8", "checks": [{"metric": "users_traded_twice", "at_least": 30}, {"metric": "attributed_volume_week_usd", "at_least": 50000}], "if_missed": "The product is not sticky. Fix retention before scaling: the automation rules and the losing-streak handling are the two levers that change this number, and both are already built."},
+    {"when": "week 12", "checks": [{"metric": "attributed_volume_month_usd", "at_least": 150000}, {"metric": "paying_users", "at_least": 150}], "if_missed": "Reassess whether this is a business or a hobby: run the fee ramp's second step only if retention held, otherwise hold at the current fee and cut the cost base to the $109/month floor."},
+    {"when": "month 6", "checks": [{"metric": "attributed_volume_month_usd", "at_least": 500000}, {"metric": "mrr_usd", "at_least": 15000}], "if_missed": "Raise fees, or raise money, or stop. The decision is made from the scorecard, not from mood."},
+    {"when": "month 12", "checks": [{"metric": "attributed_volume_month_usd", "at_least": 1500000}, {"metric": "mrr_usd", "at_least": 40000}], "if_missed": "See the month-12 miss case in docs/P16-gtm.md: what we tell users, how long the product keeps running read-only, and how a user gets their money out. A plan with no exit is not a plan."}
+  ],
+
+  "monetisation": {
+    "venue_mechanics": {
+      "min_days_between_changes": 7,
+      "advance_notice_days": 3,
+      "one_pending_change_at_a_time": true,
+      "publicly_queryable": true,
+      "consequence": "we cannot react fast, so we cannot experiment aggressively - every rate decision is a public product decision made a week in advance"
+    },
+    "steps": [
+      {"id": "launch", "at_day": 0, "bps": 0, "requires": "nothing", "why": "buy volume share, not margin. Betmoar and Stand.trade both launch at zero and are top-5; leaderboard position is the moat at this stage, and the kit's data says the incumbents' advantage is distribution rather than price."},
+      {"id": "step_10", "at_day": 90, "bps": 1000, "requires": "retention holds: D7 retention >= 0.15 and >=30 users who traded twice", "why": "10 bps is inside the venue's 0.07-0.2% band on the winning side of an hourly crypto market and is invisible next to a 2-3 cent spread"},
+      {"id": "step_25", "at_day": 180, "bps": 2500, "requires": "month-6 volume gate met ($500k/month) and Pro conversion >= 3%", "why": "the ceiling the kit sets (10-25 bps); above this the fee is a reason not to route through us and the builder programme's value proposition inverts"}
+    ],
+    "mix_target": {
+      "month_6": {"builder_fees": 0.1, "subscriptions": 0.85, "other": 0.05, "constraint": "builder fees never exceed 60% of revenue - Polymarket can revoke the privilege at its sole discretion"},
+      "month_12": {"builder_fees": 0.12, "subscriptions": 0.8, "other": 0.08}
+    },
+    "subscription": {"web_usd_month": 12, "telegram": "Stars-equivalent (the Mini App's in-Telegram price is the web price converted, never higher)", "annual": "2 months free", "never_paywalled": "exiting a position, the withdrawal path, the kill switch, risk information about a held position"},
+    "grants": {"programme": "Polymarket builders programme ($2.5M pool, $100-$75k per builder)", "when": "after week 8, with the scorecard's real numbers attached", "why": "non-dilutive, and available to us specifically because we are a builder"},
+    "data_licensing": {"what": "the normalised, low-latency version of what the free channel already publishes - fill sizes, volume spikes by market, resolution calendars - sold as a feed to desks and other builders who want the signal without running the scan", "when": "not before month 6, and only if the API's own logs show third parties pulling it", "price_band_usd_month": [500, 5000], "source": "[ASSUMPTION]", "why": "the only revenue line with no marginal cost to serve (the data is already computed for the channel) and the only one that does not scale with users. Last, because selling a feed is a company and we are not one yet.", "risk": "the underlying data is public on the venue's own API, so the price is for the labelling, normalisation and latency. If we cannot be measurably faster or cleaner than a competent scraper reading the same endpoint, this line is worth zero - and we say so rather than sell it to somebody who will find out"},
+    "never": ["a token (Telegram requires TON for Mini App token distribution, it is a regulatory target, and it consumes the year)", "paywalling an exit", "expected-return claims", "'win it back' messaging"]
+  },
+
+  "copy_rules": {
+    "banned": ["revolutionising", "revolutionizing", "seamless", "empowering", "guaranteed", "risk-free", "can't lose", "guaranteed returns", "expected returns", "win it back", "to the moon", "passive income", "everyone is doing it", "don't miss out"],
+    "required_phrases": {
+      "affiliation": "not affiliated with Polymarket",
+      "odds_are_market": "odds are a market, not a forecast",
+      "no_expected_returns": "no one can tell you what a market will do"
+    },
+    "where_required": ["landing page footer", "Mini App footer", "every public page footer", "/start message", "channel pinned message"]
+  },
+
+  "first_1000": {
+    "who": "the subset of 18,000 reachable Up/Down Telegram traders who follow at least one crypto alert channel and have already placed a trade on the venue in the last 30 days",
+    "where": "the free channel (members recruited from groups that quote Polymarket odds), the public odds pages' organic search, and cross-promotions with two similarly-sized non-competing channels",
+    "what_we_say": "the pinned message plus the /start message in docs/P16-launch-assets.md: what the channel posts, how often, what it never posts, and what a loss looks like",
+    "day_7_measurement": "cohort of the first 100 signups: activated (funded + one matched order) rate, the channel that brought them, D1 and D7 return, and how many created an alert",
+    "if_half": "the week-4 gate's own answer: if 1,000 members arrive instead of 2,000 by week 4, the wedge is wrong - switch to the sports trader (the named fallback), keep the channel and pages running, and do not build features for an audience that did not arrive"
+  }
+}

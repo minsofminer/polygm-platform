@@ -1741,3 +1741,25 @@ body {
 .pgm-gaming__reviewed {
   color: var(--pgm-text-muted);
 }
+
+/* P16 D8: the disclosure that has to be on every surface, styled to be readable rather than dismissible — the
+   muted text token at the compact type size, on the spacing grid like everything else in the shell. The P08 gate's
+   c5 check is why every value here is a token: the first version of this block carried px fallbacks, which the
+   design-system check counted as five literals across the tree. Fallbacks are how a token system rots. */
+.pgm-disclaimer {
+  margin-block-start: var(--pgm-space-6);
+  padding-block-start: var(--pgm-space-3);
+  border-block-start: var(--pgm-border-w-hair) solid var(--pgm-border-default);
+  color: var(--pgm-text-muted);
+  font-size: var(--pgm-font-compact);
+  line-height: 1.5;
+  max-width: 68ch;
+}
+
+.pgm-disclaimer__line {
+  margin-block: var(--pgm-space-0) var(--pgm-space-2);
+}
+
+.pgm-disclaimer__line--compact {
+  margin-block-end: var(--pgm-space-1);
+}

@@ -23,6 +23,7 @@ import { request } from "@/api/client";
 import { silentReauth } from "@/telegram/reauth";
 import { parseStartapp, startappTarget } from "@/telegram/startapp";
 import dynamic from "next/dynamic";
+import { DisclaimerFooter } from "@/legal/disclaimer";
 import type { OrderFn } from "@/tma/TradeSheet";
 import type { WalletIO } from "@/tma/WalletScreen";
 
@@ -256,6 +257,10 @@ export function TmaScreen() {
         </p>
       ) : null}
       <TradeSheet market={ready.view} place={place} readOnly={readOnly} />
+      {/* Every view, not just the wallet: the person reading this is holding a live position, and the loss
+          sentence belongs next to the trade sheet rather than one tap away. `compact` keeps it to three lines
+          on the smallest screen this runs on. */}
+      <DisclaimerFooter compact />
     </main>
   );
 }

@@ -2,6 +2,7 @@ import Link from "next/link";
 import { t } from "@/i18n/t";
 import { TmaSurface } from "@/tma/TmaSurface";
 import { isMiniAppSurface } from "@/tma/surface.server";
+import { DisclaimerFooter } from "@/legal/disclaimer";
 
 /**
  * The public landing page is a server component with no client JavaScript beyond the shell: it is the SEO
@@ -35,6 +36,7 @@ function Landing() {
       <h2>Pro</h2>
       <p>{t("billing.honest.pro")}</p>
       <p>{t("billing.page.paywallRule")}</p>
+      <DisclaimerFooter />
     </main>
   );
 }

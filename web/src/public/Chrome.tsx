@@ -11,6 +11,7 @@
  * produced it, and a reader who cannot reach them has been asked to take our word for it.
  */
 import { t } from "@/i18n/public";
+import { DisclaimerFooter } from "@/legal/disclaimer";
 
 export function PublicChrome({
   crumbs,
@@ -39,6 +40,7 @@ export function PublicChrome({
       {children}
       <footer className="pgm-public__foot">
         {footer}
+        <DisclaimerFooter compact />
         <p className="pgm-public__note">{t("public.chrome.shareNote")}</p>
         <p className="pgm-public__note">
           <a href={methodologyHref}>{t("public.chrome.methodology")}</a>

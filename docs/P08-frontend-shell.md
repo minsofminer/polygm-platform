@@ -210,12 +210,19 @@ Measured, from `npm run build` + `npm run measure` against `next start` (gzipped
 
 | route | first-load JS (first-party) | CSS | money layer | third-party |
 |---|---|---|---|---|
-| `/` | 184.2 KB | 6.6 KB | absent | — |
-| `/markets` | 192.6 KB | 6.6 KB | present | — |
-| `/tma` | 196.1 KB | 6.6 KB | absent | 18.0 KB (Telegram bridge) |
-| `/profile` | 184.9 KB | 6.6 KB | absent | — |
+| `/` | 184.2 KB | 6.7 KB | absent | — |
+| `/markets` | 192.6 KB | 6.7 KB | present | — |
+| `/tma` | 196.5 KB | 6.7 KB | absent | 18.0 KB (Telegram bridge) |
+| `/profile` | 184.9 KB | 6.7 KB | absent | — |
 
-Budget is 200 KB for the initial route: **inside it, and this time the record was re-measured under P15**, because
+Re-measured again under **P16**, because the disclosure that phase added (D8: the three sentences about affiliation,
+what a number means and what a loss is) is rendered by the landing page, the Mini App and every public page's footer.
+It cost **0.4 KB of JS on `/tma`** — the Mini App is the one surface where it sits inside a client component — and
+**0.1 KB of CSS** everywhere. That is the whole price of printing the disclaimer on every screen, and it is worth
+stating as a price rather than a footnote: the alternative (an external script, or a translation key per surface)
+would have been smaller and worse.
+
+Budget is 200 KB for the initial route: **inside it, and re-measured under both P15 and P16**, because
 the first version of this section was quietly false. The numbers above replace a table that said 186–189 KB with
 13 KB of room; the tree had grown past 200 KB on three routes (`/` 208.4, `/markets` 200.1, `/tma` 226.7) and the
 committed measurement had not moved with it, so `c8` — which compared the artefact's mtime against the newest
@@ -357,7 +364,7 @@ Numbers are what the gate (c3) pairs the markers against; the `P08-L…` owner s
 | `node scripts/assert-env.mjs` | 4 declared env keys checked; server-only modules marked |
 | `node scripts/i18n-check.mjs` | 223 keys, 181 used, 0 missing, 0 malformed, 42 declared-unused (advisory); `--self-test` plants a lookup and fails if the matcher cannot see it |
 | `npm run check:api` | generated types match `contracts/openapi.yaml` (1,875 lines) |
-| `npm run measure` | `/` 184.2 KB, worst route (`/tma`) 196.1 KB of a 200 KB budget of **first-party** JS, with the Telegram bridge (18.0 KB) measured and printed separately; route-level splitting proven — the landing document never fetches the money module |
+| `npm run measure` | `/` 184.2 KB, worst route (`/tma`) 196.5 KB of a 200 KB budget of **first-party** JS, with the Telegram bridge (18.0 KB) measured and printed separately; route-level splitting proven — the landing document never fetches the money module |
 | `tools/check-css-blocks.mjs --self-test` | 6/6 canaries fire |
 | `node tools/build-tokens.mjs --check` | `brand/tokens.css` up to date with `brand/tokens.json` |
 | `node tools/build-web-tokens.mjs --check` | the web mirror matches the source token layer |
