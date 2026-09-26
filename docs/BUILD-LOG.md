@@ -866,6 +866,13 @@ costing 0.4 KB of JS on the Mini App and 0.1 KB of CSS everywhere. Python: the f
 `487239bd499fde28`), because adding a footer to three surfaces invalidates a budget record and a record that is not
 re-measured is a number nobody should read.
 
+**The neighbouring gates, re-run because a web change is never only a web change.** After the commit, the gates
+whose subject the disclosure touched were re-run rather than assumed: **P03 62/62** (the token layer, with `web/`
+present), **P09 7/7** (the markets surfaces, 73.1 s), **P10 15/15** (the terminal, 5.2 s), **p12-selftest 4/4**,
+**p16 75/0** and **p16-selftest 18/0** — one batch, `EXIT=0`. P08 was already back to 16/16 on the re-measured
+record, and the P04 gate to 56/56 on the suite. Nothing about adding a footer is innocent: it changes the CSS
+token audit, the bundle record, and every gate that reads a page.
+
 **`[UNVERIFIED]`, carried forward for the last time.** Everything in P15's list, plus the four things this phase
 cannot run from a workspace: the channel has no members yet, no alert has reached a real phone, the launch posts
 have not been published anywhere, and the five gates are dated in the future. P16 ships the plan and the machinery
