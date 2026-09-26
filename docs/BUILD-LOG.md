@@ -773,7 +773,20 @@ run; `tests/conftest.py` now refuses to start with the free megabyte count, the 
 `tests/test_suite_guard.py` tests that refusal, including a rehearsal through the same entry point a real run takes.
 
 **Also re-run and refreshed:** `docs/verification/P04-gate-output.txt` (55/55 and 156 tests from P04's own session →
-**56/56** with the suite at **1469 tests**), because an un-re-run record is a claim, not evidence.
+**56/56** with the suite at **1489 tests**), because an un-re-run record is a claim, not evidence.
+
+**The quality gate, demonstrated rather than described.** The kit's gate for P15 is a sentence — one page, from a
+phone, five minutes, three answers — so `make p15-2am` rehearses it with the real components and records the result
+in `docs/verification/P15-2am-drill.txt`. It writes a single `orphan` (an order at the venue we cannot map to a
+user, ten minutes old) into a scratch copy of the seeded database and leaves the rest of the world healthy — one
+page, one problem — then reads `/v1/admin/metrics` through the app, evaluates the alarm registry with the engine the
+dashboards import, opens the runbook the notification links to and reads it, renders the on-call page from the same
+payload, and times itself: **0.9 s of the 300 s budget**, page **8.2 KB**, 1 alarm firing of 25. Eight checks, none
+of which passes by construction, and ten canaries in `--self-test` that prove it. Two of the checks were wrong when
+first written and the fixes are the interesting part: c3 searched the dashboard's raw HTML for `>1 <` and failed
+against a page that does carry the number (the count follows a status chip inside its own span), and the c3 canary
+therefore "passed" against a baseline where c3 was *already* failing — a canary that goes red for the wrong reason
+proves nothing, so the self-test now refuses to plant anything until the unmutated drill is green.
 
 **Verified at close.** Batch A `p01–p07` + `seed-sql-check` → **EXIT_A=0**; batch B `p08 p09 p10 p12 p12-selftest
 p13-read infra-check p15-migrations p15-pipeline p15-alerts p15-runbooks p15-cost p15-dashboards` → **EXIT_B=0**.

@@ -411,11 +411,15 @@ p15-dashboards:             ## D4: three phone-shaped pages, one read, no extern
 p15-readiness:              ## D9: what the artefacts prove, and what is still an owner step
 	$(PY) tools/p15-readiness.py
 
-p15: p15-migrations p15-alerts p15-runbooks p15-cost p15-dashboards   ## P15: everything this phase can prove without a provider account
+p15-2am:                    ## the quality gate itself: one page, three answers, a phone, under five minutes
+	$(PY) tools/p15-2am-drill.py --record
+	$(PY) tools/p15-2am-drill.py --self-test
+
+p15: p15-migrations p15-alerts p15-runbooks p15-cost p15-dashboards p15-2am   ## P15: everything this phase can prove without a provider account
 	$(PY) tools/p15-pipeline-check.py
 	$(PY) tools/p15-pipeline-check.py --self-test
 	$(PY) -m pytest tests/test_p15_migrations.py tests/test_p15_ops_api.py tests/test_p15_pipeline.py \
-		tests/test_p15_drain_guard.py tests/test_p15_alerts.py tests/test_p15_drill.py -q
+		tests/test_p15_drain_guard.py tests/test_p15_alerts.py tests/test_p15_drill.py tests/test_p15_2am.py -q
 
 infra-check: infra-envs infra-fmt infra-validate
 	@echo "INFRA GREEN"

@@ -1,16 +1,18 @@
 # P04 gate — recorded by tools/p04-gate-check.py
 
-P04 gate run, 2026-09-26 (repo main 3921df6 + the P15 D3-D9 work uncommitted); re-run at P15's close
-because an un-re-run record is a claim, not evidence. Previous record: P04 gate: 55/55 checks passed
-Suite at the time of the previous record: 156 tests (P04's own session). Now: 1469 tests, OK, 179.4 s
-(standalone run, `PGM_TEST_TMPDIR` on the 19 GB root filesystem - see tests/test_suite_guard.py for why
-that is written down: the 1 GB /tmp tmpfs filled with dead test databases and reported itself as 33
-`database or disk is full` errors behind a tally line that named none of them).
+P04 gate run, 2026-09-26 (repo efd515a, the P15 D3-D9 work); re-run at P15's close because an un-re-run
+record is a claim, not evidence. First re-run: P04 gate: 56/56 checks passed (suite then 1469 tests).
+Suite at this record: 1489 tests, OK, 197.2 s standalone
+(`PGM_TEST_TMPDIR` on the 19 GB root filesystem — see tests/test_suite_guard.py for why that is written
+down: the 1 GB /tmp tmpfs filled with dead test databases and reported itself as 33 `database or disk is
+full` errors behind a tally line that named none of them).
+Note for the next reader: twenty of those 1489 tests are tests/test_p15_2am.py, which covers the P15
+quality-gate demonstration's own checks hermetically.
 
   temp space: 18966 MB free on /home/user/.local/tmp
 P04 gate: 56/56 checks passed
-  PASS suite: 1469 tests, exit 0, tail '<sys>:0: ResourceWarning: unclosed database in <sqlite3.Conn'
-  PASS lint-rules clean (lint-rules: 181 files scanned, 0 findings)
+  PASS suite: 1489 tests, exit 0, tail '<sys>:0: ResourceWarning: unclosed database in <sqlite3.Conn'
+  PASS lint-rules clean (lint-rules: 182 files scanned, 0 findings)
   PASS every lint rule fires on a planted violation (8/8 rules fire)
   PASS no float/NUMERIC money column in Postgres migrations (0 found)
   PASS NUMERIC only for the three metadata columns (['minimum_order_size', 'minimum_tick_size', 'risk_latency_ms'])
@@ -51,7 +53,7 @@ P04 gate: 56/56 checks passed
   PASS D4 carries the four measured precision numbers
   PASS the environment's missing tools are listed (docker/psql/sqlite3 CLI)
   PASS every check in this gate is claimed with a number, not an adjective
-  PASS no credential-shaped string in 559 working-tree files (2 patterns, 11 exemptions, each enforced by exact line or exact substring)
+  PASS no credential-shaped string in 561 working-tree files (2 patterns, 11 exemptions, each enforced by exact line or exact substring)
   PASS every secret-scan exemption still matches a line (a dead exemption would hide the next real key)
   PASS the scan covers the working tree, not just what git has tracked (a phase in progress is exactly when a key gets pasted)
   PASS .env is ignored by git
@@ -62,7 +64,7 @@ P04 gate: 56/56 checks passed
   PASS .env is optional-at-boot for services (required: false), so a fresh clone starts
   PASS no make recipe pipes a check into tail (a pipe hides the exit status) (0 found)
   PASS every promised target exists (all 13)
-  PASS every tool a make target runs is on disk (50 referenced, 0 missing)
+  PASS every tool a make target runs is on disk (51 referenced, 0 missing)
   PASS make doctor runs and reports the tooling honestly
   PASS envelope demo over real sockets (12 steps)
 gate is a floor: any FAIL here means the phase is not done, whatever the prose elsewhere says

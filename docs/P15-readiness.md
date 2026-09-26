@@ -42,6 +42,14 @@ The rehearsal, as a script rather than an intention:
 5. **Record it.** Whatever was touched, with a timestamp, in the incident channel — the P14 rule that outlives its
    phase: no finding closed without a re-test, no remediation without a recorded time.
 
+**The rehearsal is now a command, not a paragraph.** `make p15-2am` performs steps 1–4 above against the real
+components — a seeded inconsistent world, `/v1/admin/metrics` read through the app, the registry evaluated by the
+same engine the dashboards import, the linked runbook opened and read, the on-call page rendered from the same
+payload — and writes the result to `docs/verification/P15-2am-drill.txt`: the page verbatim, the three answers with
+their numbers, eight checks (each one able to fail, with ten planted failures in `--self-test` proving it), and the
+triage time. The recorded run: **0.9 s** of the five-minute budget. What it does not prove is that the page reaches
+a **phone**; that needs `PGM_TELEGRAM_BOT_TOKEN` and a device, which is owner step 4 in `docs/P15-deployment.md`.
+
 ## What would stop launch
 
 * Any money-correctness alarm that has never been fired deliberately.

@@ -309,6 +309,45 @@ Two honest caveats:
 
 ---
 
+## The quality gate, demonstrated
+
+The kit's gate for P15 is a sentence, not a checklist: *"It is 2am. You get one page. From a phone, in under five
+minutes, you can say: is the system healthy, is any user's money in an inconsistent state, and should I stop
+trading? Demonstrate it."*
+
+`make p15-2am` performs that demonstration against the real components and records it in
+`docs/verification/P15-2am-drill.txt`. It writes one `orphan` — an order at the venue we cannot map to a user, ten
+minutes old, past the registry's 60-second `for_ms` — into a scratch copy of the seeded database, leaving the rest
+of the world healthy (`executor=live`, feeds fresh): **one page, one problem**. It then reads `/v1/admin/metrics`
+through the app, evaluates `ops/alerts.yaml` with the same engine the dashboards import, renders the notification
+with the same function the alert drill records, opens the runbook *that notification links to* and reads it, and
+renders the on-call dashboard from the same payload. Eight checks, all of which can fail:
+
+| check | what it refuses to accept |
+|---|---|
+| c1 | a rule that is not `SEV1`/`page_now` — the 2am gate is about the page, not the ticket |
+| c2 | a page that does not carry its own summary, its reason, and its owner's name |
+| c3 | a dashboard whose money number disagrees with the number that fired the alarm (the read is on the page's *text*, not its markup — the first version searched for `>1 <` and failed against a page that does carry the number) |
+| c4 | a page without the kill-switch state, or a runbook with no remediation section: the third answer has to be in the page's own instructions |
+| c5 | a runbook link that does not resolve, or resolves to something other than the page the registry names |
+| c6 | a phone page that reaches out to the network, has no viewport, is over 64 KB, or lacks the money/order-path/freshness sections |
+| c7 | a triage that took longer than five minutes |
+| c8 | any firing alarm without an owner and an existing runbook |
+
+`--self-test` plants ten failures in memory — a notification with no runbook link, a runbook that was renamed, an
+owner-less alarm, a dashboard rendered from a drifted payload, a page with an external `<script>`, a page with no
+viewport, a dropped kill-switch line, an eleven-minute triage, a summary the page does not carry, and a quiet rule
+where a paging one was promised — and requires the owning check to go red for each. **It refuses to plant a single
+canary until the unmutated drill is green**, because the c3 canary spent one run "passing" against a baseline where
+c3 was already failing: a canary that goes red for the wrong reason proves nothing.
+
+What the recorded run says (`2026-09-26`, local, seeded): triage **0.9 s** of a 300 s budget, the on-call page
+**8.2 KB**, **1** alarm firing of 25 registered, page verbatim, the three answers with their numbers, and the
+runbook line that answers the third one. What it does **not** say: that the page reached a phone. Delivery needs
+`PGM_TELEGRAM_BOT_TOKEN` and a device, the transcript says so in its own header, and it stays an owner step below.
+
+---
+
 ## Owner steps this phase has surfaced
 
 1. **Register the domain** (default `polygm.trade`) and delegate it to Cloudflare, then set `POLYGM_API_HOST` and

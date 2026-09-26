@@ -547,7 +547,7 @@ Re-run at P15's close (2026-09-26), because a record that is never re-run become
 
 | command | result | why it moved |
 |---|---|---|
-| `python3 -m unittest discover -s tests` | **1469 tests, OK** (179.4 s) | the suite grew from 156 to 1469 across P05–P15; the count above is P04's, and stays as the record of what P04 shipped |
+| `python3 -m unittest discover -s tests` | **1489 tests, OK** (197.2 s) | the suite grew from 156 to 1489 across P05–P15; the count above is P04's, and stays as the record of what P04 shipped |
 | `python3 tools/p04-gate-check.py` | **56/56 checks passed**, exit 0 (`docs/verification/P04-gate-output.txt`) | the gate gained one check since; see below |
 
 The re-run is also how the phase's worst failure mode was found. A gate run reported
