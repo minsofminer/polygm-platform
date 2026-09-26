@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { t } from "@/i18n/t";
-import { TmaScreen } from "@/tma/TmaScreen";
+import { TmaSurface } from "@/tma/TmaSurface";
 import { isMiniAppSurface } from "@/tma/surface.server";
 
 /**
@@ -47,8 +47,13 @@ function Landing() {
  * site keeps the landing page, because that is its job. Which one this is comes from `PGM_SURFACE` on the deployment,
  * read on the server: a client-side branch would ship both pages and pick one after hydration, which is a flash of
  * the wrong product on the slowest device the product is for.
+ *
+ * The branch is on the server, but until P15 the *import* was static, and that is a different thing: it put the
+ * whole Mini App into the chunk graph of this route, so the landing page carried the trade sheet and the wallet to
+ * every visitor. `TmaSurface` is the chunk boundary (`next/dynamic`), which is why this file imports a name rather
+ * than the screen itself.
  */
 export default function Root() {
-  if (isMiniAppSurface()) return <TmaScreen />;
+  if (isMiniAppSurface()) return <TmaSurface />;
   return <Landing />;
 }

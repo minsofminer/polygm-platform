@@ -67,6 +67,7 @@
     "drill_records",
     "entitlements",
     "events",
+    "executor_state",
     "feature_flags",
     "fills",
     "flag_audit",
@@ -343,6 +344,10 @@
         "PG-only statement: ALTER TABLE order_directives",
         "PG-only statement: ALTER TABLE order_directives"
       ],
+      "check_clauses_reordered": []
+    },
+    "0021_executor_state.sql": {
+      "dropped": [],
       "check_clauses_reordered": []
     }
   }

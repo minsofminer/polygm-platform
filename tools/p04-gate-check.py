@@ -39,14 +39,52 @@ def read(rel: str) -> str:
 
 
 # --------------------------------------------------------------------------- checks
+def suite_temp_space() -> str:
+    """One line about the filesystem the suite's ~360 MB of migrated databases will land on.
+
+    A full suite run that ran out of disk reported `1272 tests, exit 1, tail 'FAILED (errors=33)'` on
+    2026-09-25 — 33 x `sqlite3.OperationalError: database or disk is full` behind a tally line that named
+    none of them, from a 1 GB `/tmp` still holding a killed run's 336 MB of dead databases. The suite has a
+    guard for this now (`tests/conftest.py::temp_space`, which refuses with the number and the way out), and
+    this line is the same number in the gate's own words, so the gate never has to be read twice.
+    """
+    import shutil
+    import tempfile
+    from pathlib import Path
+    base = Path(os.environ.get("PGM_TEST_TMPDIR") or tempfile.gettempdir())
+    # The directory may not exist yet - `tests/conftest.py` creates it. Measuring the nearest existing parent
+    # is the same number (the filesystem is a property of the mount, not the leaf) and avoids the first version
+    # of this line, which printed "unusable" about a path the suite then went on to create and use happily:
+    # an alarm nobody needs to act on is noise, and noise is how a real line gets ignored.
+    while not base.exists() and base != base.parent:
+        base = base.parent
+    try:
+        free_mb = shutil.disk_usage(str(base)).free // (1024 * 1024)
+    except OSError as e:                                    # an unusable mount is a finding, not a crash
+        return "temp space: %s is unusable (%s)" % (base, e)
+    note = " (below the ~360 MB a full run writes)" if free_mb < 400 else ""
+    return "temp space: %d MB free on %s%s" % (free_mb, base, note)
+
+
 def g1_tests(fast: bool) -> list[tuple[str, bool, str]]:
+    print("  %s" % suite_temp_space())
     r = sh([PY, "-m", "unittest", "discover", "-s", "tests", "-p", "test_*.py", "-q"])
     out = r.stdout + r.stderr
     m = re.search(r"Ran (\d+) tests", out)
     n = int(m.group(1)) if m else 0
     ok = r.returncode == 0 and n >= 145 and "OK" in out
-    return [("suite: %d tests, exit %d, tail %r" % (n, r.returncode, out.strip().splitlines()[-1][:60]),
-             ok, out[-500:])]
+    # The tail of a `unittest -q` run is ResourceWarnings about unclosed sqlite connections (the tests open many
+    # and let the GC close them), so `out[-500:]` hid the one line that matters when this check went red under
+    # `make check` while passing on its own. Name the failing tests and the reason, not the last warning.
+    interesting = [l for l in out.splitlines()
+                   if re.match(r"^(FAIL|ERROR):", l) or "AssertionError" in l or "Traceback" in l
+                   or l.startswith(("Ran ", "OK", "FAILED"))]
+    detail = " | ".join(interesting[-6:]) or out[-500:]
+    if "disk is full" in out:                               # name the cause the tally line hides
+        detail = ("ENOSPC - the temp filesystem ran out: %s. This is not a product failure; free space or "
+                  "point PGM_TEST_TMPDIR at a bigger filesystem. %s" % (suite_temp_space(), detail))
+    return [("suite: %d tests, exit %d, tail %r" % (n, r.returncode, (out.strip().splitlines() or [""])[-1][:60]),
+             ok, detail)]
 
 
 def g2_money() -> list[tuple[str, bool, str]]:
@@ -226,8 +264,19 @@ def g8_schema_rules() -> list[tuple[str, bool, str]]:
     bad_idx = [i.split()[3] for i in idx if "book_levels" in i and "updated_ms" in i]
     outs.append(("no index leads with book_levels.updated_ms (%d such index statements checked)" % len(idx),
                  not bad_idx, "; ".join(bad_idx)))
+    # The rule is about a COLUMN NAMED `payout_micro`. The first version tested `"payout_micro" not in core`,
+    # a substring search that went red in P06 when `copy_economics` gained `source_payout_micro` — the SOURCE
+    # trader's payout, a different fact entirely — and stayed red for nine phases because `make check` was being
+    # run in pieces. A check that fails on correct product behaviour is a check somebody switches off, so the
+    # match is now a bare token, with a positive control right next to it proving the pattern still catches one.
+    bare = re.compile(r"(?<![A-Za-z0-9_])payout_micro(?![A-Za-z0-9_])")
     outs.append(("there is no payout_micro column (a payout is a ledger kind, never a mutable field)",
-                 "payout_micro" not in core, ""))
+                 bare.search(core) is None,
+                 "found at: %s" % (bare.search(core).group(0) if bare.search(core) else "")))
+    outs.append(("that rule still catches a column actually named payout_micro (its own positive control)",
+                 bare.search("CREATE TABLE x (payout_micro BIGINT NOT NULL);") is not None
+                 and bare.search("source_payout_micro BIGINT") is None,
+                 "a rule that matches nothing would pass the check above for the wrong reason"))
     return outs
 
 
@@ -356,6 +405,49 @@ def g11_docs() -> list[tuple[str, bool, str]]:
     return outs
 
 
+#: The shared exemption file is read by THREE tools now (this gate, `tools/ci-log-scan.py`, `tools/p14-appsec-
+#: scan.py`). P07 wrote it as `{path: [exact lines]}`, P14 extended it to `{paths: [{path, why}], strings:
+#: [{string, why}], allow: [{path, line}]}`. Two shapes, one meaning: this loader reads both, and the gate
+#: fails loudly on a shape it does not understand rather than silently exempting nothing (an exemption that
+#: quietly stops applying turns a scanner into a decoration).
+def _load_secret_allowlist(rel: str) -> tuple[list[str], list[str], list[str], dict[str, set[str]]]:
+    path = ROOT / rel
+    if not path.is_file():
+        return [], [], [], {}
+    data = json.loads(path.read_text())
+    if not isinstance(data, dict):
+        raise SystemExit("tools/secret-scan-allowlist.json must be an object")
+    skip = [str(e.get("path") if isinstance(e, dict) else e) for e in data.get("paths", [])]
+    strings, hist = [], []
+    for e in data.get("strings", []):
+        if not (isinstance(e, dict) and e.get("string")):
+            continue
+        # `scope: history` marks an exemption whose line is gone from the tree but lives in a commit — the
+        # P14 scanners read history as well, and an entry that matches neither is still reported stale.
+        (hist if str(e.get("scope") or "") == "history" else strings).append(str(e["string"]))
+    allow: dict[str, set[str]] = {}
+    for e in data.get("allow", []):
+        if isinstance(e, dict) and e.get("path") and e.get("line"):
+            allow.setdefault(str(e["path"]), set()).add(str(e["line"]).strip())
+    for k, v in data.items():                     # the P07 shape, still honoured
+        if k in ("paths", "strings", "allow", "note"):
+            continue
+        if isinstance(v, list):
+            allow.setdefault(k, set()).update(str(x).strip() for x in v)
+    return skip, strings, hist, allow
+
+
+def fn_glob(path: str, pattern: str) -> bool:
+    """Glob match for the skip list: `tests/fixtures/**` must cover the tree beneath it, which `fnmatch` on the
+    bare pattern does not."""
+    import fnmatch
+    if fnmatch.fnmatch(path, pattern):
+        return True
+    if pattern.endswith("/**"):
+        return path.startswith(pattern[:-3].rstrip("/") + "/")
+    return False
+
+
 def g12_secrets() -> list[tuple[str, bool, str]]:
     """Scan the WORKING TREE, not the git index.
 
@@ -367,21 +459,21 @@ def g12_secrets() -> list[tuple[str, bool, str]]:
     A fixture that must LOOK like a secret (the lint rule's own canary) is exempted by exact line, through
     tools/secret-scan-allowlist.json, and every entry there must still match a real line — an exemption that
     stops matching cannot quietly grow into a hiding place.
+
+    P15: this gate used to read the allowlist as `{path: [lines]}` and CRASHED (TypeError: unhashable type)
+    the moment P14 added the `paths`/`strings` sections — a red `make check` with the real message buried in a
+    traceback. The loader below reads both shapes and the stale check spans all of them, so an exemption that
+    matches nothing is reported instead of swallowed.
     """
     listed = sh(["git", "ls-files", "--cached", "--others", "--exclude-standard"])
     if listed.returncode != 0:
         return [("the working tree can be enumerated with git ls-files", False, listed.stderr.strip()[:120])]
-    ALLOWLIST = "tools/secret-scan-allowlist.json"
-    # The allowlist is skipped by the scan itself: an exemption must LOOK like the secret it exempts, so the
-    # file can never be scanned without tripping on its own contents. What keeps it honest is the second check
-    # below - an entry that does not mirror a live line in a real file is reported as stale - so the file
-    # cannot be used as a hiding place for a key that exists nowhere else.
+    ALLOWLIST = "tools/secret-scan-allowlist.json"   # skipped by the scan: an exemption must look like a secret
     files = [f for f in listed.stdout.splitlines() if f.endswith(TRACEABLE) and f != ALLOWLIST]
-    allow: dict[str, set[str]] = {}
-    allow_path = ROOT / "tools" / "secret-scan-allowlist.json"
-    if allow_path.is_file():
-        allow = {k: set(v) for k, v in json.loads(allow_path.read_text()).items()}
+    skip, strings, hist_strings, allow = _load_secret_allowlist(ALLOWLIST)
+    files = [f for f in files if not any(fn_glob(f, pat) for pat in skip)]
     hits, stale = [], []
+    live_strings: set[str] = set()
     used = {f: set() for f in allow}
     for f in files:
         try:
@@ -389,24 +481,54 @@ def g12_secrets() -> list[tuple[str, bool, str]]:
         except (OSError, UnicodeDecodeError):
             continue
         for ln in txt.splitlines():
-            if CRED_RE.search(ln):
-                if ln.strip() in allow.get(f, ()):
-                    used[f].add(ln.strip())
-                else:
-                    hits.append("%s: %s" % (f, ln.strip()[:70]))
-            elif CONFIG_RE.search(ln) and "env.example" not in f:
-                if ln.strip() in allow.get(f, ()):
-                    used[f].add(ln.strip())
-                else:
-                    hits.append("%s: %s" % (f, ln.strip()[:70]))
+            if not (CRED_RE.search(ln) or (CONFIG_RE.search(ln) and "env.example" not in f)):
+                continue
+            line = ln.strip()
+            if line in allow.get(f, ()):
+                used[f].add(line)
+                continue
+            hit_string = next((t for t in strings if t in ln), None)
+            if hit_string is not None:
+                live_strings.add(hit_string)
+                continue
+            hits.append("%s: %s" % (f, line[:70]))
     for f, lines in allow.items():
         for want in lines:
             if want not in used.get(f, set()):
                 stale.append("%s: %s" % (f, want[:50]))
-    return [("no credential-shaped string in %d working-tree files (%d patterns, allowlist enforced by exact "
-             "line)" % (len(files), 2), not hits, "; ".join(hits[:3]) or "0 hits"),
+    # A string exemption mirrors a line in the PRODUCT, and that line may live in a file the credential scan
+    # deliberately does not read (a `.sh`, a compose file, a doc quoting a test constant). Liveness is therefore
+    # judged over the whole working tree — the exemption is stale only when it matches nothing ANYWHERE, which
+    # is the property that stops the file becoming a hiding place for a key that exists nowhere else.
+    if strings:
+        every = [f for f in listed.stdout.splitlines() if f != ALLOWLIST]
+        for f in every:
+            try:
+                txt = (ROOT / f).read_text()
+            except (OSError, UnicodeDecodeError):
+                continue
+            for t in strings:
+                if t not in live_strings and t in txt:
+                    live_strings.add(t)
+        for t in strings:
+            if t not in live_strings:
+                stale.append("string exemption that matches nothing: %s" % t[:50])
+    for t in hist_strings:
+        # `git log -S` answers "does any commit in this repository contain this string", which is the only
+        # question a history-scoped exemption can be checked against. The allowlist is excluded from the search
+        # because it *quotes* every exempt string: counting it would make each entry live forever, one commit
+        # after it was written, and a dead exemption would quietly hide the next real key — the exact failure
+        # this check exists to catch.
+        found = sh(["git", "log", "--all", "-S", t, "--oneline", "--max-count=1", "--",
+                    ".", ":(exclude)%s" % ALLOWLIST]).stdout.strip()
+        if not found:
+            stale.append("history exemption that matches no commit: %s" % t[:50])
+    exemptions = sum(len(v) for v in allow.values()) + len(strings) + len(hist_strings)
+    return [("no credential-shaped string in %d working-tree files (%d patterns, %d exemptions, each enforced "
+             "by exact line or exact substring)" % (len(files), 2, exemptions), not hits,
+             "; ".join(hits[:3]) or "0 hits"),
             ("every secret-scan exemption still matches a line (a dead exemption would hide the next real key)",
-             not stale, "; ".join(stale[:3]) or "all %d entries live" % sum(len(v) for v in allow.values())),
+             not stale, "; ".join(stale[:3]) or "all %d entries live" % exemptions),
             ("the scan covers the working tree, not just what git has tracked (a phase in progress is exactly "
              "when a key gets pasted)",
              len(files) >= 40, "%d files" % len(files)),
@@ -414,8 +536,6 @@ def g12_secrets() -> list[tuple[str, bool, str]]:
             ("the env example has no values an attacker can use",
              not re.search(r"(?m)^(?:PGM_|POLYGM_|TELEGRAM_|STRIPE_)\w*=\S*(?:[A-Za-z0-9]{20,})", read(".env.example")),
              "")]
-
-
 CHECKS = [g2_money, g3_gate, g4_idempotency, g5_contract, g7_migrations, g8_schema_rules, g10_flags,
           g11_docs, g12_secrets]
 

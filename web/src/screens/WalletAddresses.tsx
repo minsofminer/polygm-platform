@@ -1,6 +1,6 @@
 "use client";
 import { useState } from "react";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { invalidate, useAction, useResource } from "@/api/data";
 import { request } from "@/api/client";
 import { Button } from "@/ui/Button";
 import { Field, MoneyField } from "@/ui/Field";
@@ -37,35 +37,32 @@ function minutesUntil(untilMs: unknown, nowMs: number): number | null {
 }
 
 export function WalletAddresses() {
-  const qc = useQueryClient();
   const [code, setCode] = useState("");
   const [address, setAddress] = useState("");
   const [pendingRemoval, setPendingRemoval] = useState<string | null>(null);
-  const read = useQuery({
-    queryKey: ["wallet", "addresses"],
-    queryFn: async () => {
-      const out = await request<{ items?: Record<string, unknown>[]; cooldownMs?: number; reveal?: string }>({ key: "addressList" });
-      if (!out.ok) throw new Error(`${out.error.code}: ${out.error.message}`);
-      return out;
-    },
+  const read = useResource(["wallet", "addresses"], async () => {
+    const out = await request<{ items?: Record<string, unknown>[]; cooldownMs?: number; reveal?: string }>({ key: "addressList" });
+    if (!out.ok) throw new Error(`${out.error.code}: ${out.error.message}`);
+    return out;
   });
 
-  const remove = useMutation({
-    mutationFn: async (id: string) => {
+  // Same three behaviours the mutation had — the refusal pushed with its code, the cooldown prompt cleared on a
+  // TOTP answer, the list invalidated on success — expressed as one function, because that is what they are: the
+  // order of the steps is the point, and two callbacks that can each throw hide it.
+  const remove = useAction(async (id: string) => {
+    try {
       const out = await request({ key: "addressRemove", body: { address_id: id, totp_code: code } });
       if (!out.ok) throw new Error(`${out.error.code}|${out.error.message}`);
-      return out;
-    },
-    onError: (error: Error) => {
-      const [code_, message] = error.message.split("|");
-      pushRefusal(code_ ?? "INTERNAL", message ?? error.message, "");
-      if (code_ === "TOTP_REQUIRED" || code_ === "TOTP_INVALID") setPendingRemoval(null);
-    },
-    onSuccess: () => {
       setPendingRemoval(null);
       setCode("");
-      void qc.invalidateQueries({ queryKey: ["wallet", "addresses"] });
-    },
+      invalidate(["wallet", "addresses"]);
+      return out;
+    } catch (error) {
+      const [code_, message] = (error as Error).message.split("|");
+      pushRefusal(code_ ?? "INTERNAL", message ?? (error as Error).message, "");
+      if (code_ === "TOTP_REQUIRED" || code_ === "TOTP_INVALID") setPendingRemoval(null);
+      throw error;                        // kept on `remove.error` too: the screen shows what it can see
+    }
   });
 
   const data = read.data?.data ?? {};

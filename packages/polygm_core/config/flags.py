@@ -125,6 +125,16 @@ class FlagStore:
                 if r[0] in Flags.__dataclass_fields__}
         return replace(self.base, **over) if over else self.base
 
+    def refresh(self) -> Flags:
+        """Reload now, ignoring the TTL.
+
+        The TTL exists so a hot path does not read the database on every request. An operation that just *changed*
+        a flag does not have that luxury: a kill switch with a five-second hole in it is a kill switch that gets
+        used on a five-second problem, and the operator watching the screen sees a switch that did not work.
+        """
+        self._loaded_ms = 0
+        return self.current()
+
     @property
     def age_ms(self) -> int:
         return int(time.time() * 1000) - self._loaded_ms

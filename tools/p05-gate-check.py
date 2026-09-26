@@ -333,6 +333,11 @@ def c_rules_seed() -> tuple[str, bool, str]:
             "signals has no UNIQUE(rule_id,dedupe_key,fired_bucket)")
 
 
+#: The eight kinds P05 shipped. Later phases add kinds; this check keeps the P05 set as a floor and names the rest.
+P05_KINDS = ("large_fill", "volume_spike", "rapid_move", "new_market", "imbalance_flip",
+             "negrisk_divergence", "watched_wallet", "resolution_imminent")
+
+
 def c_signal_coverage() -> tuple[str, bool, str]:
     from polygm_core.signals import engine as E
     from polygm_core.classify import labels as L
@@ -359,11 +364,20 @@ def c_signal_coverage() -> tuple[str, bool, str]:
     # `new_market` legitimately has no mute window: its dedupe key is per market, and a market is new once.
     no_cd = [k for k, v in cd.items() if v is None or (v == 0 and k != "new_market")]
     unl = [n for n, v in controls.items() if not v]
-    return ("signals: %d kinds (8 wanted, all with defaults and a cooldown), labels: %d of 6 with their "
-            "false-positive controls" % (len(kinds), 6 - len(unl)),
-            len(kinds) == 8 and not missing and not no_cd and len(names) == 6 and not unl,
-            "missing: %s" % [missing, no_cd, sorted(set(E.VALID_KINDS) - kinds), unl] if (missing or no_cd or unl)
-            else "each label's control is present in source and each kind's threshold is a default, not a literal")
+    # The property this check enforces is "every kind the engine computes has a default, a cooldown and a severity"
+    # — not "there are eight of them". P10 D9 deliberately added three kinds (`price_level`, `spread_widen`,
+    # `illiquid_top`) so the alerts screen could not sell a rule the engine cannot evaluate, and a hard-coded count
+    # made this check wrong from that day on: `make check` had not completed since P12, so nobody saw it go red.
+    # The extra kinds are now *named in the detail*, so growth is visible instead of fatal.
+    added = sorted(kinds - set(P05_KINDS))
+    detail_ok = set(P05_KINDS) <= kinds and not missing and not no_cd and len(names) == 6 and not unl
+    return ("signals: %d kinds (%d from P05, %d added later%s) each with a default and a cooldown; "
+            "labels: %d of 6 with their false-positive controls"
+            % (len(kinds), len(P05_KINDS), len(added), (": " + ", ".join(added)) if added else "",
+               6 - len(unl)),
+            detail_ok,
+            "missing: %s" % [missing, no_cd, sorted(set(P05_KINDS) - kinds), unl] if not detail_ok else
+            "every kind has a default, a cooldown and a label control")
 
 
 def c_clickhouse_answer() -> tuple[str, bool, str]:

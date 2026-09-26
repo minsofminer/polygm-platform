@@ -88,11 +88,22 @@ def _load_shared() -> None:
         return
     data = _json.loads(path.read_text())
     for entry in list(data.get("strings", [])) + list(data.get("allow", [])):
-        text = entry["string"] if isinstance(entry, dict) else str(entry)
+        # An entry may name the file it is *about*, and then it only exempts that file. Without this, an
+        # exemption written for a fixture inside one tool clears the same bytes everywhere — which is how the
+        # planted-key self-test below went blind the moment the shared list started loading at all (it had been
+        # crashing on a sibling entry, so the probe "passed" by crashing rather than by detecting anything).
+        scope = str(entry.get("path") or "") if isinstance(entry, dict) else ""
+        # Three shapes, all legitimate, and the scanner has to read all of them: a bare string, `{"string": …}`
+        # for a shape-wide exemption, and `{"path": …, "line": …}` for one exact line in one file (the form the
+        # P14 appsec canary needed). Reading only `string` raised `KeyError: 'string'` on the first per-line entry
+        # — and `make check` had not completed since P12, so the crash sat there unseen while the tool was wired
+        # into CI. The dual-shape lesson the P04 gate already learned, learned again by the tool next to it.
+        text = (entry.get("string") or entry.get("line") or "") if isinstance(entry, dict) else str(entry)
         why = entry.get("why", "") if isinstance(entry, dict) else ""
         if text:
-            ALLOW.append(re.compile(re.escape(text)))
-            _SHARED.append((text[:60], why[:80]))
+            ALLOW.append(re.compile(re.escape(scope) + r":.*" + re.escape(text)) if scope
+                         else re.compile(re.escape(text)))
+            _SHARED.append(("%s%s" % (scope + ":" if scope else "", text)[:60], why[:80]))
     for entry in data.get("paths", []):
         pat = str(entry["path"]).replace("**", "").rstrip("/")
         ALLOW.append(re.compile(re.escape(pat)))

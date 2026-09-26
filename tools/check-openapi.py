@@ -113,6 +113,12 @@ TABLE_FOR_PATH = {
     "/v1/orders": "ORDER_RESPONSES",
     "/v1/orders/intents/{intent_id}": "INTENT_RESPONSES",
     "/v1/admin/kill-switch": "KILL_RESPONSES",
+    # P15 · the deploy-time surfaces. Keyed by (verb, path) because the two methods on `/v1/admin/flags`
+    # declare *different* tables: the read shares the drain table, the write additionally declares 404/422.
+    ("GET", "/v1/admin/drain-status"): "DRAIN_RESPONSES",
+    ("GET", "/v1/admin/metrics"): "METRICS_RESPONSES",
+    ("GET", "/v1/admin/flags"): "DRAIN_RESPONSES",
+    ("POST", "/v1/admin/flags"): "FLAG_ADMIN_RESPONSES",
     # P07 · the security plane. Mapped here as well as in the yaml, because a new route that is *not* in this
     # table is silently skipped by the comparison below — the checker's own version of an undocumented endpoint.
     "/v1/auth/login": "AUTH_RESPONSES",
@@ -651,7 +657,11 @@ def self_test(tables: dict, ops: dict) -> Report:
         "a well-formed document is NOT reported": not strict_yaml_defects(
             'paths:\n  /x:\n    get:\n      responses:\n        "200":\n          content:\n            application/json:\n              schema: {type: object}\n'),
         "the app's response tables were found at all": len(tables) >= 9,
-        "every documented operation maps to a table": all(p in TABLE_FOR_PATH for (_v, p) in ops),
+        # The same expression the comparison below uses: `(verb, path)` first, then the bare path for
+        # operations whose response table is the same for every method. The self-test has to test the lookup
+        # that exists, not a stricter one nobody wrote.
+        "every documented operation maps to a table": all(
+            ((_v, p) in TABLE_FOR_PATH or p in TABLE_FOR_PATH) for (_v, p) in ops),
         "the order table is non-trivial": len(tables.get("ORDER_RESPONSES", set())) >= 8,
     }
     for label, cond in cases.items():

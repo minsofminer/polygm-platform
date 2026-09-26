@@ -1,5 +1,5 @@
 "use client";
-import { useQuery } from "@tanstack/react-query";
+import { useResource } from "@/api/data";
 import { Button } from "@/ui/Button";
 import { RefusalNotice } from "@/ui/RefusalNotice";
 import { Number as NumberView } from "@/num/Number";
@@ -43,12 +43,9 @@ const PLANS = [
 
 export function BillingClient() {
   const inTma = isTma();
-  const ent = useQuery({
-    queryKey: ["billing", "entitlement"],
-    queryFn: () => request<Record<string, unknown>>({ key: "entitlement" }),
+  const ent = useResource(["billing", "entitlement"], () => request<Record<string, unknown>>({ key: "entitlement" }), {
     // A degraded read is a state, not a retry storm: the client already refuses an unbuilt route before it
     // reaches the network, and refetching a refusal every 3 seconds would turn an honest gap into noise.
-    retry: false,
     staleTime: 60_000,
   });
   const result = ent.data;

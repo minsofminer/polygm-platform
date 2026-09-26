@@ -110,7 +110,13 @@ The promotion path in one line each:
 | Object storage | Cloudflare R2, ~30 GB of backups | ~$1 | R2, ~120 GB | ~$2 |
 | TLS / CDN / WAF / DNS | Cloudflare free tier + Caddy (automatic certs) | $0 | same | $0 |
 | Errors + dashboards | Sentry (free tier covers launch) + Grafana Cloud free tier | $0 | Sentry team | ~$26 |
-| **Total** | | **~$112–140** | | **~$270** |
+| **Total** | | **~$119 (range $109–129)** | | **~$270** |
+
+The arithmetic behind this table is `config/costs.json` — one file, with every line's unit and where its price
+came from — and `tools/p15-cost.py --check` fails if this table, that file and the Terraform output disagree. As
+of this phase it projects **$119.38/month** point estimate (range $109–129 by line), against the kit's $300
+envelope: 39.8% used, $180.62 of headroom. `docs/P15-cost.md` is the fuller treatment (attribution, the 50/80/100%
+gates, the scaling plan and the cut order).
 
 ¹ The EU CPX line rises on **2026-04-01** (CPX22 €5.99 → €7.99), so this column budgets the post-rise price. Hetzner
 EU and US pricing diverge sharply — the US CPX21 is ~$37/month against €5.99 in Falkenstein — which is why the
@@ -311,6 +317,18 @@ Two honest caveats:
    state. Until they exist, D2 stays "validated, not applied".
 3. **Run the runtime isolation probe** on the real hosts and attach the transcript to
    `docs/verification/P15-isolation.txt` (the harness prints the exact commands).
-4. Still open from P14 and unchanged by this phase: GitHub 2FA, the Supabase CIDR restriction, the Turnkey provider
+4. **Run the alert drill on a real staging box** (`make p15-alerts-drill`) and then verify *delivery*: the drill
+   proves each rule fires and records the notification text, but reaching a phone needs `PGM_TELEGRAM_BOT_TOKEN`.
+5. **Review the three dashboards on a phone** (`tools/p15-dashboards.py --out …`), and record the review in
+   `docs/verification/p15-dashboard-review.jsonl` — the readiness checklist reads that file.
+6. **Run each runbook once, in staging, by someone other than its author**, and set `drilled_by` in the page's front
+   matter. Eighteen pages; `tools/p15-runbooks-check.py` refuses a page whose drill is over ninety days old.
+7. **Throw the kill switch from a real phone**, and let `kill_switch_drills` record the propagation measurement.
+8. **Run the restore drill against the production transport** (`pg_dump → age → R2 → restore`) — the local drill and
+   its verification are recorded, and `docs/P15-dr.md` marks the transport `[UNVERIFIED]` until this happens.
+9. **Record one real month of cost** with `tools/p15-cost.py --actual <bill>` so the projection has a fact beside it.
+10. **Staff the on-call rotation for 30 days** (`docs/P15-oncall.md`): the readiness tool expects names and dates, and
+   staffing is a decision this repository cannot make.
+11. Still open from P14 and unchanged by this phase: GitHub 2FA, the Supabase CIDR restriction, the Turnkey provider
    rate, `PGM_TELEGRAM_BOT_TOKEN`, the BotFather Mini App URL, real-phone acceptance, and the $50/72 h canary which
    stays blocked while the P14 gate reads NO-GO.

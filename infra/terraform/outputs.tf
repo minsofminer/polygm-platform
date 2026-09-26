@@ -19,5 +19,5 @@ output "backup_bucket" {
 
 output "monthly_cost_estimate_usd" {
   description = "What this topology is expected to cost per month, printed at apply time so the number is never a surprise."
-  value       = "~$72 launch (~$19 Hetzner + ~$47 Neon + ~$5 Upstash + ~$1 R2); see docs/P15-deployment.md D2"
+  value       = "~$119 launch (~$21 Hetzner, two hosts + ~$77 Neon 1 CU always-on + ~$20 Upstash + ~$1 R2); the arithmetic is config/costs.json, checked by tools/p15-cost.py --check, documented in docs/P15-cost.md"
 }

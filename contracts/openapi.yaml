@@ -774,6 +774,191 @@ paths:
         "500": {$ref: "#/components/responses/Internal"}
 
 
+  # --------------------------------------------------------------------------- P15 · deploy-time surfaces
+  # Two operations the release pipeline calls, both admin-only. They are documented rather than internal
+  # because `deploy/deploy.sh` runs from a laptop and from CI: an undocumented endpoint that a script depends on
+  # is an endpoint nobody can change safely.
+  /v1/admin/drain-status:
+    get:
+      tags: [admin]
+      summary: May the executor be replaced right now?
+      description: |
+        The answer the deploy script polls before it touches the money path, reported as COUNTS rather than as an
+        opinion. The distinction the field names carry: an intent in `pending`/`queued` is a durable row that the
+        next executor picks up, so it is reported (`openIntents`) but does not block; `submitting` and `uncertain`
+        mean this process may be mid-conversation with the venue, and those BLOCK — replacing the executor there
+        is how an ambiguous order becomes an orphan (P6 D3). A script that cannot reach this endpoint must treat
+        the answer as "no": the fail-safe direction is not replacing the executor.
+      operationId: drainStatus
+      x-auth: admin
+      x-rate-class: admin
+      x-cache: no-store
+      parameters:
+        - name: X-Admin-Token
+          in: header
+          required: false
+          schema: {type: string}
+          description: absent or empty means 503 SIGNER_UNAVAILABLE; a wrong token is 403 ADMIN_REQUIRED
+      responses:
+        "200":
+          description: the counts, and the derived verdict
+          headers:
+            x-request-id: {$ref: "#/components/headers/xRequestId"}
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Stamped"
+                  - type: object
+                    required: [draining, blockingIntents, openIntents, blockingStates, safeToReplace]
+                    properties:
+                      draining: {type: boolean}
+                      blockingIntents: {type: integer}
+                      openIntents: {type: integer}
+                      blockingStates: {type: array, items: {type: string}}
+                      safeToReplace: {type: boolean}
+        "403": {$ref: "#/components/responses/Denied"}
+        "503": {$ref: "#/components/responses/Denied"}
+        "500": {$ref: "#/components/responses/Internal"}
+  /v1/admin/metrics:
+    get:
+      tags: [admin]
+      summary: The four pillars in one read — money, order path, freshness, business
+      description: |
+        One request, because the phone dashboard gets three seconds on a bad connection and a dashboard that
+        fans out is a dashboard that half-loads. Every block names its `source`: the number and the query that
+        produced it travel together, so a zero that means "no rows" is distinguishable from a zero that means
+        "nobody wrote the query yet".
+
+        The order of the blocks is the priority order when the page arrives at 2am: `money.unreconciled` first —
+        a count of unresolved reconciliation cases WITH the age of the oldest, because a count alone cannot tell
+        a one-second blip from a stuck queue — then the order path, freshness, business.
+      operationId: adminMetrics
+      x-auth: admin
+      x-rate-class: admin
+      x-cache: no-store
+      parameters:
+        - name: X-Admin-Token
+          in: header
+          required: false
+          schema: {type: string}
+          description: absent or empty means 503 SIGNER_UNAVAILABLE; a wrong token is 403 ADMIN_REQUIRED
+      responses:
+        "200":
+          description: the snapshot
+          headers:
+            x-request-id: {$ref: "#/components/headers/xRequestId"}
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Stamped"
+                  - type: object
+                    required: [killSwitch, money, orderPath, freshness, business]
+        "403": {$ref: "#/components/responses/Denied"}
+        "503": {$ref: "#/components/responses/Denied"}
+        "500": {$ref: "#/components/responses/Internal"}
+
+  /v1/admin/flags:
+    get:
+      tags: [admin]
+      summary: The behaviour switches, stored value and effective value
+      description: |
+        What is actually on, so that the operator who is about to say "turn it off" can see the thing they are
+        turning off. `toggles` is the effective set the running process reads.
+      operationId: adminFlagsList
+      x-auth: admin
+      x-rate-class: admin
+      x-cache: no-store
+      parameters:
+        - name: X-Admin-Token
+          in: header
+          required: false
+          schema: {type: string}
+      responses:
+        "200":
+          description: the switches
+          headers:
+            x-request-id: {$ref: "#/components/headers/xRequestId"}
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Stamped"
+                  - type: object
+                    required: [on, toggles, flags]
+                    properties:
+                      on: {type: array, items: {type: string}}
+                      toggles: {type: array, items: {type: string}}
+                      flags:
+                        type: array
+                        items:
+                          type: object
+                          required: [name, kind, stored]
+                          properties:
+                            name: {type: string}
+                            kind: {type: string}
+                            stored: {type: object}
+        "403": {$ref: "#/components/responses/Denied"}
+        "503": {$ref: "#/components/responses/Denied"}
+        "500": {$ref: "#/components/responses/Internal"}
+    post:
+      tags: [admin]
+      summary: Turn a switch on or off, now, with a reason
+      description: |
+        "Feature flag with instant off" is an operational promise, and a promise that needs a deploy to keep is
+        not one: the store is refreshed on the way out, so the change is live on the next request rather than
+        after the five-second TTL. A reason of 4-400 characters is mandatory — `set_flag` refuses to write
+        without one, because a flag change without a reason is a mistake in progress. An unknown name is a 404:
+        a typo that silently creates a switch nobody reads looks like a fix and is not one.
+      operationId: adminFlagsSet
+      x-auth: admin
+      x-rate-class: admin
+      x-cache: no-store
+      # State-convergent like the kill switch: setting the same value twice is one outcome plus one audit row.
+      x-idempotency-exempt: "state-convergent toggle; the audit row is history, not a duplicate mutation"
+      parameters:
+        - name: X-Admin-Token
+          in: header
+          required: false
+          schema: {type: string}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, value, reason]
+              additionalProperties: false
+              properties:
+                name: {type: string}
+                value: {type: boolean}
+                reason: {type: string, minLength: 4, maxLength: 400}
+      responses:
+        "200":
+          description: accepted
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [name, value, atMs, reason]
+                properties:
+                  name: {type: string}
+                  value: {type: boolean}
+                  on: {type: [boolean, "null"]}
+                  atMs: {type: integer}
+                  reason: {type: string}
+        "403": {$ref: "#/components/responses/Denied"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "422":
+          description: VALIDATION for a missing field or a non-boolean value; BAD_REASON for a reason outside 4-400
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Error"}
+        "503": {$ref: "#/components/responses/Denied"}
+        "500": {$ref: "#/components/responses/Internal"}
+
+
   # --------------------------------------------------------------------------- P07 · authn, sessions, 2FA
   # P07 · the security plane. The status sets below are the app's `*_RESPONSES` tables transcribed, 500
   # included, because `tools/check-openapi.py` requires the two sets to be EQUAL: a contract that forgets

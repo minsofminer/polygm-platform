@@ -146,6 +146,7 @@ class Executor:
         self.reconciler = Reconciler(store, transport, cfg=recon_cfg or ReconCfg(), log=self.log,
                                      on_book=crash_hook)
         self.cancel_budget = v2.CancelBudget()
+        self.version = os.environ.get("PGM_VERSION") or os.environ.get("GIT_COMMIT") or "dev"
         self.stats: dict[str, int] = {"ticks": 0, "handled": 0, "submitted": 0, "uncertain": 0, "rejected": 0,
                                       "halted_skips": 0, "signed": 0, "reconcile_passes": 0,
                                       "signer_failed": 0}
@@ -589,6 +590,10 @@ class Executor:
     def tick(self, *, at: int | None = None, reconcile: bool = True) -> dict:
         t = at or now_ms()
         self.stats["ticks"] += 1
+        # P15 D5: the beat is the FIRST write of the tick, deliberately. A heartbeat written at the end would go
+        # stale precisely when a tick hangs — and a hung executor that still reports "alive" is the one failure a
+        # liveness signal must not have.
+        self.beat(at=t)
         killed = self.store.kill_switch_engaged(at_ms=t)
         report: dict = {"at_ms": t, "kill_switch": killed, "handled": [], "reconcile": None, "requeued": 0}
         if killed:
@@ -621,6 +626,23 @@ class Executor:
         report["metric"] = self.reconciler.metric(at=t)
         self.last_pass = report
         return report
+
+    def beat(self, *, at: int) -> None:
+        """Write the liveness row and, once a minute, log it.
+
+        The log line is for the 2am case where the *database* is what broke: the API's `executor-down` page and
+        `docker logs executor` then tell two different stories, and the difference between them is the incident.
+        """
+        note = ""
+        try:
+            self.store.beat(at=at, pid=str(os.getpid()), version=self.version, note=note)
+        except Exception as exc:                              # a beat must never be the reason a tick dies
+            self.log("executor: heartbeat failed: %s" % exc)
+            return
+        state = self.store.beat_state() or {}
+        if self.stats["ticks"] % 240 == 1:                    # ~1 minute at the 250 ms cadence
+            self.log(json.dumps({"beat": {"at_ms": at, "ticks": int(state.get("ticks") or 0),
+                                          "pid": state.get("pid")}}, separators=(",", ":")))
 
     def deliver_notifications(self, *, at: int) -> int:
         """In-app notifications are delivered by marking them sent; email/Telegram are P09's transports and

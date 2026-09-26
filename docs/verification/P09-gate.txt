@@ -4,13 +4,13 @@ PASS       1 ms  c1
         15 files, 3 routes wired, 3 ledger rows owned by P09
 PASS       3 ms  c2
         33 markers, 11 launch items, 11 [UNVERIFIED] slugs paired
-PASS    5131 ms  c3
+PASS    6130 ms  c3
         integer arithmetic only in 15 files; refusals fire; 45 lib tests green
-PASS       9 ms  c4
+PASS      12 ms  c4
         every price cell in 15 phase files carries freshness and a window; the ladder's stale overlay exists
-PASS    1513 ms  c5
+PASS    1760 ms  c5
         no dangerouslySetInnerHTML in 15 files; criteria sanitised and rendered as text; 9 upstream tests green
-PASS       0 ms  c6
+PASS       1 ms  c6
         4 constants match the document, 3 layout tokens declared and named
-PASS   45833 ms  c7
-        397 tests in 44 files, tsc clean, bundle artefact current
+PASS   63708 ms  c7
+        569 tests in 64 files, tsc clean, bundle artefact current

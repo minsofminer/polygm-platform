@@ -1,29 +1,14 @@
 "use client";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useToasts } from "@/ui/Toast";
 import { isTma, telegramTheme, bottomInsetPx } from "@/telegram/bridge";
 import { silentReauth } from "@/telegram/reauth";
 import { useAuth } from "@/auth/session";
 
-function makeClient(): QueryClient {
-  return new QueryClient({
-    defaultOptions: {
-      queries: {
-        // The feed is the authority on anything live; a query that re-fetched on focus would show a second,
-        // differently-aged copy of the same price. Stale time is therefore the stamp's own ttl, applied per
-        // call site, and the global default is "do not refetch by yourself".
-        staleTime: 30_000,
-        refetchOnWindowFocus: false,
-        retry: false,
-      },
-      mutations: { retry: false },
-    },
-  });
-}
-
 export function AppProviders({ children, initialAuth }: { children: ReactNode; initialAuth: "authenticated" | "unauthenticated" | "expired" }) {
-  const client = useMemo(makeClient, []);
+  // A stable object, used only as an identity token by `silentReauth` (it de-dupes "one attempt per cold
+  // start" on it). It used to be the query client; nothing about the query cache was ever involved.
+  const coldStart = useRef({}).current;
   const [inset, setInset] = useState(0);
 
   useEffect(() => {
@@ -37,7 +22,7 @@ export function AppProviders({ children, initialAuth }: { children: ReactNode; i
       window.addEventListener("resize", () => setInset(bottomInsetPx()), { passive: true });
     }
     if (initialAuth === "expired" && tmaHere) {
-      void silentReauth(client).then((result) => {
+      void silentReauth(coldStart).then((result) => {
         if (result.attempted && result.ok) window.location.reload();
         else if (result.attempted)
           useToasts.getState().push({
@@ -48,7 +33,7 @@ export function AppProviders({ children, initialAuth }: { children: ReactNode; i
           });
       });
     }
-  }, [client, initialAuth]);
+  }, [coldStart, initialAuth]);
 
   useEffect(() => {
     // The auth store mirrors the server's verdict. It is a *cache of a decision*, never the decision: a
@@ -59,9 +44,5 @@ export function AppProviders({ children, initialAuth }: { children: ReactNode; i
     }
   }, [initialAuth]);
 
-  return (
-    <QueryClientProvider client={client}>
-      <div style={{ "--pgm-tab-inset": `${inset}px` } as React.CSSProperties}>{children}</div>
-    </QueryClientProvider>
-  );
+  return <div style={{ "--pgm-tab-inset": `${inset}px` } as React.CSSProperties}>{children}</div>;
 }

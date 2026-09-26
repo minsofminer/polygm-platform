@@ -152,7 +152,8 @@ PLANNED: frozenset = frozenset({
     "GET /v1/orders",
     "GET /v1/orders/{intentId}",
     "GET /v1/search",
-    "POST /v1/admin/flags",
+    # `POST /v1/admin/flags` shipped in P15 D3, so it left this list: the moment a planned operation is served
+    # the mirror check in tests/test_security_plane.py says so, which is the point of the list existing.
     "POST /v1/admin/revoke-keys",
     "POST /v1/automation/rules",
     "POST /v1/orders/{intentId}/cancel",

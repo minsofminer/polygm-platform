@@ -1,32 +1,32 @@
 # P10 gate — recorded by tools/p10-gate-check.py
 
-PASS    2518 ms  the contract, the router and the authz table agree on P10's fifteen surfaces
-        check-openapi: 498 passed, 0 failed; paths in the contract 15/15, in TABLE_FOR_PATH 15/15; public 4/4, user 19/19
-PASS     209 ms  no P10 payload carries an address, and every wallet field is a pseudonym
+PASS    3706 ms  the contract, the router and the authz table agree on P10's fifteen surfaces
+        check-openapi: 685 passed, 0 failed; paths in the contract 15/15, in TABLE_FOR_PATH 15/15; public 4/4, user 19/19
+PASS     276 ms  no P10 payload carries an address, and every wallet field is a pseudonym
         9 payloads scanned (all 200); 0 findings
-PASS      43 ms  every win rate is gated, every curve point carries its drawdown, and the method is stated
+PASS      63 ms  every win rate is gated, every curve point carries its drawdown, and the method is stated
         windows: 1 under the gate (7d), 3 over it (30d,90d,all); curve points 26; max drawdown 2400000000; 0 findings
-PASS     105 ms  the whale threshold is relative-with-a-floor, stated on every row, and severity is a ratio
+PASS     136 ms  the whale threshold is relative-with-a-floor, stated on every row, and severity is a ratio
         floor 500000000, window threshold 500000000 (reason absolute_floor); 3 whale rows, severities info,notice,urgent; 0 findings
-PASS      66 ms  a copy config is a dry run by construction, and going live needs an acknowledgement AND history
-        created cfg-e009addf292f, live-field 422, no-ack 409, ack-only 409, with-history 200; monitor live 12 / wouldDo 5, skip reasons category_filtered,daily_cap_reached,moved_past_limit,resolved_soon; 0 findings
-PASS      68 ms  a notifying view carries a market target and its rule ships with a fire budget
-        scoped rule wr-c13a8f0899bb (fires 2), global-notify 409, filter-only 200, unknown market 404, 4 views listed; 0 findings
-PASS     166 ms  the money path is integers, the wire's money is decimal strings
+PASS      88 ms  a copy config is a dry run by construction, and going live needs an acknowledgement AND history
+        created cfg-026ce76a11b2, live-field 422, no-ack 409, ack-only 409, with-history 200; monitor live 12 / wouldDo 5, skip reasons category_filtered,daily_cap_reached,moved_past_limit,resolved_soon; 0 findings
+PASS      90 ms  a notifying view carries a market target and its rule ships with a fire budget
+        scoped rule wr-02972f041bb8 (fires 2), global-notify 409, filter-only 200, unknown market 404, 4 views listed; 0 findings
+PASS     253 ms  the money path is integers, the wire's money is decimal strings
         metrics.py 381 lines scanned; 50 tape rows and 81 positions checked; 0 findings
-PASS     114 ms  every P10 read is stamped with the data's clock, not the answer's
+PASS     165 ms  every P10 read is stamped with the data's clock, not the answer's
         8 reads; 0 findings
-PASS      62 ms  a new user can walk whale -> dossier -> dry-run copy -> slippage, on the API alone
-        facets state the whale rule (threshold 500000000: whale = max(the p99.5 fill of this market's 1065 fills ($150) | the tape filter at that threshold found 3 fill(s); the first is w_5c037b2ab8 at $25000.00 | the win rate is 76.3% over 38 settled markets (gate 20) | the curve carries its drawdown (worst $0.00) | the copy config cfg-bc054d4639bc exists in dry-run | the slippage risk is stated before the confirm: we have copied this source 0 times, so there is no slippage history to show; that is not t
-PASS      48 ms  a scan is cached, budgeted, refused past the limit, enqueued when large, and keyed
-        two markets -> 4 rankings; quota 1/100 on the trader plan | the same two markets, reversed, came from the cache and spent nothing | twelve markets: 422 with the limit stated (the market selection is outside what a radar scan accepts: r) | eight markets ran as job rr-d81a1d9af07c and finished with 4 rankings | a scan with no Idempotency-Key is 400 before anything runs
-PASS       0 ms  the tape's own work at 200 fills/s fits in a frame, and the artefact says what it did not measure
-        1.780 ms per second of load at 200 fills/s, worst release 0.164 ms, budget 16.7 ms; 0 findings
-PASS      44 ms  a rule cannot be saved armed, and cannot be armed without an observed dry run
+PASS      86 ms  a new user can walk whale -> dossier -> dry-run copy -> slippage, on the API alone
+        facets state the whale rule (threshold 500000000: whale = max(the p99.5 fill of this market's 1065 fills ($150) | the tape filter at that threshold found 3 fill(s); the first is w_5c037b2ab8 at $25000.00 | the win rate is 76.3% over 38 settled markets (gate 20) | the curve carries its drawdown (worst $0.00) | the copy config cfg-70a22fa809bb exists in dry-run | the slippage risk is stated before the confirm: we have copied this source 0 times, so there is no slippage history to show; that is not t
+PASS      78 ms  a scan is cached, budgeted, refused past the limit, enqueued when large, and keyed
+        two markets -> 4 rankings; quota 1/100 on the trader plan | the same two markets, reversed, came from the cache and spent nothing | twelve markets: 422 with the limit stated (the market selection is outside what a radar scan accepts: r) | eight markets ran as job rr-a5a5a19edb76 and finished with 4 rankings | a scan with no Idempotency-Key is 400 before anything runs
+PASS       1 ms  the tape's own work at 200 fills/s fits in a frame, and the artefact says what it did not measure
+        1.500 ms per second of load at 200 fills/s, worst release 0.667 ms, budget 16.7 ms; 0 findings
+PASS      78 ms  a rule cannot be saved armed, and cannot be armed without an observed dry run
         vocabulary 5 triggers/6 actions matches the engine, create dryRunOnly, arm-before-dry-run 409, arm-after active, pause paused, 3 run rows (dry_run/live), counts {"placed": 0, "would_place": 0, "skipped": 3, "failed": 0}; 0 findings
-PASS       6 ms  the crypto 5-minute template is offered only when its own fee arithmetic works
+PASS       8 ms  the crypto 5-minute template is offered only when its own fee arithmetic works
         no edge: ENTRY RULE NOT SHIPPED (protective half ships) (no_measured_edge); edge 900bp: SHIPPED; break-even 5200 vs implied 5000, taker fees, 2 legs; 3 protective templates offered; 0 findings
-PASS      67 ms  the plan is stated before it happens, quiet hours hold even urgent, and a test costs nothing
+PASS     136 ms  the plan is stated before it happens, quiet hours hold even urgent, and a test costs nothing
         budget '3 per 1h = one every 20m at most', webhook on free 402, quiet hours held the plan, digest batched a notice and not the urgent one, test left the window at 0 fires, 1 delivery rows (1 test); 0 findings
-PASS      31 ms  a halted account cannot save or arm, and every rule says halted until it is acknowledged
+PASS      64 ms  a halted account cannot save or arm, and every rule says halted until it is acknowledged
         2 rules all read halted while stopped, save 409, arm 409, acknowledgement recorded and the banner cleared, rule count 2 -> 2; 0 findings

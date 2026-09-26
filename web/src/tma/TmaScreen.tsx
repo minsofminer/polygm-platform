@@ -22,8 +22,18 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { request } from "@/api/client";
 import { silentReauth } from "@/telegram/reauth";
 import { parseStartapp, startappTarget } from "@/telegram/startapp";
-import { TradeSheet, type OrderFn } from "@/tma/TradeSheet";
-import { WalletScreen, type WalletIO } from "@/tma/WalletScreen";
+import dynamic from "next/dynamic";
+import type { OrderFn } from "@/tma/TradeSheet";
+import type { WalletIO } from "@/tma/WalletScreen";
+
+// The two views behind the first frame, split out of the document that opens them.
+//
+// Both are reached by an interaction — the wallet by the view switch, the sheet once a market has loaded — so
+// neither belongs in the payload that paints the Mini App. Neither is put at risk by being deferred: the switch
+// itself stays local (it renders before either view resolves), and the sheet's own data has to arrive first
+// anyway. Measured cost of not doing this: 14 KB of trade logic and the wallet views on the initial route.
+const TradeSheet = dynamic(() => import("@/tma/TradeSheet").then((m) => m.TradeSheet));
+const WalletScreen = dynamic(() => import("@/tma/WalletScreen").then((m) => m.WalletScreen));
 import { loadMarketForSheet, type TmaGet, type TmaRead } from "@/tma/market";
 import { mapDepositProgress, mapDepositQuote, loadWallet, type WalletRead } from "@/tma/wallet";
 import { READ_ONLY_SENTENCE, type MarketView } from "@/tma/trade";

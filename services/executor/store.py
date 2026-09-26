@@ -41,7 +41,8 @@ KILL_POLL_MS = 250                    # how stale a kill-switch read may be befo
 CLAIM_LEASE_MS = 45_000               # one intent's worst legitimate execution time; then it is re-claimable
 UNCERTAIN_BLOCK_MS = 0                # 0 = never auto-release; only reconciliation unblocks an intent
 
-WANT_TABLES = ("order_intents", "orders", "fills", "cash_ledger", "position_lots", "builder_attribution",
+WANT_TABLES = ("executor_state", "order_intents", "orders", "fills", "cash_ledger", "position_lots",
+               "builder_attribution",
                "order_lifecycle", "order_attempts", "venue_fees", "reconcile_cursors", "reconcile_actions",
                "reconcile_open", "wallets", "wallet_events", "allowances", "deposits", "withdrawals",
                "risk_blocklists", "loss_halts", "rate_counters", "kill_switch_state", "feature_flags",
@@ -710,6 +711,29 @@ class Store:
                      "VALUES (?,?,?,?,?,?) ON CONFLICT(market_id) DO UPDATE SET reason=excluded.reason,"
                      "source=excluded.source,added_ms=excluded.added_ms,expires_ms=excluded.expires_ms",
                      (market_id, reason.strip()[:300], source, actor, at, expires_ms or None))
+
+    # --------------------------------------------------------------------------- P15 D5: liveness
+    def beat(self, *, at: int, pid: str = "", version: str = "", note: str = "") -> None:
+        """The row the `executor-down` page reads.
+
+        One row, upserted. Written from the tick loop and not from a background thread on purpose: a thread that
+        survives a wedged main loop would report a healthy executor that is not placing orders, which is the exact
+        failure the heartbeat is meant to catch.
+        """
+        self.execute("INSERT INTO executor_state (id, at_ms, pid, version, ticks, note)"
+                     " VALUES (1, ?, ?, ?, 1, ?)"
+                     " ON CONFLICT(id) DO UPDATE SET at_ms=excluded.at_ms, pid=excluded.pid,"
+                     " version=excluded.version, ticks=executor_state.ticks + 1, note=excluded.note",
+                     (int(at), str(pid)[:32], str(version)[:60], str(note)[:400]))
+
+    def beat_state(self) -> dict | None:
+        """The heartbeat row, as a dict. The store's own accessor is `conn.execute(...).fetchone()` — there is no
+        `one()` here (that is the API-side store), and reaching for one crashed every executor test the moment the
+        beat landed in `tick()`."""
+        row = self.conn.execute("SELECT at_ms, pid, version, ticks, note FROM executor_state WHERE id = 1").fetchone()
+        if row is None:
+            return None
+        return dict(zip(("at_ms", "pid", "version", "ticks", "note"), row))
 
     def bump_counter(self, key: str, *, at: int, bucket_ms: int = 60_000, limit: int | None = None) -> dict:
         """Rate counters with the bucket in the key, so "12/minute" is a row that ages out instead of a

@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useResource } from "@/api/data";
 import { request } from "@/api/client";
 import { Button } from "@/ui/Button";
 import { Field } from "@/ui/Field";
@@ -32,13 +32,10 @@ export function ProfileClient() {
     if (patch.pgm_density) document.documentElement.dataset.density = patch.pgm_density;
   };
 
-  const sessions = useQuery({
-    queryKey: ["sessions"],
-    queryFn: async () => {
-      const out = await request<{ items?: Record<string, unknown>[] }>({ key: "sessions" });
-      if (!out.ok) throw new Error(`${out.error.code}: ${out.error.message}`);
-      return out.data.items ?? [];
-    },
+  const sessions = useResource(["sessions"], async () => {
+    const out = await request<{ items?: Record<string, unknown>[] }>({ key: "sessions" });
+    if (!out.ok) throw new Error(`${out.error.code}: ${out.error.message}`);
+    return out.data.items ?? [];
   });
 
   const revoke = async (id: string) => {

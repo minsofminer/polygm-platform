@@ -135,6 +135,21 @@ MUTANTS: list[tuple[str, str, str, str, str, str]] = [
      "the difference between a drill and a checkbox is that the failure says where it stopped"),
     ("append-only-check-inert", SEC + "store.py", '        if verdict == "fail" and not failed_step.strip():',
      "        if False:", PLANE, "same rule, the other half: the guard must actually be reached"),
+    # ------------------------------------------------------------------ D5: the connection proxy under churn
+    # `t.is_alive()` is the whole fix and it, rather than the storage, is the line the load probe impeached: the
+    # old design decided liveness by a reused *ident*, so a connection whose owner was still running could be
+    # closed underneath it. `t.ident != threading.get_ident()` is that confusion in miniature — it reaps the
+    # asking thread's own live connection — and `tests/test_security_plane.py` must notice on the next statement.
+    ("reap-ignores-whose-owner-is-alive", "services/api/app.py", "                if t.is_alive():",
+     "                if t.is_alive() and t.ident != threading.get_ident():", PLANE,
+     "a reap must never close a connection whose owner is still running; P14 D5 found a segfault here"),
+    # The other half of the same fix, and the one that has to be caught by the *property* rather than by the
+    # crash: attribution. Registering a live thread that does not own the connection keeps every probe that only
+    # asks "is the owner alive?" green — the reaping never looks wrong — while the registry stops answering the
+    # question it exists to answer. `_registry_is_keyed_by_thread` in the churn test is what must notice.
+    ("connection-attributed-to-another-thread", "services/api/app.py",
+     "            self._retain(threading.current_thread(), c)", "            self._retain(threading.main_thread(), c)",
+     PLANE, "a connection registered against a thread that does not own it is the ident confusion, type-safe"),
 ]
 
 

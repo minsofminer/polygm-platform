@@ -1,35 +1,35 @@
-P08 gate run, 2026-09-20 20:14:13Z (--fast=False)
+P08 gate run, 2026-09-26 04:26:21Z (--fast=False)
 
-  PASS    13 ms  c1
-        86 routes in the ledger (65 built, 21 refused-by-design), 79 contract operations, 19 launch items; all three agree
-  PASS  4182 ms  c2
-        check:api rc=0, contract 549 passed / 0 failed, schema.gen.ts 7210 lines, no hand-typed bodies
-  PASS    29 ms  c3
+  PASS    16 ms  c1
+        89 routes in the ledger (73 built, 16 refused-by-design), 99 contract operations, 19 launch items; all three agree
+  PASS  6561 ms  c2
+        check:api rc=0, contract 685 passed / 0 failed, schema.gen.ts 8589 lines, no hand-typed bodies
+  PASS    30 ms  c3
         35 markers, 19 numbered launch items, 4 [UNVERIFIED] slugs paired
-  PASS   182 ms  c4
+  PASS   224 ms  c4
         parseFloat/toFixed/Intl.NumberFormat confined to src/money/, no bitwise in the money path, one numeric renderer
-  PASS   523 ms  c5
+  PASS   495 ms  c5
         0 literal(s) and 0 unknown var() name(s) across the tree
-  PASS   186 ms  c6
-        4 generated/structural checks over 262 lines of token CSS and the shell stylesheet
-  PASS  1589 ms  c7
-        assert-env rc=0; built-output grep rc=0 over 755 built file(s); telegram.org in script-src only on /tma
-  PASS     4 ms  c8
-        worst route 199.9 KB of a 200 KB budget; 4 routes measured; the Lighthouse/frame-trace claims are launch items 3 and 4, not this artefact
-  PASS   222 ms  c9
+  PASS   183 ms  c6
+        4 generated/structural checks over 303 lines of token CSS and the shell stylesheet
+  PASS  1846 ms  c7
+        assert-env rc=0; built-output grep rc=0 over 777 built file(s); telegram.org in script-src only on /tma
+  PASS    17 ms  c8
+        worst route 196.1 KB of a 200 KB budget; 4 routes measured; the Lighthouse/frame-trace claims are launch items 3 and 4, not this artefact
+  PASS   273 ms  c9
         i18n-check (advisory): "wallet.tx.title" is declared and unused | canary: i18n-check --self-test: ok (planted plain + interpolated keys caught; a terminal key AND a public key outside their route families caught; prose in comments ignored)
-  PASS   148 ms  c10
+  PASS    85 ms  c10
         11 price surface(s) guarded, tape announcements capped, haptics on confirmations only
-  PASS  3473 ms  c11
+  PASS  3719 ms  c11
         login/CSRF/refresh-race/logout all exercised against next start + uvicorn
-  PASS    43 ms  c12
-        21 unbuilt routes, every one of them refused or gated in the tree; no src barrels
-  PASS     1 ms  c13
+  PASS    32 ms  c12
+        16 unbuilt routes, every one of them refused or gated in the tree; no src barrels
+  PASS     0 ms  c13
         cap 64, rails 0.1..0.34 of the viewport per device, 5 tabs
   PASS     6 ms  c14
         route boundary + 7 widget boundaries over 28 page(s)
-  PASS 42176 ms  c15
-        Test Files  50 passed (50)
-  PASS     4 ms  c16
+  PASS 61629 ms  c15
+        Test Files  64 passed (64)
+  PASS     5 ms  c16
         one shape (`^[A-Za-z0-9_-]{8,128}$`) in the contract, in `_IDEM_RE` and in the client's producer
-P08 gate: 16/16 checks passed in 52781 ms
+P08 gate: 16/16 checks passed in 75121 ms

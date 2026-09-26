@@ -4,6 +4,106 @@ Format per phase: **built / verified / `[UNVERIFIED]`**. Newest first.
 
 ---
 
+## P15 — deployment, observability and operations (2am, one page, a phone, five minutes)
+
+**What the phase gates on.** Not a checklist: a scenario. It is 2am, you get one page, and from a phone in under
+five minutes you can say whether the system is healthy, whether any user's money is inconsistent, and whether you
+should stop trading. Everything below is arranged around making those three answers cheap.
+
+**Three of this phase's gates failed because the gates themselves had rotted, and each fix was a real improvement:**
+
+| failure | the real cause | the fix |
+| --- | --- | --- |
+| `make check` → `gate-mutate` baseline | the harness copied the tree with `git init`, so the copy had an *unborn HEAD*; three checks ask the copy about its history (exemption liveness, `git grep`, the new deploy-ledger test) | clone with history (`--local`, falling back to `--shared` across filesystems) and lay the working tree over it |
+| the secret-scan's exemption liveness | `git log -S` matched the token inside the allowlist's own *description* of the entry, so every entry was permanently "live" and a dead one could hide the next real key | exclude the allowlist from the search; the entry now legitimately matches the commit it was written for |
+| two wallet tests, one full-suite run in three | the TOTP arming code came from `setUp`'s frozen clock while the server windows the code at request time; a 30 s boundary turned a correct code into `cur−2` | compute the code from the live clock, prev→current window, re-enrol up to three times; verified 3× wallet-only, 3× full suite |
+
+**Two fail-open paths in the deploy audit** were found while writing its tests, and both are now refusals with
+tests: `begin` in a repository with an unborn HEAD would have written an entry naming no revision (a ledger that
+looks complete and names nothing to roll back to), and `verify` could return PASS while checking nothing, because
+with no resolvable commits every per-entry check passes vacuously. `PGM_DEPLOY_REPO` points the tool at a scratch
+checkout, which is how both refusals became provable rather than asserted.
+
+**The alarm engine was lying in two ways, and the drill is what found them.** Notifications rendered
+`<object object at 0x…>` for every value (the placeholders resolved against the rule's detail rather than the
+payload, and `json.dumps` of the missing-value sentinel produced a Python repr), and a list rule that filters on
+one field and tests another could never fire (the filter needs the items, not the projected booleans). Both fixed;
+`{path|age}` and `{path|usd}` render durations and micro-dollars; an unresolved placeholder is `?`.
+
+**Every page-class alarm now fires on purpose, and the recorded evidence is the notification text.**
+`tools/p15-alert-drill.py` seeds each rule's condition into a copy of the seeded database, reads
+`/v1/admin/metrics` through the app, evaluates the registry and **fails if its rule does not fire**. Two more bugs
+came out of it: one clock for the whole run made healthy feeds look lagging by the tenth scenario, and the seeded
+sample's stuck deposit fired in every scenario until the drill learned to reset its own baseline. Ten firings are
+recorded in `docs/verification/p15-alerts-fired.jsonl`, each with the rendered notification and the environment
+("seeded locally") in the evidence — delivery to a phone needs the bot token and stays an owner step.
+
+**Observability gained the blocks the kit names and the endpoint did not have:** an executor heartbeat (one row,
+written at the *top* of each tick so a hung tick goes stale instead of reporting alive), three named
+compromise indicators, the builder code's state as the venue told us, in-flight money (stuck deposits, withdrawals),
+delivery counts, and per-feed `transport`/`lagging`/`thresholdMs`/`resyncs` where `null` means "not reported" and
+never "zero".
+
+**DR has a tested restore with a measured result.** 123 tables, 3,261 rows, money checksums matched on all seven
+money columns, 58 triggers present after the restore, the append-only guard confirmed live, 128 ms. The production
+transport stays `[UNVERIFIED]` — and the drill prints that sentence in its own transcript, so the gap travels with
+the evidence.
+
+**Cost is arithmetic in one file** ($119.38/month against a $300 envelope, 39.8% used) checked against the D2 doc
+and the Terraform output, which is how a stale `~$72` was found. **Runbooks are checked as procedures:** 18 pages,
+every tool invoked with its own `--help` to verify flags — which caught three wrong commands and one module path
+that does not work from the repo root. **Dashboards are three self-contained ~9 KB pages** whose alarm blocks are
+rendered by *importing* the alarm engine, so a screen and a page cannot disagree.
+
+**D9's checklist is 0/8 by artefact today, and it says so.** `tools/p15-readiness.py` names the missing artefact
+for every red line and refuses to record a signature while one is red.
+
+**Late fixes, all of them found by running the whole gate rather than by reading it.** A gate that has not been
+run end to end in a while rots exactly where nobody is looking, and these four were all stale or wrong in ways the
+phase's own prose was happy with:
+
+| what failed | why | fix |
+| --- | --- | --- |
+| `p05-gate-check` | the check asserted `len(kinds) == 8`, true when written and false since P10 D9 added three | a floor plus the extras named; the count is never re-hardcoded |
+| `ci-log-scan.py --sources` | crashed (`KeyError: 'string'`) on the allowlist's third entry shape, and the planted-key probe passed *because* the unscoped `AKIA…` exemption covered the plant | an entry may name a `path` and then only exempts that file; probe rc=1, `--sources` rc=0, `--self-test` rc=0 |
+| `web-build` (Turbopack) | OOM-killed on a 2 GB box, which hid a real type error: `metadataFor` exported from three `app/leaderboard/**/page.tsx` | extracted to `web/src/public/metadataFor.ts`, a `page-exports` guard added, and `next build --webpack` is `WEB_BUILD_FLAGS` — it skips `npm run measure`, so the committed Turbopack bundle record cannot be overwritten by a different build's chunking |
+| the P14 **F17** churn test | it keyed its observation on `threading.get_ident()`, which the kernel recycles: under CPU contention the second wave inherited the first wave's numbers and the test reported "a thread was handed more than one connection" when nothing of the sort had happened | the observation is per worker; the mechanism (per-thread storage, a registry of thread *objects*) is asserted directly, and a self-test plants the pre-P14 `(ident, connection)` shape and requires that assertion to reject it |
+| `deploy/*.sh` in git | both were tracked `100644`, while the pipeline SSHes `deploy/deploy.sh …` and the runbooks say `deploy/rollback.sh --env prod …` — a fresh checkout, which is what a deploy host *is*, would answer "Permission denied" | the two scripts are committed `100755`; a rollback that fails on a permission bit at 2am is a rollback that does not exist |
+| the P08 payload budget | the committed measurement said 186–189 KB with 13 KB of room; the tree measured **208.4 / 200.1 / 226.7 KB** on `/`, `/markets`, `/tma`. The record was from the P08 era, and `c8` only compared its mtime against the newest source file — a check that can only see whether a number was written *recently*, never whether it is *true* | the budget is enforced again on a measurement that names its own scope; see below |
+
+**The payload budget was the finding of the session, and it arrived as a side effect.** Regenerating the web's API
+schema made a source file newer than `docs/verification/P08-bundle.txt`, which is what `c8` checks — and when the
+number was finally re-measured against a build instead of against a timestamp, three routes were over the 200 KB
+budget the shell had claimed to be under for five phases. The measurement that produced the old record was real; it
+had simply never been repeated. Two fixes, and the second is the one that matters:
+
+- **the payload.** `app/page.tsx` imported the Mini App screen *statically* for a branch that only the Mini App's own
+  deployment takes, so the marketing page shipped the trading terminal to every visitor; and the Mini App itself
+  shipped the trade sheet and the wallet views before either was asked for. Both are chunk boundaries now.
+  Measured: `/` 208.4 → **184.2 KB**, `/markets` 200.1 → **192.6**, `/tma` 226.7 → **196.1** (first-party), with a
+  full web suite of 64 files / 569 tests green and the P08 gate back to 16/16.
+- **the measurement.** The budget now says what it budgets — first-party JS — and the one script that is outside it,
+  Telegram's platform bridge, is *measured and printed per route* (18.0 KB on `/tma`) rather than counted or hidden.
+  `c8` requires the artefact to state its scope and to name every excluded script with its size, so a future
+  third-party script cannot cross that line without somebody writing a sentence about it.
+
+The context that made the decision legible, and worth keeping: a **minimal** Next 16.3.5 + React 19 App Router app,
+built with this toolchain and containing no application code, measures **169.0 KB** of first-party JS. 84% of the
+budget is the framework, which is why 17 KB of `@tanstack/react-query` — configured `refetchOnWindowFocus: false`,
+`retry: false`, per-call-site `staleTime`, i.e. told not to do the things a query library is for — stopped earning
+its place; it is `src/api/data.ts` now, with the semantics it relied on asserted in `src/api/data.test.ts`.
+
+The last one is the uncomfortable kind: a **red gate that was not a product bug**, and the honest reading is that
+the *test* was wrong, so the fix had to keep the regression value rather than merely stop the flake.
+`tools/p07-mutation-test.py` therefore gained two mutants for F17 — a reap that ignores `t.is_alive()`, and a
+connection registered against a live thread that does not own it — and the second one **survived the first
+attempt**: the assertion that was meant to catch it ran on the main thread, where `main_thread()` and
+`current_thread()` are the same object, so a misattributed registry looked correct. The check now runs inside the
+threads that own the connections, and the mutant is killed by the test that names the property. Both mutants are
+in the recorded run: **30 planted weaknesses, 30 KILLED, 0 survived** (`docs/verification/P07-mutation.txt`).
+
+---
+
 ## P14 — Security Testing · 2026-09-22 → 09-23
 
 **Built.** `docs/P14-security-testing.md` (D1–D8) and `docs/P14-audit-bounty-legal.md`, plus six harnesses:
@@ -640,3 +740,50 @@ tampered payload returns the *API's* refusal, generated on the other side of the
 **`[UNVERIFIED]`.** `PGM_TELEGRAM_BOT_TOKEN` is deliberately unset on the API deployment, so no session can be minted
 and no real trade can be placed from the Mini App; the BotFather Mini App URL is a manual step with no API. Both are
 recorded in `docs/P12-telegram-bot.md`, not carried as a silent gap. No real funds: money still waits for P13 and P14.
+
+## P15 — deployment, observability and operations · 2026-09-26
+
+**What the phase is for.** One test, from the kit: at 2am, from a phone, in under five minutes, can the person on
+call answer three questions — is the system healthy, is any user's money in an inconsistent state, should I stop
+trading? D1/D2 (the environment matrix and the costed infrastructure) landed earlier; this closes D3–D9: the
+pipeline and its manual gate on anything touching the executor, the four observability pillars with
+`unreconciled_orders` at the centre, 25 alert rules each carrying a runbook link and an owner, eighteen runbooks
+with drill records, DR with a rehearsed restore (123 tables, ~3,261 rows, 128 ms), per-service cost attribution at
+$119.38 of a $300 ceiling with the cut order written down in advance, and a readiness checklist that refuses to be
+signed while any line is red.
+
+**The finding of the session was not in P15.** Regenerating the web's API client made one source file newer than
+`docs/verification/P08-bundle.txt`, which was enough to prove that the frontend's 200 KB budget had been **asserted
+for five phases and measured once**: `/` 208.4 KB, `/markets` 200.1, `/tma` 226.7 against a record claiming 13 KB of
+headroom. `c8` compared the record's *mtime* with the newest source file — a proxy that reports an accurate record as
+stale after a checkout and a stale record as current, which is exactly how the breach hid. The payload was fixed
+(statically-imported Mini App screen behind a chunk boundary; the trade sheet and wallet behind `next/dynamic`; the
+17 KB `@tanstack/react-query` dependency, configured to decline the things a query library is for, replaced by
+`web/src/api/data.ts` with its semantics pinned by tests) and so was the measurement (the budget now names its
+scope, prints the Telegram bridge it excludes with the reason, and both records stamp a `sources-sha256` over
+exactly the files they describe, recomputed by the checks). `/` 184.2 · `/markets` 192.6 · `/tma` 196.1. A minimal
+Next 16.3.5 + React 19 app on the same toolchain measures 169.0 KB: 84% of the budget is the framework.
+
+**Two more things a fresh checkout would have broken, found the same way.** `deploy/deploy.sh` and
+`deploy/rollback.sh` were tracked `100644` while the pipeline runs them over SSH and the runbooks tell a human to
+run them: on a host that checks the repo out, the one command that has to work at 2am answers "Permission denied".
+Both are committed `100755`. And a full-suite gate run failed with `1272 tests, exit 1, tail 'FAILED (errors=33)'` —
+none of the 33 named in the last line — because the 1 GB `/tmp` tmpfs was full of dead test databases from a killed
+run; `tests/conftest.py` now refuses to start with the free megabyte count, the reason, and `PGM_TEST_TMPDIR`, and
+`tests/test_suite_guard.py` tests that refusal, including a rehearsal through the same entry point a real run takes.
+
+**Also re-run and refreshed:** `docs/verification/P04-gate-output.txt` (55/55 and 156 tests from P04's own session →
+**56/56** with the suite at **1469 tests**), because an un-re-run record is a claim, not evidence.
+
+**Verified at close.** Batch A `p01–p07` + `seed-sql-check` → **EXIT_A=0**; batch B `p08 p09 p10 p12 p12-selftest
+p13-read infra-check p15-migrations p15-pipeline p15-alerts p15-runbooks p15-cost p15-dashboards` → **EXIT_B=0**.
+P08 **16/16**, P09 **7/7**, P10 **15/15**, P15 environments **18/18**, and no `FAIL` line anywhere in either log
+except the string of the canary that asserts a recorded failure is reported rather than counted.
+
+**`[UNVERIFIED]`, carried forward.** Everything the readiness checklist names: dashboards reviewed by the on-call
+person, every alarm fired *in staging*, every runbook walked by a non-author, a timed rollback against real
+infrastructure, the synthetic probe running outside the fleet, a 30-day rotation staffed, the kill switch thrown
+from a real phone, and a cost dashboard showing actuals rather than a projection. Plus the pre-existing owner
+steps: GitHub 2FA, the Supabase CIDR, the Turnkey provider rate, real image digests, provider credentials for
+`terraform apply`, the domain and Cloudflare delegation, `PGM_TELEGRAM_BOT_TOKEN`, the BotFather Mini App URL,
+real-phone acceptance — and the $50/72 h canary, which stays blocked while the P14 gate reads NO-GO.

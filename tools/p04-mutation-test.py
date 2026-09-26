@@ -61,8 +61,13 @@ MUTANTS: list[tuple[str, str, str, str, bool]] = [
      "    limits = Limits(max_order_notional_micro=f.max_order_notional_micro,",
      "    limits = LIMITS or Limits(max_order_notional_micro=0,", False),
     # --- idempotency ----------------------------------------------------------------
+    # P15: the anchor named `x_user_id` and stopped matching in P12, when the order route took to calling the
+    # principal `uid`. `make check` was not run end to end between P12 and P15 (each phase's own gate was), so
+    # the harness reported it as a broken anchor the first time it ran, which is exactly what a mutation harness
+    # is for: the alternative — skipping a mutant whose anchor is gone — would have shrunk the proof set in
+    # silence. Anchors are text, so they rot; this one is re-anchored rather than relaxed.
     ("key-not-released", "services/api/app.py",
-     '    except (ScaleError, KeyError, ValueError, TypeError):\n        idem.abandon(x_user_id, idempotency_key)\n        return err("BAD_AMOUNT", rid)',
+     '    except (ScaleError, KeyError, ValueError, TypeError):\n        idem.abandon(uid, idempotency_key)\n        return err("BAD_AMOUNT", rid)',
      '    except (ScaleError, KeyError, ValueError, TypeError):\n        return err("BAD_AMOUNT", rid)', False),
     ("insert-not-upsert", "services/api/app.py",
      "    if existing:", "    if False and existing:", False),
@@ -113,13 +118,34 @@ MUTANTS: list[tuple[str, str, str, str, bool]] = [
 
 
 def make_copy(dst: Path) -> None:
+    """A copy that is a checkout, not a directory of files.
+
+    Three of the gate's checks ask git about *history* (the secret scan's exemption liveness, `git grep` for the
+    tracked-file scan) and one test asks it about the *revision* (`tests/test_p15_drain_guard.py` requires the
+    deploy ledger to name a commit that exists here). A tree that was only `git init`-ed has an unborn HEAD: the
+    first three checks fail as "not in this repository" and the ledger test sees an empty hash, so the BASELINE
+    never passes and no mutant can be judged. Cloning first gives the copy the real history and a born HEAD; the
+    working tree — including whatever the phase in progress has not committed yet — is then laid over it.
+    """
     def ignore(dirpath: str, names: list[str]) -> set[str]:
         return {n for n in names if n in SKIP_DIRS}
-    shutil.copytree(ROOT, dst, ignore=ignore)
-    # The gate's secret scan uses `git grep`, which needs an index. Initialising one in the copy keeps that
-    # check honest; without it, `git grep` errors and a naive scan reports "clean".
-    for cmd in (["git", "init", "-q"], ["git", "add", "-A"]):
-        subprocess.run(cmd, cwd=str(dst), capture_output=True, text=True, check=False)
+    clone = None
+    for extra in (["--local"], ["--shared"]):
+        # `--local` hardlinks the object store, which is the fastest and the default — but hardlinks cannot
+        # cross a filesystem boundary and this harness copies into the scratch filesystem (a tmpfs here), so the
+        # fallback is `--shared`: the copy reads the source's objects through an alternates file instead of
+        # copying them. Neither touches the source; the copy is deleted after its gate run.
+        clone = subprocess.run(["git", "clone", "--quiet", *extra, str(ROOT), str(dst)],
+                               capture_output=True, text=True, check=False)
+        if clone.returncode == 0:
+            break
+    if clone is None or clone.returncode != 0:
+        raise SystemExit("cannot clone %s for the mutation harness: %s" % (ROOT, (clone.stderr if clone else "")[:300]))
+    shutil.copytree(ROOT, dst, dirs_exist_ok=True, ignore=ignore)
+    # `git grep` reads the index, so it has to describe the working tree the gate is about to scan (the phase in
+    # progress is exactly the case this harness exists for). The clone supplies HEAD; this refreshes what is
+    # staged on top of it.
+    subprocess.run(["git", "add", "-A"], cwd=str(dst), capture_output=True, text=True, check=False)
 
 
 def run_gate(dst: Path, full: bool) -> tuple[int, str]:

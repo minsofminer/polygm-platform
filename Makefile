@@ -81,6 +81,9 @@ seed-sql-apply:      ## apply the generated Postgres seed through $PGM_DB_URL
 dev-data:
 	docker compose --profile devdata up seed
 
+seed-sql-check:  ## the generated seed must be current (it rotted silently from P10 to P15)
+	$(PY) services/api/seed.py --check
+
 seed-sql:      ## regenerate db/seed.sql from services/api/seed.py
 	$(PY) services/api/seed.py --emit-sql
 
@@ -302,8 +305,25 @@ p13-soak:                 ## D5's 30-minute clause on its own, with the artifact
 web-deps:
 	@cd web && { [ -d node_modules ] || npm ci --no-audit --no-fund; }
 
+# The product's build is Turbopack (`next build`), and on this box that build is killed by the OOM killer
+# (exit 137) *before* its type check runs — which is how a page module exporting a helper it may not export went
+# unnoticed for four phases: the only thing that would have caught it (`next build`) dies for an unrelated reason,
+# and the CI job that also would have has not run yet. Two consequences, both written down here rather than
+# discovered again:
+#
+#   * `WEB_BUILD_FLAGS=--webpack` builds with webpack instead: same compile, same type check, different chunking.
+#     It is how the type error above was finally read, and it is a *diagnostic*, not a substitute.
+#   * when WEB_BUILD_FLAGS is set, `npm run measure` is SKIPPED on purpose. The first-load budget (200 KB) is a
+#     property of the product's own build; chunking differences move these numbers by ~15 KB, and a measurement of
+#     a different build configuration must never be written into docs/verification/P08-bundle.txt as this
+#     repository's evidence.
+#
+# Needs roughly 2 GB of headroom. `make check` therefore cannot complete on a 2 GB box: web-build is the one
+# target that stops it, and the limit is the box, not the code.
 web-build: web-deps
-	@cd web && npm run build && npm run measure
+	@cd web && npm run build -- $(WEB_BUILD_FLAGS)
+	@if [ -z "$(WEB_BUILD_FLAGS)" ]; then cd web && npm run measure; \
+	 else echo "web-build: WEB_BUILD_FLAGS set — first-load measurement skipped (it must come from the product's build)"; fi
 
 p01:
 	$(PY) tools/p01-gate-check.py
@@ -356,10 +376,51 @@ infra-plan:
 	$(TF) -chdir=infra/terraform init -input=false
 	$(TF) -chdir=infra/terraform plan -input=false -out=infra/terraform/polygm.tfplan
 
+p15-migrations:             ## D3: expand-contract only — the migrations in the change set, and the twin
+	$(PY) tools/p15-migration-check.py --since "$${PGM_DEPLOY_SINCE:-origin/main}"
+
+p15-pipeline:               ## D3: the pipeline's shape, and the self-test that proves each rule can fail
+	$(PY) tools/p15-pipeline-check.py
+	$(PY) tools/p15-pipeline-check.py --self-test
+
+p15-cicd: p15-pipeline      ## D3: the pipeline shape plus the drain guard and the ledger drills
+	$(PY) -m pytest tests/test_p15_pipeline.py tests/test_p15_drain_guard.py -q
+
+p15-ops:                    ## D4: the four pillars, the ops surfaces, and the drift arithmetic
+	$(PY) -m pytest tests/test_p15_ops_api.py -q
+
+p15-alerts:                 ## D5: the alarm registry, its links both ways, and the page budget
+	$(PY) tools/p15-alerts.py --check
+
+p15-alerts-drill:           ## D5/D9: fire every page-class alarm on purpose, against a seeded database
+	$(PY) tools/p15-alert-drill.py --record
+
+p15-runbooks:               ## D6: the pages are procedures — sections, real paths, real flags, recent drills
+	$(PY) tools/p15-runbooks-check.py
+	$(PY) tools/p15-runbooks-check.py --self-test
+
+p15-restore:                ## D7: snapshot, restore through the migration runner, verify the money sums
+	$(PY) tools/p15-restore-drill.py --transcript docs/verification/P15-restore-drill.txt --no-record
+
+p15-cost:                   ## D8: the envelope, and the drift between config, doc and Terraform
+	$(PY) tools/p15-cost.py --check
+
+p15-dashboards:             ## D4: three phone-shaped pages, one read, no external requests
+	$(PY) tools/p15-dashboards.py --check
+
+p15-readiness:              ## D9: what the artefacts prove, and what is still an owner step
+	$(PY) tools/p15-readiness.py
+
+p15: p15-migrations p15-alerts p15-runbooks p15-cost p15-dashboards   ## P15: everything this phase can prove without a provider account
+	$(PY) tools/p15-pipeline-check.py
+	$(PY) tools/p15-pipeline-check.py --self-test
+	$(PY) -m pytest tests/test_p15_migrations.py tests/test_p15_ops_api.py tests/test_p15_pipeline.py \
+		tests/test_p15_drain_guard.py tests/test_p15_alerts.py tests/test_p15_drill.py -q
+
 infra-check: infra-envs infra-fmt infra-validate
 	@echo "INFRA GREEN"
 
-check: test lint lint-canary openapi-selftest sql-sqlite-check gate gate-mutate p01 p02 p03 p04 p05 p06 p07 p08 p09 p10 p12 p12-selftest p13-read infra-check probe-fresh
+check: test lint lint-canary openapi-selftest sql-sqlite-check seed-sql-check gate gate-mutate p01 p02 p03 p04 p05 p06 p07 p08 p09 p10 p12 p12-selftest p13-read infra-check p15-migrations p15-pipeline p15-alerts p15-runbooks p15-cost p15-dashboards probe-fresh
 	@echo "ALL GREEN"
 
 # ------------------------------------------------------------------ diagnostics

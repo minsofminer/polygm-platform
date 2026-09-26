@@ -18,7 +18,8 @@
  * Writes docs/verification/P10-perf.txt. Re-run with `npm run measure:tape`.
  */
 import { build } from "esbuild";
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -125,7 +126,28 @@ const report = [
   `budget: mean per second <= ${budgetSecond.toFixed(1)} ms and worst release <= ${FRAME_MS.toFixed(1)} ms`,
   `status: ${meanSecond <= budgetSecond && maxFlushMs <= FRAME_MS ? "pass" : "fail"}`,
   "",
+  `sources-sha256: ${sourcesSha()}`,
 ];
+
+
+/**
+ * The three files this artefact describes, hashed.
+ *
+ * Same reason as `measure-first-load.mjs`: judged by mtime, this record was invalidated by nothing more than a
+ * `git checkout` (every file gets touched) and confirmed by nothing more than a later write. The hash is a claim
+ * about *content*, so `tools/p10-gate-check.py` can fail on drift and stay quiet on a re-checkout.
+ */
+function sourcesSha() {
+  const files = ["src/terminal/tape.ts", "scripts/measure-tape-budget.mjs", "src/terminal/perf.test.ts"].sort();
+  const h = createHash("sha256");
+  for (const rel of files) {
+    h.update(rel);
+    h.update("\0");
+    h.update(readFileSync(path.join(ROOT, rel)));
+    h.update("\0");
+  }
+  return h.digest("hex").slice(0, 16);
+}
 
 mkdirSync(path.dirname(OUT), { recursive: true });
 writeFileSync(OUT, report.join("\n"));

@@ -1,0 +1,427 @@
+# P15 D5 — the alarm registry: one place where an alarm's meaning, its threshold, its owner and its runbook live.
+#
+# `tools/p15-alerts.py --check` reads this file, refuses to let it drift from the runbooks, and evaluates every
+# rule against a captured metrics payload. The kit's rule is the reason this is a file and not a wall of YAML in
+# somebody's monitoring console: **an alarm without a runbook and an owner gets deleted**, and that rule is only
+# enforceable if the alarm, the runbook and the owner are in the same reachable place.
+#
+# Where a rule's fact comes from (`source:`), because "the alarm exists" and "the alarm can be evaluated" are
+# different claims:
+#
+#   metrics   the `/v1/admin/metrics` payload — the same read the dashboards render, so the colour on the screen
+#             and the page on the phone cannot disagree
+#   synthetic the external probe's state file (`tools/p15-synthetic.py`), which is the only signal that proves the
+#             product works end-to-end rather than that its parts answer
+#   budgets   our declared venue buckets (`services/ingest/net.py`) against the counters we have actually spent
+#             (`rate_counters`) — the remaining-budget read the kit asks for
+#   host      a fact about the box itself (disk, and cache age where a cache is reachable)
+#   tool      another tool's exit code (the cost projector, the dependency scan, a post-deploy smoke watch)
+#
+# Missing-metric policy: a rule whose path is absent from the payload is an ERROR, not a silence. The one
+# exception is a map key that legitimately means zero when absent (`rejectionsByReason.THROTTLED` before the first
+# throttled order), and a rule must say `missing: zero` to get it. `--check` fails on any rule whose metric path is
+# missing from the sample payload unless the rule declares that policy.
+
+version: 1
+docs: docs/P15-alerting.md
+dashboards: tools/p15-dashboards.py
+
+budget:
+  pages_per_week_max: 3
+  # The sum of the rules' own estimates below. It is a claim the checker recomputes: an alarm added without a
+  # number is an alarm nobody counted, and a budget that is not summed is a slogan.
+  note: >
+    SEV1 and SEV2 pages count here; SEV3 tickets do not, because the kit's budget is about waking people up.
+
+routes:
+  page_now:
+    channel: telegram-oncall
+    repeat_after_ms: 300000
+    description: >
+      a DM to the on-call, repeated every five minutes until acknowledged, with the kill-switch state in every
+      message
+  page_hours:
+    channel: telegram-oncall
+    repeat_after_ms: 14400000
+    description: >
+      a DM to the on-call that is expected to be read within the hour; it does not repeat before then
+  ticket:
+    channel: telegram-ops-log
+    repeat_after_ms: 0
+    description: an entry in the ops channel and a row in the weekly review; nobody is woken
+
+owners:
+  money-path: the engineer who owns the executor, the wallet path and reconciliation (P06/P13)
+  data-plane: the engineer who owns ingest, the tape and freshness (P05)
+  platform: the engineer who owns the hosts, the database and the network (P04/P15 D2)
+  product: whoever owns the user-facing surface, currently the founder (P08..P12)
+  revenue: whoever owns the builder agreement and its numbers (P11/P06)
+  security: the security lead named in docs/P14-security-testing.md
+
+rules:
+  # ---------------------------------------------------------------- SEV1: page now
+  - id: unreconciled-orders
+    severity: SEV1
+    source: metrics
+    metric: money.unreconciled.page
+    op: is_true
+    for_ms: 60000
+    summary: "{money.unreconciled.count} unreconciled order(s), oldest {money.unreconciled.oldestAgeMs|age}, cases {money.unreconciled.byCase}"
+    runbook: docs/runbooks/unreconciled-orders.md
+    owner: money-path
+    route: page_now
+    expected_pages_per_week: 0.1
+    why: >
+      the single most important metric in the system: it is the only one whose meaning is "a user's money may be
+      inconsistent"
+
+  - id: orders-unknown-state
+    severity: SEV1
+    source: metrics
+    metric: money.ordersUnknownState.count
+    op: gt
+    value: 0
+    for_ms: 60000
+    summary: "{money.ordersUnknownState.count} order intent(s) in a blocking state {money.ordersUnknownState.states}"
+    runbook: docs/runbooks/unreconciled-orders.md
+    owner: money-path
+    route: page_now
+    expected_pages_per_week: 0.1
+    why: >
+      an intent stuck in submitting/uncertain is exactly the state where we do not know whether an order exists
+
+  - id: kill-switch-engaged
+    severity: SEV1
+    source: metrics
+    metric: killSwitch.engaged
+    op: is_true
+    summary: "the kill switch is engaged: {killSwitch.reason} (for {killSwitch.engagedForMs|age})"
+    runbook: docs/runbooks/kill-switch.md
+    owner: money-path
+    route: page_now
+    expected_pages_per_week: 0.1
+    why: >
+      engaging it is the answer to "should I stop trading"; engaged on purpose during a drill needs no page, and
+      engaged without an explanation is the one alarm that means that answer was already given
+
+  - id: executor-down
+    severity: SEV1
+    source: metrics
+    metric: executor.lastBeatAgeMs
+    op: gt
+    value: 90000
+    summary: "the executor has not beaten for {executor.lastBeatAgeMs|age} (state {executor.state})"
+    runbook: docs/runbooks/executor-down.md
+    owner: money-path
+    route: page_now
+    expected_pages_per_week: 0.2
+    why: >
+      90 s is three missed beats: long enough that a slow tick is not a page, short enough that a dead signer is
+      not a mystery
+
+  - id: key-compromise-indicator
+    severity: SEV1
+    source: metrics
+    metric: security.compromiseIndicators24h
+    op: gt
+    value: 0
+    summary: "{security.compromiseIndicators24h} compromise indicator(s) in 24 h: suspends {security.suspensions24h}, revocations {security.revocations24h}"
+    runbook: docs/runbooks/key-compromise.md
+    owner: security
+    route: page_now
+    expected_pages_per_week: 0.05
+    why: >
+      a revocation job or an export-under-investigation suspend is an operator saying "assume the keys are gone"
+
+  - id: withdrawal-spike
+    severity: SEV1
+    source: metrics
+    metric: business.withdrawalSpikeRatio
+    op: gte
+    value: 3.0
+    summary: "withdrawals this hour are {business.withdrawalSpikeRatio}x the daily mean hour ({business.withdrawals24h.count} in 24 h)"
+    runbook: docs/runbooks/withdrawal-spike.md
+    owner: money-path
+    route: page_now
+    expected_pages_per_week: 0.1
+    why: >
+      a spike in withdrawals is the earliest signal of a trust event or a breach: users act before they complain
+
+  - id: all-websocket-sources-dead
+    severity: SEV1
+    source: metrics
+    metric: freshness.feeds[*].silent
+    where: {transport: ws}
+    op: is_true
+    mode: all
+    min_items: 1
+    summary: "every WebSocket source is silent: {freshness.silent}"
+    runbook: docs/runbooks/source-silent.md
+    owner: data-plane
+    route: page_now
+    expected_pages_per_week: 0.05
+    why: >
+      one silent socket is a quiet market; every socket at once is a dead pipe, and the product would otherwise
+      keep quoting yesterday's prices
+
+  - id: builder-code-disabled
+    severity: SEV1
+    source: metrics
+    metric: builderCode.state
+    op: in
+    value: [disabled, unknown]
+    summary: "our builder code is {builderCode.state} (changed {builderCode.changedMs}, rejections {builderCode.rejectCount})"
+    runbook: docs/runbooks/builder-code-disabled.md
+    owner: revenue
+    route: page_now
+    expected_pages_per_week: 0.05
+    why: >
+      volume stays healthy while the revenue stops, which is why this one cannot wait for the weekly report
+
+  - id: deposit-stuck
+    severity: SEV1
+    source: metrics
+    metric: business.stuckDeposits.page
+    op: is_true
+    for_ms: 900000
+    summary: "{business.stuckDeposits.count} deposit(s) seen but not credited, oldest {business.stuckDeposits.oldestAgeMs|age}"
+    runbook: docs/runbooks/stuck-bridge.md
+    owner: money-path
+    route: page_now
+    expected_pages_per_week: 0.1
+    why: >
+      from the user's side an uncredited deposit is indistinguishable from theft, so the threshold is minutes
+
+  - id: synthetic-order-failed
+    severity: SEV1
+    source: synthetic
+    misses: 3
+    summary: "the external synthetic order has missed {misses} times in a row: {detail}"
+    runbook: docs/runbooks/order-path-degradation.md
+    owner: money-path
+    route: page_now
+    expected_pages_per_week: 0.1
+    why: >
+      the check that catches "everything looks green but the product is broken": three misses, because a pager
+      that fires on one lost packet gets muted
+
+  - id: deploy-verification-failed
+    severity: SEV1
+    source: tool
+    tool: tools/p15-smoke.py
+    args: ["--check-state", "/var/lib/polygm/smoke-state.json", "--max-age-s", "3600"]
+    summary: "the last post-deploy watch failed or is too old to mean anything: {tool.output}"
+    runbook: docs/runbooks/rollback.md
+    owner: money-path
+    route: page_now
+    expected_pages_per_week: 0.1
+    why: >
+      a deploy that cannot be verified is a deploy that must be undone; the alarm is the automation saying so out
+      loud. In CI the smoke tool is pointed at a real API (`--api …`), which is the same program with real inputs
+
+  # ---------------------------------------------------------------- SEV2: page in hours
+  - id: source-lagging
+    severity: SEV2
+    source: metrics
+    metric: freshness.feeds[*].lagging
+    op: is_true
+    mode: any
+    min_items: 1
+    summary: "a feed is lagging its own threshold: {freshness.lagging}"
+    runbook: docs/runbooks/source-silent.md
+    owner: data-plane
+    route: page_hours
+    expected_pages_per_week: 0.25
+    why: >
+      the per-source threshold lives with the source (book/tape 3 s, metadata 120 s) and the API applies it; one
+      lagging feed is a UI message and all of them at once is SEV1
+
+  - id: venue-throttling
+    severity: SEV2
+    source: metrics
+    metric: orderPath.rejectionsByReason.THROTTLED
+    op: gte
+    value: 3
+    missing: zero
+    summary: "{orderPath.rejectionsByReason.THROTTLED} order(s) refused by the venue's rate limiter in the last hour"
+    runbook: docs/runbooks/rate-limit-ban.md
+    owner: money-path
+    route: page_hours
+    expected_pages_per_week: 0.2
+    why: >
+      a little throttling is normal at news time; a sustained run is the beginning of a ban and is cheap to stop
+      early
+
+  - id: rate-budget-low
+    severity: SEV2
+    source: budgets
+    used_fraction_gte: 0.8
+    summary: "the {budget.key} bucket is {budget.usedFraction} used ({budget.used}/{budget.limit} in {budget.bucketMs} ms)"
+    runbook: docs/runbooks/rate-limit-ban.md
+    owner: money-path
+    route: page_hours
+    expected_pages_per_week: 0.15
+    why: >
+      our declared bucket against our spent counter: the venue's limits are a fact we wrote down, and the point of
+      the alarm is to react before the venue does
+
+  - id: elevated-rejections
+    severity: SEV2
+    source: metrics
+    metric: orderPath.rejectionsLastHour
+    op: gt
+    value: 25
+    summary: "{orderPath.rejectionsLastHour} rejections in the last hour by reason: {orderPath.rejectionsByReason}"
+    runbook: docs/runbooks/order-path-degradation.md
+    owner: money-path
+    route: page_hours
+    expected_pages_per_week: 0.2
+    why: >
+      an absolute gate, deliberately blunt: the reasons are what matters, and the alert carries them so the first
+      read is the useful one
+
+  - id: order-path-degraded
+    severity: SEV2
+    source: metrics
+    metric: orderPath.hops.endToEnd.p99
+    op: gt
+    value: 8000
+    summary: "order path end-to-end p99 is {orderPath.hops.endToEnd.p99|age} (p50 {orderPath.hops.endToEnd.p50|age}, p95 {orderPath.hops.endToEnd.p95|age})"
+    runbook: docs/runbooks/order-path-degradation.md
+    owner: money-path
+    route: page_hours
+    expected_pages_per_week: 0.2
+    why: >
+      p99 rather than p50: a queue shows up at the tail first, and the tail is what a user experiences as a hung
+      button
+
+  - id: wallet-provider-degraded
+    severity: SEV2
+    source: metrics
+    metric: orderPath.rejectionsByReason.WALLET_PROVIDER_ERROR
+    op: gte
+    value: 3
+    missing: zero
+    summary: "the signing provider refused or timed out {orderPath.rejectionsByReason.WALLET_PROVIDER_ERROR} time(s) in the last hour"
+    runbook: docs/runbooks/wallet-provider-outage.md
+    owner: money-path
+    route: page_hours
+    expected_pages_per_week: 0.15
+    why: >
+      the provider failing is SEV1 when it stops trading and SEV2 while it only costs orders; the count is what
+      tells the two apart
+
+  - id: withdrawal-delayed
+    severity: SEV2
+    source: metrics
+    metric: business.withdrawalsInFlight.oldestAgeMs
+    op: gt
+    value: 900000
+    summary: "{business.withdrawalsInFlight.count} withdrawal(s) in flight, oldest {business.withdrawalsInFlight.oldestAgeMs|age}"
+    runbook: docs/runbooks/stuck-bridge.md
+    owner: money-path
+    route: page_hours
+    expected_pages_per_week: 0.2
+    why: >
+      a user's exit taking a quarter of an hour is a support ticket; taking an hour is a trust event
+
+  - id: telegram-delivery-failing
+    severity: SEV2
+    source: metrics
+    metric: business.telegram.failed24h
+    op: gte
+    value: 5
+    summary: "{business.telegram.failed24h} notification(s) failed to deliver in 24 h ({business.telegram.delivered24h} delivered)"
+    runbook: docs/runbooks/telegram-restricted.md
+    owner: product
+    route: page_hours
+    expected_pages_per_week: 0.1
+    why: >
+      delivery is a product feature and a paging channel: if the channel we page through is broken, the pages are
+      the symptom
+
+  - id: queue-depth-high
+    severity: SEV2
+    source: metrics
+    metric: orderPath.intentsByState.queued
+    op: gt
+    value: 200
+    missing: zero
+    summary: "{orderPath.intentsByState.queued} intents queued for the executor"
+    runbook: docs/runbooks/cache-queue-age.md
+    owner: money-path
+    route: page_hours
+    expected_pages_per_week: 0.15
+    why: >
+      a queue that grows is either a dead consumer or a market moving faster than we can place; both are visible
+      here first
+
+  - id: cache-age-high
+    severity: SEV2
+    source: host
+    probe: cache_age_ms
+    op: gt
+    value: 300000
+    summary: "the cache is serving entries {host.cache_age_ms} ms old at a {host.cache_hit_rate} hit rate"
+    runbook: docs/runbooks/cache-queue-age.md
+    owner: platform
+    route: page_hours
+    expected_pages_per_week: 0.1
+    why: >
+      age and hit rate together: a stale cache that is still hitting is the combination that looks healthy
+
+  # ---------------------------------------------------------------- SEV3: ticket
+  - id: p99-degraded
+    severity: SEV3
+    source: metrics
+    metric: orderPath.hops.endToEnd.p99
+    op: gt
+    value: 3000
+    summary: "order path p99 is {orderPath.hops.endToEnd.p99|age} — degraded, not broken"
+    runbook: docs/runbooks/order-path-degradation.md
+    owner: money-path
+    route: ticket
+    expected_pages_per_week: 0
+    why: >
+      the slow tail nobody is paged for: exactly the trend a review should look at before it becomes SEV2
+
+  - id: disk-filling
+    severity: SEV3
+    source: host
+    probe: disk_used_fraction
+    op: gt
+    value: 0.85
+    summary: "{host.disk_mount} is {host.disk_used_fraction} full ({host.disk_free_gb} GB free)"
+    runbook: docs/runbooks/cost-spike.md
+    owner: platform
+    route: ticket
+    expected_pages_per_week: 0
+    why: >
+      disks fill slowly and then suddenly; the ticket is the chance to act while it is still slow
+
+  - id: cost-spike
+    severity: SEV3
+    source: tool
+    tool: tools/p15-cost.py
+    args: ["--project", "--gate"]
+    summary: "the projected monthly spend crossed a budget gate: {tool.output}"
+    runbook: docs/runbooks/cost-spike.md
+    owner: platform
+    route: ticket
+    expected_pages_per_week: 0
+    why: >
+      cost is the one failure this project has actually budgeted for, so the projection is checked as a number
+      rather than remembered as a principle
+
+  - id: dependency-vulnerability
+    severity: SEV3
+    source: tool
+    tool: tools/dependency-scan.py
+    args: ["--json"]
+    summary: "the dependency scan reports an advisory: {tool.output}"
+    runbook: docs/runbooks/dependency-cve.md
+    owner: security
+    route: ticket
+    expected_pages_per_week: 0
+    why: >
+      a scanner nobody reads is a scanner that exists for the audit rather than for the product

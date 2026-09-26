@@ -141,6 +141,17 @@ class WalletBase(unittest.TestCase):
             self.con.commit()
         return out["id"], addr
 
+    def _live_ms(self) -> int:
+        """The clock at the MOMENT a code is computed — never `self.now`.
+
+        `self.now` is the fixture's frozen instant (right for row timestamps), but a TOTP code is valid for a
+        window: computing one from a timestamp captured earlier and presenting it after the test has done some
+        work is exactly how an authenticator's code goes stale. Under load that window gets missed, and the
+        failure lands on whichever test happened to be slow — which is a property of the test machine, not of
+        the product.
+        """
+        return int(time.time() * 1000)
+
     def arm_totp(self, uid=None):
         """Enrol and verify, through the routes: the secret is only readable in the enrol response, and computing a
         code against a fixture-invented secret would test this file instead of the product.
@@ -149,22 +160,41 @@ class WalletBase(unittest.TestCase):
         records the step it accepted, so arming with "now" leaves a spend at "now" indistinguishable from a replay
         whenever the test happens to cross a 30-second boundary. Arming one window back makes the spend strictly
         newer than the accepted step, every run, without weakening what is being tested: the replay guard itself is
-        asserted below with the arming code."""
+        asserted below with the arming code.
+
+        Two guards against the window race, both of which are about the TEST's clock rather than the product's:
+        the code comes from the live clock a moment before the request, and if the window is missed anyway (a
+        loaded machine can step past it between two calls in the same process) the enrollment is simply repeated
+        — a fresh enrollment, a fresh secret and a fresh window. The assertion still holds: the product must
+        accept a correct code for the window it is in, or this fails loudly. The ±1-step tolerance is asserted on
+        its own in `tests/test_security_core.py`, so nothing here depends on the retry.
+        """
         from polygm_core.security import totp
         h = self.h(uid)
-        r = self.client.post("/v1/auth/totp/enroll", json={}, headers=h)
-        self.assertEqual(r.status_code, 200, r.text)
-        secret = r.json()["secret"]
-        code = totp.code_for(secret, self.now - totp.PERIOD_S * 1000)
-        v = self.client.post("/v1/auth/totp/verify", json={"code": code}, headers=h)
-        self.assertEqual(v.status_code, 200, v.text)
-        self.armed_code_at = self.now - totp.PERIOD_S * 1000
+        last = None
+        for _attempt in range(3):
+            r = self.client.post("/v1/auth/totp/enroll", json={}, headers=h)
+            self.assertEqual(r.status_code, 200, r.text)
+            secret = r.json()["secret"]
+            now = self._live_ms()
+            for steps_back in (1, 0):
+                code = totp.code_for(secret, now - steps_back * totp.PERIOD_S * 1000)
+                v = self.client.post("/v1/auth/totp/verify", json={"code": code}, headers=h)
+                if v.status_code == 200:
+                    self.armed_code_at = now - steps_back * totp.PERIOD_S * 1000
+                    return secret
+                last = v
+        self.assertEqual(last.status_code, 200, last.text if last is not None else "no response")
         return secret
 
     def code(self, secret, *, steps=0):
-        """A code for the spend window: `steps=0` is now, `steps=-1` is the code that armed the factor."""
+        """A code for the spend window: `steps=0` is now, `steps=-1` is the code that armed the factor.
+
+        Computed from the live clock (see `_live_ms`), so the gap between making the code and presenting it is the
+        request itself rather than however long the rest of the test took.
+        """
         from polygm_core.security import totp
-        return totp.code_for(secret, self.now + steps * totp.PERIOD_S * 1000)
+        return totp.code_for(secret, self._live_ms() + steps * totp.PERIOD_S * 1000)
 
     def key_material(self, uid=None):
         uid = uid or self.uid

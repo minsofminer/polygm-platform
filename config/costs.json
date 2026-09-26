@@ -1,0 +1,64 @@
+{
+  "_note": "P15 D8 — the cost envelope, with every number carrying where it came from. This file is the single source of truth for the arithmetic in docs/P15-deployment.md (D2), docs/P15-cost.md and infra/terraform/outputs.tf; tools/p15-cost.py --check fails if the three disagree, because three copies of a number is how a budget becomes a rumour.",
+  "currency": "USD",
+  "as_of": "2026-09-23",
+  "envelope_usd_per_month": 300,
+  "gates": [0.5, 0.8, 1.0],
+  "sources": {
+    "hetzner": "hetzner.com published pricing, cross-checked against three resellers during P15 D2; the EU CPX22 rises on 2026-04-01 and the post-rise price is the one budgeted",
+    "neon": "Neon Launch $0.106/CU-hour and $0.35/GB-month, published; 1 CU = 1 vCPU / 4 GB; no monthly minimum since Dec 2025",
+    "upstash": "Upstash PAYG $0.20 per 100k commands after the free tier; the range is the launch traffic estimate, not provider variance",
+    "cloudflare": "R2 $0.015/GB-month with free egress; the free tier covers 10 GB, so the backup bucket is nearly free at launch",
+    "managed_extras": "Sentry and Grafana Cloud free tiers at launch; the 10x column budgets the team plan"
+  },
+  "scenarios": {
+    "launch": {
+      "label": "≈5k DAU, 200 tracked markets, one engineer",
+      "lines": [
+        {"id": "hetzner-api", "what": "API + ingest + Caddy + pgbouncer", "size": "1 × CPX32 (4 vCPU/8 GB, FSN1)",
+         "amount": 12.0, "unit": "server/month", "verified": false,
+         "note": "[UNVERIFIED exact] — post-2026-04-01 EU pricing, interpolated between two published sizes; terraform plan prints the real number at apply time"},
+        {"id": "hetzner-executor", "what": "executor + signer + reconciler (no ingress)", "size": "1 × CPX22 (2 vCPU/4 GB)",
+         "amount": 9.0, "unit": "server/month", "verified": true},
+        {"id": "neon-postgres", "what": "Postgres, 1 CU always-on (suspend disabled: a cold connection on the money path is an outage)",
+         "size": "730 h × $0.106", "amount": 77.38, "unit": "CU-hour", "verified": true},
+        {"id": "upstash-redis", "what": "cache, queue and locks", "size": "5–15 M commands/month",
+         "amount": 20.0, "range": [10.0, 30.0], "unit": "commands", "verified": true},
+        {"id": "r2-backups", "what": "encrypted nightly dumps", "size": "~30 GB", "amount": 1.0, "unit": "GB-month", "verified": true},
+        {"id": "tls-cdn", "what": "TLS, CDN, WAF, DNS", "size": "Cloudflare free + Caddy", "amount": 0.0, "unit": "—", "verified": true},
+        {"id": "errors-dashboards", "what": "error tracking + dashboards", "size": "Sentry + Grafana free tiers",
+         "amount": 0.0, "unit": "—", "verified": true, "note": "the 10x column budgets the team plan instead"}
+      ]
+    },
+    "10x": {
+      "label": "≈50k DAU, 2,000 tracked markets",
+      "lines": [
+        {"id": "hetzner-api", "what": "API + ingest behind a load balancer", "size": "3 × CPX32 + LB11",
+         "amount": 48.0, "unit": "server/month", "verified": false,
+         "note": "[UNVERIFIED exact] — three interpolated CPX32 prices plus the LB11 hourly rate"},
+        {"id": "hetzner-executor", "what": "executors partitioned by wallet", "size": "2 × CPX22", "amount": 18.0,
+         "unit": "server/month", "verified": true},
+        {"id": "neon-postgres", "what": "2 CU + 1 CU analytics replica (the ceiling move written down in D2)",
+         "size": "730 h × 2 CU + replica", "amount": 167.0, "unit": "CU-hour", "verified": true},
+        {"id": "cache", "what": "self-hosted Valkey rather than Upstash at this volume", "size": "1 × CPX22",
+         "amount": 9.0, "unit": "server/month", "verified": true},
+        {"id": "r2-backups", "what": "encrypted nightly dumps", "size": "~120 GB", "amount": 2.0,
+         "unit": "GB-month", "verified": true},
+        {"id": "tls-cdn", "what": "TLS, CDN, WAF, DNS", "size": "Cloudflare free", "amount": 0.0, "unit": "—", "verified": true},
+        {"id": "errors-dashboards", "what": "error tracking team plan", "size": "Sentry team", "amount": 26.0,
+         "unit": "—", "verified": false,
+         "note": "[UNVERIFIED price] — this line is why the 10x total is a planning figure rather than a quote"}
+      ]
+    }
+  },
+  "cut_order": [
+    "analytics retention: shorten the rollup window — analysis is the cheapest thing to lose and nothing user-facing reads it",
+    "long-tail market tracking: stop polling markets nobody trades (one flag, recorded with a reason in flag_audit)",
+    "never: the executor, the money path, the ledger, or their backups — a cheap money path is an expensive incident"
+  ],
+  "scaling_plan": {
+    "1k_users": "1 × CPX32 + Neon 1 CU + Upstash: ~$119/month (the launch column)",
+    "10k_users": "2 × CPX32 + the same Neon shape, cache self-hosted on the second box: ~$150/month",
+    "100k_users": "the 10x column, ~$270/month, with Neon capped at 2 CU + a replica and the analytics tape trimmed to 30 days"
+  }
+}

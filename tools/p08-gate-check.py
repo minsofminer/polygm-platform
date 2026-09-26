@@ -24,6 +24,7 @@ every time nobody runs the gate.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -636,15 +637,39 @@ def c7_no_secret_can_reach_the_bundle_and_the_frame_is_csp_per_surface(ctx) -> t
 
 
 # ------------------------------------------------------------------------------------------ c8  measured
+
+def bundle_source_hash(web: Path) -> str:
+    """The files the first-load numbers describe: everything under `src/` and `app/`, plus what decides the build."""
+    files = [p for d in ("src", "app") for p in (web / d).rglob("*") if p.is_file()]
+    files += [p for p in (web / "package.json", web / "next.config.mjs", web / "scripts" / "measure-first-load.mjs")
+              if p.is_file()]   # a canary fixture tree holds only what the canary needs; a hash that insists on
+                                 # files a fixture does not have turns every canary into a crash, and a crashed
+                                 # canary is indistinguishable from a scan that cannot fail
+    h = hashlib.sha256()
+    for p in sorted(files, key=lambda q: q.relative_to(web).as_posix()):
+        h.update(p.relative_to(web).as_posix().encode())
+        h.update(b"\0")
+        h.update(p.read_bytes())
+        h.update(b"\0")
+    return h.hexdigest()[:16]
+
+
 def bundle_findings(text: str, web: Path, artefact: Path) -> list:
     out = []
     if not text.strip():
         return ["docs/verification/P08-bundle.txt is missing — `npm run measure` writes it"]
-    newest_src = max((f.stat().st_mtime for _r, f in
-                      [(None, p) for d in ("src", "app") for p in (web / d).rglob("*") if p.is_file() and p.suffix in (".ts", ".tsx", ".css")]),
-                     default=0)
-    if artefact.exists() and artefact.stat().st_mtime + 1 < newest_src:
-        out.append("the measurement is older than the newest source file — it describes a build that no longer exists")
+    # A hash of the sources, not their timestamps. The mtime rule that used to live here ("the record must be
+    # newer than the newest source file") passed for five phases while three routes were over budget: a checkout
+    # touches every file, so *newer* stopped meaning *true*, and the artefact was never re-measured because it
+    # looked current. Two P15 checks were failing on that rule for the opposite reason at the same time. The
+    # record now states which sources it measured; this recomputes and compares.
+    want = bundle_source_hash(web)
+    said = re.search(r"sources-sha256:\s*([0-9a-f]{16})", text)
+    if not said:
+        out.append("the artefact carries no `sources-sha256` line, so nothing in it says which sources it measured")
+    elif said.group(1) != want:
+        out.append("the artefact describes different sources (it says %s, the tree hashes to %s) — re-run `npm run build && npm run measure`"
+                   % (said.group(1), want))
     if "status: pass" not in text:
         out.append("the artefact does not say `status: pass` (it says: %s)"
                    % (text.strip().splitlines()[-1][:80] if text.strip() else "empty"))
@@ -664,6 +689,19 @@ def bundle_findings(text: str, web: Path, artefact: Path) -> list:
             out.append("%s is %s KB against a %d KB budget" % (route, kb, limit))
     if "route-level splitting: proven" not in text:
         out.append("the artefact does not carry the splitting verdict line")
+    # What the budget is a budget *of*, asserted rather than assumed. This check was passing on a record written
+    # in the P08 era while the tree had grown past 200 KB on three routes: the number was stale, the artefact's
+    # mtime was newer than every source file, and nothing in it had to say what it measured. So the line has to
+    # name its scope (`first-party JS`), and the one script that is deliberately outside it — Telegram's platform
+    # bridge, which the Mini App cannot work without and we do not build — has to be named, with its size, and
+    # with the reason it is excluded. A new third-party script cannot be moved across that line quietly.
+    if "first-party JS" not in text:
+        out.append("the budget line does not say what it budgets: it must read `200 KB of first-party JS`")
+    if "platform bridge" in text:
+        if "excluded from the budget" not in text or "telegram.org/js/telegram-web-app.js" not in text:
+            out.append("a platform bridge is measured but the artefact does not name what was excluded and why")
+        if not re.search(r"platform bridge ([\d.]+) KB", text):
+            out.append("the platform bridge is mentioned without a measured size")
     return out
 
 
@@ -1461,10 +1499,22 @@ def self_test() -> int:
         web = d / "web"
         fixture(web, "src/num/Number.tsx", "export const x = 1;\n")
         art = d / "bundle.txt"
-        art.write_text("budget for the initial route: 200 KB of JS\n  /  http 200 -> / · 10 chunk(s) · JS 300.0 KB · CSS 3 KB · money layer absent\n  /markets  http 200 -> /markets · 11 chunk(s) · JS 10 KB · CSS 3 KB · money layer present\n")
-        os.utime(art, (time.time() - 4000, time.time() - 4000))
+        art.write_text("budget for the initial route: 200 KB of first-party JS\n"
+                       "sources-sha256: 0000000000000000\n"
+                       "  /  http 200 · 10 chunk(s) · JS 300.0 KB · CSS 3 KB · money layer absent\n"
+                       "  /markets  http 200 · 11 chunk(s) · JS 10 KB · CSS 3 KB · money layer present\n")
         got = bundle_findings(read(art), web, art)
-        return any("older than" in g for g in got) and any("300.0" in g for g in got), got
+        staleness = any("describes different sources" in g for g in got) and any("300.0" in g for g in got)
+        # ...and the policy half: a measured platform bridge with no named exclusion is a finding, not a footnote.
+        art.write_text(
+            "budget for the initial route: 200 KB of first-party JS\n"
+            "  /  http 200 \u00b7 9 chunk(s) \u00b7 JS 10.0 KB \u00b7 CSS 3 KB \u00b7 money layer absent"
+            " \u00b7 platform bridge 18.0 KB (not budgeted)\n"
+            "  /markets  http 200 \u00b7 10 chunk(s) \u00b7 JS 10 KB \u00b7 CSS 3 KB \u00b7 money layer present\n"
+            "route-level splitting: proven\nstatus: pass\n")
+        got2 = bundle_findings(read(art), web, art)
+        policy = any("does not name what was excluded" in g for g in got2)
+        return staleness and policy, got + got2
 
     @canary
     def c7_assert_env():

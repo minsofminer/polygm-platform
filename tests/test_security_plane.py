@@ -954,39 +954,93 @@ class TestConnectionProxySurvivesThreadChurn(RouteBase):
 
     def test_every_thread_gets_its_own_connection_and_churn_does_not_break_it(self):
         import threading
-        seen: list[tuple[int, int]] = []
+        # `seen` is keyed by the *worker slot*, never by `threading.get_ident()`.
+        #
+        # The first version of this test keyed the observation on the ident and flaked under CPU contention
+        # (`make p06` on a loaded box: "a thread was handed more than one connection: {…: 2}"). The observation
+        # was wrong, not the proxy: an ident is recycled the moment a thread exits, and this test deliberately
+        # overlaps two waves so that second-wave threads start as first-wave threads die — exactly the reuse the
+        # docstring above says the fix is about. Under load the second wave is created *after* the first wave has
+        # already exited, the recycled ident collects two threads' connections, and the map reports the
+        # double-handout it was looking for where none happened. Keying on the slot observes the property that
+        # actually matters — *this* worker was handed exactly one connection — and the last two assertions check
+        # the mechanism in the implementation instead of inferring it from thread numbers.
+        slots: list[tuple[int, int]] = []
         errors: list[str] = []
         barrier = threading.Barrier(8)
 
-        def worker() -> None:
+        def worker(slot: int) -> None:
             try:
                 barrier.wait(timeout=5)
                 for _ in range(20):
                     c = self.app._db._conn()
                     c.execute("SELECT 1").fetchone()
-                    seen.append((threading.get_ident(), id(c)))
+                    slots.append((slot, id(c)))
+                # Attribution, asked from the thread that owns the connection. An entry that names some *other*
+                # live thread answers every liveness question a reap asks and is only visible from here — the
+                # first version of this assertion ran on the main thread, where `main_thread()` and
+                # `current_thread()` are the same object, and the mutant that plants exactly this misattribution
+                # survived it. Nothing about the registry is worth asserting from a thread that isn't in it.
+                if not any(t is threading.current_thread() and c is self.app._db._conn()
+                           for t, c in self.app._db._live):
+                    errors.append("slot %d: its connection is registered against another thread" % slot)
             except Exception as e:                                        # noqa: BLE001 - the point of the test
                 errors.append("%s: %s" % (type(e).__name__, e))
 
         # Two waves, so the second wave starts while the first wave's threads are exiting: that overlap is
         # exactly where an ident gets reused.
-        threads = [threading.Thread(target=worker) for _ in range(16)]
+        threads = [threading.Thread(target=worker, args=(i,), name="churn-%d" % i) for i in range(16)]
         for t in threads[:8]:
             t.start()
         for t in threads[8:]:
             t.start()
         for t in threads:
             t.join(timeout=20)
+        self.assertEqual([t.name for t in threads if t.is_alive()], [], "a worker did not finish")
         self.assertEqual(errors, [], "thread churn broke the connection proxy: %s" % errors[:3])
-        self.assertGreater(len(seen), 100)
-        # One connection per *live* thread: distinct ids for distinct threads, and no thread sharing another's.
-        by_thread: dict[int, set[int]] = {}
-        for tid, cid in seen:
-            by_thread.setdefault(tid, set()).add(cid)
-        self.assertTrue(all(len(v) == 1 for v in by_thread.values()),
-                        "a thread was handed more than one connection: %s" % {k: len(v) for k, v in by_thread.items()})
-        self.assertGreaterEqual(len({next(iter(v)) for v in by_thread.values()}), 8,
-                                "threads shared a connection: %s" % by_thread)
+        self.assertGreater(len(slots), 100)
+        by_slot: dict[int, set[int]] = {}
+        for slot, cid in slots:
+            by_slot.setdefault(slot, set()).add(cid)
+        self.assertEqual(sorted(by_slot), list(range(16)), "not every worker recorded a connection")
+        self.assertTrue(all(len(v) == 1 for v in by_slot.values()),
+                        "a worker was handed more than one connection: %s"
+                        % {k: len(v) for k, v in sorted(by_slot.items()) if len(v) != 1})
+        # Threads never share a connection. A floor, not an equality: a connection whose owner has exited may be
+        # reaped and its address reused by a later allocation, so identical ids are the failure and *fewer* than
+        # 16 distinct ones is not.
+        self.assertGreaterEqual(len({next(iter(v)) for v in by_slot.values()}), 8,
+                                "threads shared a connection: %s" % by_slot)
+        self._registry_is_keyed_by_thread(self.app._db)
+
+    def test_the_registry_assertion_fails_on_the_pre_p14_shape(self):
+        """A probe that cannot fail on the defect it names is prose. This runs the probe above against the
+        registry shape it is there to forbid — `(ident, connection)` where a `(thread, connection)` belongs — and
+        requires it to complain. It is also the guard for the flake: keying on the thread *object* is what makes
+        the assertion independent of whether an ident happened to be recycled."""
+        import threading
+        db = self.app._db
+        mine = db._conn()                    # taken first, so `_live` is restored exactly as it was
+        real = list(db._live)
+        try:
+            # The old shape, planted: the ident is this thread's, and this thread is alive — so a liveness check
+            # reading the entry would be satisfied and only the type of the key gives the design away.
+            db._live = [(threading.get_ident(), mine)]
+            with self.assertRaises(AssertionError):
+                self._registry_is_keyed_by_thread(db)
+        finally:
+            db._live = real
+
+    def _registry_is_keyed_by_thread(self, db) -> None:
+        """The two load-bearing halves of the P14 fix, asserted on the object rather than inferred from timing."""
+        import threading
+        self.assertIsInstance(db._local, threading.local,
+                              "connections must live in threading.local(), not in a store keyed by ident")
+        mine = db._conn()
+        self.assertTrue(any(t is threading.current_thread() and c is mine for t, c in db._live),
+                        "this thread's connection is not registered against the thread object itself: %r"
+                        % [type(t).__name__ for t, _c in db._live])
+        self.assertIs(db._conn(), mine, "this thread was handed a new connection while it was still running")
 
     def test_a_reap_never_closes_a_connection_whose_thread_is_alive(self):
         import threading

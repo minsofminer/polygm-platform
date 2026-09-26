@@ -1,6 +1,16 @@
-P04 gate: 55/55 checks passed
-  PASS suite: 156 tests, exit 0, tail 'OK'
-  PASS lint-rules clean (lint-rules: 34 files scanned, 0 findings)
+# P04 gate — recorded by tools/p04-gate-check.py
+
+P04 gate run, 2026-09-26 (repo main 3921df6 + the P15 D3-D9 work uncommitted); re-run at P15's close
+because an un-re-run record is a claim, not evidence. Previous record: P04 gate: 55/55 checks passed
+Suite at the time of the previous record: 156 tests (P04's own session). Now: 1469 tests, OK, 179.4 s
+(standalone run, `PGM_TEST_TMPDIR` on the 19 GB root filesystem - see tests/test_suite_guard.py for why
+that is written down: the 1 GB /tmp tmpfs filled with dead test databases and reported itself as 33
+`database or disk is full` errors behind a tally line that named none of them).
+
+  temp space: 18966 MB free on /home/user/.local/tmp
+P04 gate: 56/56 checks passed
+  PASS suite: 1469 tests, exit 0, tail '<sys>:0: ResourceWarning: unclosed database in <sqlite3.Conn'
+  PASS lint-rules clean (lint-rules: 181 files scanned, 0 findings)
   PASS every lint rule fires on a planted violation (8/8 rules fire)
   PASS no float/NUMERIC money column in Postgres migrations (0 found)
   PASS NUMERIC only for the three metadata columns (['minimum_order_size', 'minimum_tick_size', 'risk_latency_ms'])
@@ -12,11 +22,11 @@ P04 gate: 55/55 checks passed
   PASS limits come from flags at request time, not a module constant
   PASS begin() answers 'did I create this row?' with RETURNING (sqlite) and xmax=0 (postgres)
   PASS Record exposes replay/busy/mismatch as properties (state alone cannot tell the owner from a waiter)
-  PASS every denial after begin() releases the key (5 returns audited, 0 unpaired)
+  PASS every denial after begin() releases the key (6 returns audited, 0 unpaired)
   PASS body shape is checked BEFORE idem.begin (a 422 must not burn a key)
   PASS a rejected intent is REVISED, not re-inserted (one key, one row; a bare INSERT 500s the retry against UNIQUE(user_id, idempotency_key))
-  PASS openapi audit: 82 checks passed, 0 failed
-  PASS openapi audit self-test fires: 13/13
+  PASS openapi audit: 685 checks passed, 0 failed
+  PASS openapi audit self-test fires: 16/16
   PASS generated SQLite subset is current
   PASS seed.sql stamps with {{NOW_MS}}, never an absolute timestamp (0 literals found)
   PASS run-sql records a ledger and refuses drift on an applied file
@@ -27,8 +37,9 @@ P04 gate: 55/55 checks passed
   PASS audit_log is append-only by trigger
   PASS kill_switch reason length is a DB CHECK, not a code comment
   PASS cash_ledger's uniqueness is (ref_table, ref_id, kind, user_id)
-  PASS no index leads with book_levels.updated_ms (25 such index statements checked)
+  PASS no index leads with book_levels.updated_ms (87 such index statements checked)
   PASS there is no payout_micro column (a payout is a ledger kind, never a mutable field)
+  PASS that rule still catches a column actually named payout_micro (its own positive control)
   PASS readiness REFRESHES the store, so a pod recovers without a restart
   PASS boot read happens at import, so a fresh pod is not stuck 'not ready'
   PASS numeric flags never carry `on` (bool(1234) would enable a feature)
@@ -40,18 +51,19 @@ P04 gate: 55/55 checks passed
   PASS D4 carries the four measured precision numbers
   PASS the environment's missing tools are listed (docker/psql/sqlite3 CLI)
   PASS every check in this gate is claimed with a number, not an adjective
-  PASS no credential-shaped string in 261 working-tree files (2 patterns, allowlist enforced by exact line)
+  PASS no credential-shaped string in 559 working-tree files (2 patterns, 11 exemptions, each enforced by exact line or exact substring)
   PASS every secret-scan exemption still matches a line (a dead exemption would hide the next real key)
   PASS the scan covers the working tree, not just what git has tracked (a phase in progress is exactly when a key gets pasted)
   PASS .env is ignored by git
   PASS the env example has no values an attacker can use
   PASS every compose build target exists (7 services, 0 missing)
-  PASS compose strict-parses on the first pass (147 lines, 0 duplicate keys)
+  PASS compose strict-parses on the first pass (171 lines, 0 duplicate keys)
   PASS compose parses and names the P04 surface
   PASS .env is optional-at-boot for services (required: false), so a fresh clone starts
   PASS no make recipe pipes a check into tail (a pipe hides the exit status) (0 found)
   PASS every promised target exists (all 13)
-  PASS every tool a make target runs is on disk (13 referenced, 0 missing)
+  PASS every tool a make target runs is on disk (50 referenced, 0 missing)
   PASS make doctor runs and reports the tooling honestly
   PASS envelope demo over real sockets (12 steps)
 gate is a floor: any FAIL here means the phase is not done, whatever the prose elsewhere says
+EXIT_P04=0

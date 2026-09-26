@@ -306,6 +306,87 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/admin/drain-status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * May the executor be replaced right now?
+         * @description The answer the deploy script polls before it touches the money path, reported as COUNTS rather than as an
+         *     opinion. The distinction the field names carry: an intent in `pending`/`queued` is a durable row that the
+         *     next executor picks up, so it is reported (`openIntents`) but does not block; `submitting` and `uncertain`
+         *     mean this process may be mid-conversation with the venue, and those BLOCK — replacing the executor there
+         *     is how an ambiguous order becomes an orphan (P6 D3). A script that cannot reach this endpoint must treat
+         *     the answer as "no": the fail-safe direction is not replacing the executor.
+         */
+        get: operations["drainStatus"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/metrics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The four pillars in one read — money, order path, freshness, business
+         * @description One request, because the phone dashboard gets three seconds on a bad connection and a dashboard that
+         *     fans out is a dashboard that half-loads. Every block names its `source`: the number and the query that
+         *     produced it travel together, so a zero that means "no rows" is distinguishable from a zero that means
+         *     "nobody wrote the query yet".
+         *
+         *     The order of the blocks is the priority order when the page arrives at 2am: `money.unreconciled` first —
+         *     a count of unresolved reconciliation cases WITH the age of the oldest, because a count alone cannot tell
+         *     a one-second blip from a stuck queue — then the order path, freshness, business.
+         */
+        get: operations["adminMetrics"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/flags": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The behaviour switches, stored value and effective value
+         * @description What is actually on, so that the operator who is about to say "turn it off" can see the thing they are
+         *     turning off. `toggles` is the effective set the running process reads.
+         */
+        get: operations["adminFlagsList"];
+        put?: never;
+        /**
+         * Turn a switch on or off, now, with a reason
+         * @description "Feature flag with instant off" is an operational promise, and a promise that needs a deploy to keep is
+         *     not one: the store is refreshed on the way out, so the change is live on the next request rather than
+         *     after the five-second TTL. A reason of 4-400 characters is mandatory — `set_flag` refuses to write
+         *     without one, because a flag change without a reason is a mistake in progress. An unknown name is a 404:
+         *     a typo that silently creates a switch nobody reads looks like a fix and is not one.
+         */
+        post: operations["adminFlagsSet"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/auth/login": {
         parameters: {
             query?: never;
@@ -4897,6 +4978,149 @@ export interface operations {
                 };
             };
             /** @description two answers, deliberately: VALIDATION when `reason` is absent (shape), BAD_REASON when it is present but outside 4-400 characters (the rule the DB's CHECK enforces). "Your body is wrong" and "say why you pulled the switch" are different advice, and the app used to collapse them. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            500: components["responses"]["Internal"];
+            503: components["responses"]["Denied"];
+        };
+    };
+    drainStatus: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description absent or empty means 503 SIGNER_UNAVAILABLE; a wrong token is 403 ADMIN_REQUIRED */
+                "X-Admin-Token"?: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description the counts, and the derived verdict */
+            200: {
+                headers: {
+                    "x-request-id": components["headers"]["xRequestId"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Stamped"] & {
+                        draining: boolean;
+                        blockingIntents: number;
+                        openIntents: number;
+                        blockingStates: string[];
+                        safeToReplace: boolean;
+                    };
+                };
+            };
+            403: components["responses"]["Denied"];
+            500: components["responses"]["Internal"];
+            503: components["responses"]["Denied"];
+        };
+    };
+    adminMetrics: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description absent or empty means 503 SIGNER_UNAVAILABLE; a wrong token is 403 ADMIN_REQUIRED */
+                "X-Admin-Token"?: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description the snapshot */
+            200: {
+                headers: {
+                    "x-request-id": components["headers"]["xRequestId"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Stamped"] & Record<string, never>;
+                };
+            };
+            403: components["responses"]["Denied"];
+            500: components["responses"]["Internal"];
+            503: components["responses"]["Denied"];
+        };
+    };
+    adminFlagsList: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Admin-Token"?: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description the switches */
+            200: {
+                headers: {
+                    "x-request-id": components["headers"]["xRequestId"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Stamped"] & {
+                        on: string[];
+                        toggles: string[];
+                        flags: {
+                            name: string;
+                            kind: string;
+                            stored: Record<string, never>;
+                        }[];
+                    };
+                };
+            };
+            403: components["responses"]["Denied"];
+            500: components["responses"]["Internal"];
+            503: components["responses"]["Denied"];
+        };
+    };
+    adminFlagsSet: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Admin-Token"?: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    name: string;
+                    value: boolean;
+                    reason: string;
+                };
+            };
+        };
+        responses: {
+            /** @description accepted */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        name: string;
+                        value: boolean;
+                        on?: boolean | null;
+                        atMs: number;
+                        reason: string;
+                    };
+                };
+            };
+            403: components["responses"]["Denied"];
+            404: components["responses"]["NotFound"];
+            /** @description VALIDATION for a missing field or a non-boolean value; BAD_REASON for a reason outside 4-400 */
             422: {
                 headers: {
                     [name: string]: unknown;

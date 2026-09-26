@@ -1,7 +1,7 @@
-P07 mutation run, recorded 2026-09-18
+P07 mutation run, recorded 2026-09-25
 command: python3 tools/p07-mutation-test.py --record docs/verification/P07-mutation.txt
 
-copying the tree to /tmp/p07-mutation-m_jn4km6/baseline and checking the CLEAN targets first
+copying the tree to /tmp/p07-mutation-6owjqijs/baseline and checking the CLEAN targets first
   baseline clean for 11 target(s): gate:c12, gate:c19, gate:c20, gate:c21, gate:c22, gate:c5_telegram_known_answer_and_replay_across_a_restart, gate:c7, gate:c8, gate:c9, test:tests/test_security_core.py, test:tests/test_security_plane.py
 
   argon2-floor-removed             KILLED   by test:tests/test_security_core.py FAIL: test_below_floor_names_a_hash_that_is_technically_argon2id (test
@@ -12,27 +12,29 @@ copying the tree to /tmp/p07-mutation-m_jn4km6/baseline and checking the CLEAN t
   totp-attempt-cap-gone            KILLED   by test:tests/test_security_core.py FAIL: test_the_totp_attempt_cap_is_the_default_not_a_parameter (test_s
   telegram-secret-derivation-drift KILLED   by test:tests/test_security_core.py FAIL: test_the_secret_key_is_the_published_derivation (test_security_c
   telegram-freshness-removed       KILLED   by test:tests/test_security_core.py FAIL: test_a_refresh_may_be_older_than_a_login_but_still_expires (test
-  telegram-replay-accepted         KILLED   by gate:c5_telegram_known_answer_and_replay_across_a_restart FAIL   540 ms  Telegram initData: published derivation, replay refused
-  admin-forbidden-list-empty       KILLED   by gate:c20       FAIL   532 ms  admin may not skip the cooldown or un-enrol a factor
-  cooldown-zero                    KILLED   by gate:c8        FAIL   656 ms  24 h cooldown unrepresentable-to-skip, address never pr
-  access-token-ttl-month           KILLED   by gate:c7        FAIL   636 ms  refresh rotation with reuse detection revokes the famil
-  break-glass-one-approver         KILLED   by gate:c19       FAIL   557 ms  break-glass needs two distinct humans and a 20-char rea
+  telegram-replay-accepted         KILLED   by gate:c5_telegram_known_answer_and_replay_across_a_restart FAIL   701 ms  Telegram initData: published derivation, replay refused
+  admin-forbidden-list-empty       KILLED   by gate:c20       FAIL   712 ms  admin may not skip the cooldown or un-enrol a factor
+  cooldown-zero                    KILLED   by gate:c8        FAIL   779 ms  24 h cooldown unrepresentable-to-skip, address never pr
+  access-token-ttl-month           KILLED   by gate:c7        FAIL   825 ms  refresh rotation with reuse detection revokes the famil
+  break-glass-one-approver         KILLED   by gate:c19       FAIL   697 ms  break-glass needs two distinct humans and a 20-char rea
   wrapped-length-trusted           KILLED   by test:tests/test_security_core.py FAIL: test_the_envelope_arithmetic_is_checked_not_hoped_for (test_secu
-  call-target-allowlist-open       KILLED   by gate:c9        FAIL   534 ms  key policy = exactly two targets; a provider that canno
+  call-target-allowlist-open       KILLED   by gate:c9        FAIL   644 ms  key policy = exactly two targets; a provider that canno
   revocation-rate-optimistic       KILLED   by test:tests/test_security_core.py FAIL: test_the_ten_thousand_key_number_is_arithmetic_somebody_can_argu
-  trusted-resolution-hosts-empty   KILLED   by gate:c22       FAIL   527 ms  the alert channel has a gate, and a poisoned market is 
+  trusted-resolution-hosts-empty   KILLED   by gate:c22       FAIL   736 ms  the alert channel has a gate, and a poisoned market is 
   http-urls-allowed                KILLED   by test:tests/test_security_core.py FAIL: test_only_https_survives_in_a_url_field (test_security_core.Test
   redact-no-truncation             KILLED   by test:tests/test_security_core.py FAIL: test_a_long_string_is_cut_before_it_is_printed (test_security_co
-  redact-key-names-inert           KILLED   by gate:c12       FAIL   524 ms  logs and errors are scrubbed before they land (redact.P
+  redact-key-names-inert           KILLED   by gate:c12       FAIL   723 ms  logs and errors are scrubbed before they land (redact.P
   wash-freeze-nothing              KILLED   by test:tests/test_security_core.py FAIL: test_wash_trading_is_scored_on_the_shape_of_the_fills_not_on_a_p
   builder-code-never-disabled      KILLED   by test:tests/test_security_core.py FAIL: test_five_rejections_in_the_window_disable_a_builder_code_and_fo
-  per-user-budget-share-open       KILLED   by gate:c21       FAIL   527 ms  alert-rule budget: a per-user share, scheduled, and an 
-  budget-alarm-at-the-cliff        KILLED   by gate:c21       FAIL   535 ms  alert-rule budget: a per-user share, scheduled, and an 
+  per-user-budget-share-open       KILLED   by gate:c21       FAIL   701 ms  alert-rule budget: a per-user share, scheduled, and an 
+  budget-alarm-at-the-cliff        KILLED   by gate:c21       FAIL   689 ms  alert-rule budget: a per-user share, scheduled, and an 
   drill-never-stales               KILLED   by test:tests/test_security_core.py FAIL: test_a_drill_older_than_a_quarter_is_a_story (test_security_core
   forbidden-phrases-inert          KILLED   by test:tests/test_security_core.py FAIL: test_the_customer_templates_pass_our_own_style_rule (test_securi
   drill-failure-needs-no-step      KILLED   by test:tests/test_security_plane.py FAIL: test_a_failed_drill_must_name_the_step_that_failed (test_securit
   append-only-check-inert          KILLED   by test:tests/test_security_plane.py FAIL: test_a_failed_drill_must_name_the_step_that_failed (test_securit
+  reap-ignores-whose-owner-is-alive KILLED   by test:tests/test_security_plane.py ERROR: setUpClass (test_security_plane.TestAdmin)
+  connection-attributed-to-another-thread KILLED   by test:tests/test_security_plane.py FAIL: test_every_thread_gets_its_own_connection_and_churn_does_not_bre
 
-mutation report: 28 KILLED, 0 survived of 28 mutants
+mutation report: 30 KILLED, 0 survived of 30 mutants
 
 A survived mutant is not a product bug. It is a check that cannot fail, which is the same thing wearing a better shirt.

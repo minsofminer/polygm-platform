@@ -543,6 +543,23 @@ Run in this workspace, all of it after the last edit (2026-09-17):
 | `tools/run-sql.py --check` | ledger records applied files, refuses drift |
 | `python3 tools/doctor.py` | reports the missing tools below rather than working around them |
 
+Re-run at P15's close (2026-09-26), because a record that is never re-run becomes a claim rather than evidence:
+
+| command | result | why it moved |
+|---|---|---|
+| `python3 -m unittest discover -s tests` | **1469 tests, OK** (179.4 s) | the suite grew from 156 to 1469 across P05–P15; the count above is P04's, and stays as the record of what P04 shipped |
+| `python3 tools/p04-gate-check.py` | **56/56 checks passed**, exit 0 (`docs/verification/P04-gate-output.txt`) | the gate gained one check since; see below |
+
+The re-run is also how the phase's worst failure mode was found. A gate run reported
+`suite: 1272 tests, exit 1, tail 'FAILED (errors=33)'`: the tally line named a number and no reason, and all 33
+errors were `sqlite3.OperationalError: database or disk is full` — `/tmp` here is a 1 GB tmpfs and a previously
+killed run had left 336 MB of migrated test databases behind, so `apply_schema` failed 33 times in a suite that had
+nothing wrong with it. Three changes came out of it, all checked: `tests/conftest.py` measures the temp filesystem
+before the run and **refuses** with the free megabytes, the reason, and `PGM_TEST_TMPDIR` as the way out;
+`tools/p04-gate-check.py` prints that number as its first line and names ENOSPC when the phrase appears in the
+output; `tests/test_suite_guard.py` tests the guard itself, including a rehearsal through `_tmp_root()` — the same
+entry point a real run takes — so the message a person would see is the one intended.
+
 **Re-verified after P05 landed** (same day, because a phase that breaks the last phase's gate has not finished):
 221 tests OK · P04 gate 55/55 · `tools/lint-rules.py` had to learn that `statistics` is stdlib (that rule is
 about third-party dependencies, not the standard library), and the migration-chain test was rewritten after it

@@ -1,0 +1,245 @@
+{
+  "killSwitch": {
+    "engaged": false,
+    "reason": "",
+    "engagedForMs": 0
+  },
+  "money": {
+    "unreconciled": {
+      "count": 0,
+      "oldestAgeMs": 0,
+      "byCase": {},
+      "page": false,
+      "thresholdMs": 60000,
+      "source": "reconcile_open (a row per unresolved case, deleted when it resolves)"
+    },
+    "ordersUnknownState": {
+      "count": 0,
+      "states": [
+        "submitting",
+        "uncertain"
+      ],
+      "source": "order_intents.state"
+    },
+    "positionDrift": {
+      "mismatchedOrders": 0,
+      "worstMicro": 0,
+      "source": "our fills vs the venue's OrderFilled log (a proxy for holdings, not the holdings themselves)"
+    },
+    "feeEstimateDelta": {
+      "measured": 0,
+      "sumAbsMicro": 0,
+      "worstMicro": 0,
+      "source": "venue_fees: estimate at submit, actual at fill, delta forever"
+    },
+    "builderFees": {
+      "days": 0,
+      "orders": 0,
+      "volumeMicro": 0,
+      "expectedMicro": 0,
+      "chainMeasuredMicro": 0,
+      "deltaMicro": 0,
+      "daysUnmatched": 0,
+      "independent": true,
+      "source": "builder_revenue_daily: expected from our ledger, chain from OrderFilled events \u2014 measured without reading the venue's dashboard"
+    }
+  },
+  "orderPath": {
+    "intentsByState": {},
+    "blockingStates": [
+      "submitting",
+      "uncertain"
+    ],
+    "rejectionsLastHour": 0,
+    "rejectionsByReason": {},
+    "hops": {
+      "risk": {
+        "n": 0,
+        "p50": null,
+        "p95": null,
+        "p99": null,
+        "max": null
+      },
+      "draftToSigned": {
+        "n": 0,
+        "p50": null,
+        "p95": null,
+        "p99": null,
+        "max": null
+      },
+      "signedToSubmitted": {
+        "n": 0,
+        "p50": null,
+        "p95": null,
+        "p99": null,
+        "max": null
+      },
+      "submittedToAck": {
+        "n": 0,
+        "p50": null,
+        "p95": null,
+        "p99": null,
+        "max": null
+      },
+      "signedToAck": {
+        "n": 0,
+        "p50": null,
+        "p95": null,
+        "p99": null,
+        "max": null
+      },
+      "endToEnd": {
+        "n": 0,
+        "p50": null,
+        "p95": null,
+        "p99": null,
+        "max": null
+      }
+    },
+    "rateBuckets": []
+  },
+  "executor": {
+    "state": "live",
+    "lastBeatAgeMs": 2557,
+    "lastBeatMs": 1790145637085,
+    "ticks": 128,
+    "pid": "2417",
+    "version": "sample",
+    "draining": false,
+    "pageAfterMs": 90000,
+    "source": "executor_state (one row, written by the executor at the top of every tick)"
+  },
+  "security": {
+    "compromiseIndicators24h": 0,
+    "suspensions24h": 0,
+    "exportRequests24h": 0,
+    "revocations24h": 0,
+    "pendingRevocations": 0,
+    "walletsSuspended": 0,
+    "expiredSessionsOpen": 0,
+    "events": {},
+    "source": "wallet_events (export_requested / suspended) + revoke_jobs \u2014 three named rows, never a score"
+  },
+  "builderCode": {
+    "code": null,
+    "state": "unconfigured",
+    "changedMs": 0,
+    "rejectCount": 0,
+    "states": {
+      "active": 1
+    },
+    "source": "builder_code_status, written by the venue's own rejections and by the operator path"
+  },
+  "freshness": {
+    "feeds": [
+      {
+        "source": "clob.book",
+        "transport": "http",
+        "state": "down",
+        "eventLagMs": null,
+        "frameAgeMs": null,
+        "thresholdMs": 3000,
+        "lagging": false,
+        "silent": false,
+        "neverSeen": true,
+        "resyncs": null
+      },
+      {
+        "source": "data.trades",
+        "transport": "http",
+        "state": "lagging",
+        "eventLagMs": 30557,
+        "frameAgeMs": 5557,
+        "thresholdMs": 3000,
+        "lagging": true,
+        "silent": false,
+        "neverSeen": false,
+        "resyncs": null
+      },
+      {
+        "source": "gamma.markets",
+        "transport": "http",
+        "state": "lagging",
+        "eventLagMs": 60557,
+        "frameAgeMs": 60557,
+        "thresholdMs": 120000,
+        "lagging": false,
+        "silent": false,
+        "neverSeen": false,
+        "resyncs": null
+      },
+      {
+        "source": "ws.book",
+        "transport": "ws",
+        "state": "ok",
+        "eventLagMs": 1757,
+        "frameAgeMs": 1457,
+        "thresholdMs": 3000,
+        "lagging": false,
+        "silent": false,
+        "neverSeen": false,
+        "resyncs": 0
+      },
+      {
+        "source": "ws.tape",
+        "transport": "ws",
+        "state": "ok",
+        "eventLagMs": 1457,
+        "frameAgeMs": 957,
+        "thresholdMs": 3000,
+        "lagging": false,
+        "silent": false,
+        "neverSeen": false,
+        "resyncs": 1
+      }
+    ],
+    "silent": [
+      "clob.book"
+    ],
+    "lagging": [
+      "data.trades"
+    ],
+    "silentThresholdMs": 120000,
+    "source": "ingest_cursors, written by the data plane; `silent` is measured on frames and `lagging` on the venue's event clock, which is the difference between a dead pipe and a quiet market"
+  },
+  "business": {
+    "fills24h": 0,
+    "volume24hMicro": 0,
+    "traders24h": 0,
+    "deposits24h": {
+      "count": 1,
+      "sumMicro": 5000000
+    },
+    "withdrawals24h": {
+      "count": 0,
+      "sumMicro": 0
+    },
+    "withdrawalSpikeRatio": 0.0,
+    "stuckDeposits": {
+      "count": 1,
+      "oldestAgeMs": 1800557,
+      "page": true,
+      "thresholdMs": 900000
+    },
+    "withdrawalsInFlight": {
+      "count": 0,
+      "oldestAgeMs": 0
+    },
+    "telegram": {
+      "failed24h": 0,
+      "delivered24h": 0,
+      "source": "alert_deliveries by status"
+    },
+    "proConversions7d": 0,
+    "alertFires24h": 0
+  },
+  "asOf": 1790145639645,
+  "staleAfter": 1790145639645,
+  "serverAsOf": 1790145639645,
+  "cache": {
+    "ttlMs": 0,
+    "key": null,
+    "public": false,
+    "immutable": false
+  }
+}

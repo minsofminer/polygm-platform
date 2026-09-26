@@ -11,6 +11,7 @@ ledger table, and the append-only rule (P04 rule 4) is enforced in the schema, n
 """
 from __future__ import annotations
 
+import datetime as dt
 import hashlib
 import json
 import os
@@ -30,7 +31,7 @@ from polygm_core.automation import console as _au_console
 from polygm_core.automation import engine as _au
 from polygm_core.automation import facts as _au_facts
 from polygm_core.classify import labels as _labels
-from polygm_core.config.flags import FlagStore, Flags
+from polygm_core.config.flags import FlagStore, Flags, set_flag
 from polygm_core.leaderboard import boards as _lb_boards
 from polygm_core.leaderboard import rank as _lb_rank
 from polygm_core.leaderboard import source as _lb_source
@@ -228,6 +229,10 @@ TAPE_RESPONSES = {404: {"description": "no such market"}, 422: {"description": "
 HEALTH_RESPONSES: dict[int, dict] = {}
 KILL_RESPONSES = {422: {"description": "reason missing or outside 4-400 characters"},
                   503: {"description": "no admin token configured; the endpoint is closed, not open"}}
+# P15 D3 — the body of `POST /v1/admin/flags`. Declared here with the other schemas because
+# `tools/check-openapi.py` audits that every operation has one and that the two agree.
+FLAG_ADMIN_PROPS = {"name": {"type": "string"}, "value": {"type": "boolean"},
+                    "reason": {"type": "string", "minLength": 4, "maxLength": 400}}
 MARKET_RESPONSES = {404: {"description": "no such market"}}
 # The durable-fill read added by P05. `422` is declared because FastAPI emits it on a bad `limit` regardless of
 # whether the handler checks, and the OpenAPI audit treats an undocumented status as a lie by omission.
@@ -2578,6 +2583,441 @@ def kill_switch(request: Request, body: dict = Body(...), x_admin: str | None = 
         _db.execute("UPDATE order_intents SET state='rejected', risk_code='RISK_HALT' "
                     "WHERE state IN ('pending','queued')")
     return {"engaged": bool(engaged), "atMs": _now_ms()}
+# ============================================================================================ #
+# P15 · the two operational surfaces a deploy needs, and both of them exist because a script has to be able to
+# *ask* rather than assume.
+#
+# `drain-status` is what `deploy/deploy.sh` polls before it will replace the executor. The distinction it turns
+# on is the whole reason it is not a boolean: an intent in `pending`/`queued` is a durable row that the *next*
+# executor picks up, so losing it would be a reconciliation bug rather than a deploy hazard — while `submitting`
+# and `uncertain` mean this executor may be mid-conversation with the venue, and replacing it there is how an
+# ambiguous order becomes an orphan. Those two block; the queue does not.
+#
+# `flags` is here because "feature flag with instant off" is an operational promise, and a promise that needs a
+# deploy to keep is not one. Every write goes through `set_flag` — the only sanctioned path, with its audit row —
+# and the change is live on the next request because the route refreshes the store instead of waiting for the TTL.
+# ============================================================================================ #
+
+# 503 rather than 401 for the missing-token case, matching `_admin`: a box with no admin token configured is a
+# misconfiguration, and it must not look like an attack in the dashboards the on-call reads.
+# Written out long-hand rather than as `{**DRAIN_RESPONSES, ...}`: `tools/check-openapi.py` evaluates these
+# tables from their literal AST, and a table it cannot read is a table it reports as "no statuses at all" —
+# which is how a correct app gets a red gate. The duplication is the price of the check being able to see.
+DRAIN_RESPONSES = {403: {"description": "wrong admin token"},
+                   503: {"description": "no admin token configured; the endpoint is closed, not open"}}
+FLAG_ADMIN_RESPONSES = {403: {"description": "wrong admin token"},
+                        404: {"description": "unknown flag name"},
+                        422: {"description": "name/value/reason missing or malformed"},
+                        503: {"description": "no admin token configured; the endpoint is closed, not open"}}
+
+#: States where the executor is, or may be, mid-conversation with the venue. A deploy must not replace the
+#: process while one of these exists — that is the P6 D3 reconciliation hazard stated as two strings.
+_BLOCKING_INTENT_STATES = ("submitting", "uncertain")
+
+
+@app.get("/v1/admin/drain-status", status_code=200, responses=DRAIN_RESPONSES)
+def drain_status(request: Request, x_admin: str | None = Header(default=None, alias="X-Admin-Token")):
+    """Can the executor be replaced right now? Answers with counts, not with an opinion, and the deploy script
+    treats an unreachable endpoint as "no"."""
+    ok, refusal = _admin(request)
+    if not ok:
+        return refusal
+    marks = ",".join("?" * len(_BLOCKING_INTENT_STATES))
+    row = _db.execute("SELECT COUNT(*) FROM order_intents WHERE state IN (%s)" % marks,
+                      _BLOCKING_INTENT_STATES).fetchone()
+    blocking = int(row[0] or 0) if row else 0
+    open_row = _db.execute("SELECT COUNT(*) FROM order_intents WHERE state IN ('pending','queued')").fetchone()
+    draining = bool(flags().on("executor_draining"))
+    # Stamped like every other read (the gate insists): `asOf` here is "now", because the counts ARE the reading —
+    # there is no cached copy of the drain status, and a stale drain status is worse than none.
+    return _stamped({"draining": draining, "blockingIntents": blocking,
+                     "openIntents": int(open_row[0] or 0) if open_row else 0,
+                     "blockingStates": list(_BLOCKING_INTENT_STATES),
+                     # `openIntents` is reported for the human reading the runbook; it does not block, because the
+                     # queue lives in Postgres and outlives this process. Saying so keeps the field from being
+                     # "fixed" later by somebody who assumes a count must mean a hazard.
+                     "safeToReplace": (not draining) and blocking == 0},
+                    ttl_ms=0, stale_ms=0)
+
+
+@app.get("/v1/admin/flags", status_code=200, responses=DRAIN_RESPONSES)
+def admin_flags(request: Request, x_admin: str | None = Header(default=None, alias="X-Admin-Token")):
+    """The behaviour switches, their stored values, and the effective set — for the operator who is about to say
+    'turn it off' on a phone and wants to see what is actually on before they decide."""
+    ok, refusal = _admin(request)
+    if not ok:
+        return refusal
+    rows = _db.execute("SELECT name, kind, value_json FROM feature_flags WHERE kind='bool' ORDER BY name").fetchall()
+    return _stamped({"cacheKey": "admin:flags", "on": list(flags().flags), "toggles": list(flags().flags),
+                     "flags": [{"name": r[0], "kind": r[1], "stored": json.loads(r[2])} for r in rows]},
+                    ttl_ms=0, stale_ms=0)
+
+
+@app.post("/v1/admin/flags", status_code=200, responses=FLAG_ADMIN_RESPONSES,
+          openapi_extra=_body_schema(("name", "value", "reason"), FLAG_ADMIN_PROPS))
+def admin_set_flag(request: Request, body: dict = Body(...),
+                   x_admin: str | None = Header(default=None, alias="X-Admin-Token")):
+    """Turn a switch on or off, now, with a reason. The reason is required by `set_flag` itself — a flag change
+    without one is not a flag change, it is a mistake in progress."""
+    rid = request.state.request_id
+    ok, refusal = _admin(request)
+    if not ok:
+        return refusal
+    bad = _check_body(body, ("name", "value", "reason"), rid)
+    if bad is not None:
+        return bad
+    name, reason = str(body.get("name")), str(body.get("reason") or "").strip()
+    value = body.get("value")
+    if not (4 <= len(reason) <= 400):
+        return err("BAD_REASON", rid)
+    if isinstance(value, str) and value.lower() in ("true", "false"):
+        value = value.lower() == "true"
+    if not isinstance(value, (bool, int, float)):
+        return err("VALIDATION", rid, detail="value must be a boolean or a number")
+    known = set(Flags.__dataclass_fields__) | {"executor_draining"}
+    if name not in known:
+        # A typo that silently creates a flag nobody reads is worse than a refusal: it looks like the switch was
+        # thrown, and the incident continues.
+        return err("NOT_FOUND", rid, detail="unknown flag: %s" % name)
+    set_flag(_db, name, value, changed_by="admin", reason=reason)
+    snap = STORE.refresh()
+    return {"name": name, "value": value, "on": bool(snap.on(name)) if isinstance(value, bool) else None,
+            "atMs": _now_ms(), "reason": reason}
+
+
+# 403/503 only: this endpoint reads. Everything it reports is either a row or a count of rows, and nothing here
+# writes, so there is no 422 to document.
+METRICS_RESPONSES = {403: {"description": "wrong admin token"},
+                     503: {"description": "no admin token configured; the endpoint is closed, not open"}}
+
+#: The one number the kit calls the most important in the system, and the age at which it pages. Named here
+#: rather than in the dashboard so that the alarm rule, the smoke check and the page all quote one threshold.
+UNRECONCILED_PAGE_MS = 60_000
+#: A feed that has not delivered a frame — heartbeat included — for this long is silent rather than slow. The
+#: distinction matters: "lagging" is a market with no trades, "silent" is a socket that died quietly.
+SILENT_FEED_MS = 120_000
+#: Three missed beats at the executor's 30-second reporting cadence. Long enough that a slow tick is not a page,
+#: short enough that a dead signer is not a mystery — the numbers are D5's, and they are here so the alarm and the
+#: endpoint cannot disagree about what "down" means.
+BEAT_PAGE_MS = 90_000
+#: A deposit the chain has shown us and we have not credited. Minutes, not hours: from the user's side this is
+#: indistinguishable from theft, and the fix (a reconcile pass) takes seconds.
+STUCK_DEPOSIT_PAGE_MS = 900_000
+
+
+def _pcts(values: list[int]) -> dict:
+    """p50/p95/p99 over a small window, computed here rather than in the client: two clients picking their own
+    percentile method is two numbers that disagree about the same order path."""
+    if not values:
+        return {"n": 0, "p50": None, "p95": None, "p99": None, "max": None}
+    xs = sorted(values)
+
+    def at(q: float) -> int:
+        idx = min(len(xs) - 1, max(0, int(round(q * (len(xs) - 1)))))
+        return xs[idx]
+
+    return {"n": len(xs), "p50": at(0.50), "p95": at(0.95), "p99": at(0.99), "max": xs[-1]}
+
+
+def _count(sql: str, params: tuple = ()) -> int:
+    row = _db.execute(sql, params).fetchone()
+    return int(row[0] or 0) if row else 0
+
+
+def _one(sql: str, params: tuple = ()):
+    return _db.execute(sql, params).fetchone()
+
+
+@app.get("/v1/admin/metrics", status_code=200, responses=METRICS_RESPONSES)
+def admin_metrics(request: Request, x_admin: str | None = Header(default=None, alias="X-Admin-Token")):
+    """The four pillars in one read, because the phone dashboard must be ONE request and must fit in three
+    seconds on a bad connection.
+
+    What is deliberately NOT here: any number we cannot compute from a row somebody wrote. A dashboard with a
+    plausible-looking zero on it is worse than a dashboard with a gap, and the gaps are named in the payload
+    (`source` on each block says what was counted) rather than smoothed over.
+
+    The kit asks for money correctness, order-path health, data freshness and business — in that order, and the
+    order is the priority when the page arrives at 2am: `money.unreconciled` first, everything else after.
+    """
+    ok, refusal = _admin(request)
+    if not ok:
+        return refusal
+    now = _now_ms()
+
+    # ------------------------------------------------------------------ 1. money correctness
+    open_row = _one("SELECT COUNT(*), COALESCE(MIN(since_ms), 0) FROM reconcile_open")
+    unreconciled_n = int(open_row[0] or 0) if open_row else 0
+    oldest_ms = int(open_row[1] or 0) if open_row else 0
+    oldest_age = (now - oldest_ms) if oldest_ms else 0
+    by_case = {str(r[0]): int(r[1]) for r in _db.execute(
+        "SELECT case_name, COUNT(*) FROM reconcile_open GROUP BY case_name ORDER BY 2 DESC").fetchall()}
+
+    unknown_n = _count("SELECT COUNT(*) FROM order_intents WHERE state IN (%s)"
+                       % ",".join("?" * len(_BLOCKING_INTENT_STATES)), _BLOCKING_INTENT_STATES)
+
+    # Position drift, from the only pair of independent records this build has: our fills and the venue's own
+    # OrderFilled log. It is a proxy for "our books vs the venue's books", and it is named that way in `source`
+    # so nobody reads the number as more than it is.
+    drift_row = _one("""SELECT COUNT(*), COALESCE(MAX(ABS(delta)), 0) FROM (
+                            SELECT ce.matched_micro
+                                   - (SELECT COALESCE(SUM(f.size_micro), 0) FROM fills f WHERE f.order_id = ce.order_id)
+                                   AS delta
+                            FROM chain_events ce
+                            WHERE ce.kind = 'OrderFilled' AND ce.order_id <> '') t
+                        WHERE delta <> 0""")
+    fee_row = _one("SELECT COUNT(*), COALESCE(SUM(ABS(delta_micro)), 0), COALESCE(MAX(ABS(delta_micro)), 0)"
+                   " FROM venue_fees WHERE delta_micro IS NOT NULL")
+    bf_row = _one("""SELECT COUNT(*), COALESCE(SUM(orders), 0), COALESCE(SUM(volume_micro), 0),
+                            COALESCE(SUM(expected_micro), 0), COALESCE(SUM(chain_micro), 0),
+                            COALESCE(SUM(delta_micro), 0),
+                            COALESCE(SUM(CASE WHEN status <> 'matched' THEN 1 ELSE 0 END), 0)
+                     FROM builder_revenue_daily WHERE day >= ?""",
+                  ((dt.datetime.fromtimestamp(now / 1000, dt.timezone.utc) - dt.timedelta(days=30))
+                   .strftime("%Y-%m-%d"),))
+
+    # ------------------------------------------------------------------ 2. order-path health
+    by_state = {str(r[0]): int(r[1]) for r in _db.execute(
+        "SELECT state, COUNT(*) FROM order_intents GROUP BY state ORDER BY 2 DESC").fetchall()}
+    rejects_row = _one("SELECT COUNT(*) FROM order_intents WHERE state = 'rejected' AND updated_ms >= ?",
+                       (now - 3_600_000,))
+    reasons = {str(r[0] or "UNKNOWN"): int(r[1]) for r in _db.execute(
+        "SELECT risk_code, COUNT(*) FROM order_intents WHERE state = 'rejected' AND updated_ms >= ?"
+        " GROUP BY risk_code ORDER BY 2 DESC LIMIT 12", (now - 3_600_000,)).fetchall()}
+    # The hops, from the rows the executor writes and nothing else — intent -> risk -> sign -> submit -> ack,
+    # named by the leg they measure rather than by the stamp they start from. `risk` comes from the API's own
+    # `risk_latency_ms`; the rest from the attempt row, whose three timestamps are the only ones written by the
+    # process that signed, because a latency reported by the thing being measured is not a measurement.
+    risk_ms = [int(r[0] * 1000) if isinstance(r[0], float) else int(str(r[0]).split(".")[0])
+               for r in _db.execute("SELECT risk_latency_ms FROM order_intents"
+                                    " WHERE risk_latency_ms IS NOT NULL AND updated_ms >= ?"
+                                    " ORDER BY updated_ms DESC LIMIT 500", (now - 86_400_000,)).fetchall()]
+    hop_rows = _db.execute("""SELECT a.signed_ms, a.submitted_ms, a.ack_ms,
+                                     (SELECT MIN(l.at_ms) FROM order_lifecycle l WHERE l.intent_id = a.intent_id)
+                              FROM order_attempts a WHERE a.signed_ms >= ? ORDER BY a.signed_ms DESC LIMIT 500""",
+                           (now - 86_400_000,)).fetchall()
+    hops: dict[str, list[int]] = {"draftToSigned": [], "signedToSubmitted": [], "submittedToAck": [],
+                                  "signedToAck": [], "endToEnd": []}
+    for signed, submitted, ack, first in hop_rows:
+        if first and signed:
+            hops["draftToSigned"].append(max(0, int(signed) - int(first)))
+        if submitted and signed:
+            hops["signedToSubmitted"].append(max(0, int(submitted) - int(signed)))
+        if ack and submitted:
+            hops["submittedToAck"].append(max(0, int(ack) - int(submitted)))
+        if ack and signed:
+            hops["signedToAck"].append(max(0, int(ack) - int(signed)))
+        if ack and first:
+            hops["endToEnd"].append(max(0, int(ack) - int(first)))
+
+    kill_row = _one("SELECT engaged, reason, at_ms FROM kill_switch_state ORDER BY at_ms DESC LIMIT 1")
+
+    # ------------------------------------------------------------------ 3. data freshness
+    feeds = []
+    for source, state, last_event_ms, last_frame_ms, cursor_json in _db.execute(
+            "SELECT source, state, last_event_ms, last_frame_ms, cursor_json FROM ingest_cursors"
+            " ORDER BY source").fetchall():
+        frame_age = now - int(last_frame_ms or 0) if last_frame_ms else None
+        # Per-source thresholds, because "stale" means two different things to a book and to a metadata feed: the
+        # kit asks for "now − newest_event_ts per source, with an alarm threshold", and a single global number
+        # would either page on quiet metadata or stay silent on a dead book.
+        name = str(source)
+        f = flags()
+        threshold = (f.stale_ms_book if name.startswith("ws.") or name.endswith(".book")
+                     else f.stale_ms_metadata if ("gamma" in name or "market" in name)
+                     else f.stale_ms_tape)
+        try:
+            cursor = json.loads(cursor_json) if isinstance(cursor_json, str) and cursor_json else (
+                cursor_json or {})
+        except (json.JSONDecodeError, TypeError):
+            cursor = {}
+        event_lag = (now - int(last_event_ms)) if last_event_ms else None
+        resyncs = cursor.get("resyncs") if isinstance(cursor, dict) else None
+        feeds.append({"source": name,
+                      # The transport is derived from the source's own name, which is the convention the ingest
+                      # writes (`ws.tape`, `ws.book`, `data.trades`, `gamma.markets`, `clob.book`). It is derived
+                      # rather than stored because a second copy of a fact is a second place for it to be wrong.
+                      "transport": "ws" if name.startswith("ws.") else "http",
+                      "state": str(state),
+                      "eventLagMs": event_lag,
+                      "frameAgeMs": frame_age,
+                      "thresholdMs": threshold,
+                      "lagging": bool(event_lag is not None and event_lag > threshold),
+                      "silent": bool(frame_age is not None and frame_age > SILENT_FEED_MS),
+                      "neverSeen": not last_frame_ms,
+                      # Consumer-reported, and absent when the consumer has never had a reason to resync: null
+                      # here means "not reported", never "zero resyncs" — the distinction the freshness module's
+                      # own docstring makes about a source earning the claim "nothing happened".
+                      "resyncs": int(resyncs) if isinstance(resyncs, (int, float)) else None})
+    silent = [f["source"] for f in feeds if f["silent"] or f["neverSeen"]]
+    lagging = [f["source"] for f in feeds if f["lagging"] and not f["silent"]]
+
+    # ------------------------------------------------------------------ 4. business
+    day_ago, week_ago = now - 86_400_000, now - 7 * 86_400_000
+    fills_row = _one("SELECT COUNT(*), COALESCE(SUM(notional_micro), 0) FROM fills WHERE ingest_ms >= ?",
+                     (day_ago,))
+    traders = _count("SELECT COUNT(DISTINCT user_id) FROM orders WHERE placed_ms >= ?", (day_ago,))
+    dep_row = _one("SELECT COUNT(*), COALESCE(SUM(amount_micro), 0) FROM deposits WHERE first_seen_ms >= ?",
+                   (day_ago,))
+    wd_row = _one("SELECT COUNT(*), COALESCE(SUM(amount_micro), 0) FROM withdrawals WHERE requested_ms >= ?",
+                  (day_ago,))
+    wd_hour = _one("SELECT COUNT(*), COALESCE(SUM(amount_micro), 0) FROM withdrawals WHERE requested_ms >= ?",
+                   (now - 3_600_000,))
+    pro = _count("SELECT COUNT(*) FROM entitlements WHERE plan = 'pro' AND updated_ms >= ?", (week_ago,))
+    alert_fires = _count("SELECT COUNT(*) FROM alert_fires WHERE fired_ms >= ?", (day_ago,))
+    # The withdrawal spike: this hour against the mean hour of the last day. It is the earliest signal that
+    # something has gone wrong with trust rather than with code — users leaving is a trust event, and a trust
+    # event is the one thing an operations dashboard must notice before a support ticket explains it.
+    wd_mean_hour = (int(wd_row[1] or 0) / 24.0) if wd_row else 0.0
+    spike_ratio = (int(wd_hour[1] or 0) / wd_mean_hour) if wd_mean_hour > 0 else 0.0
+    # The two money-in-flight reads the kit asks for as alarms rather than as nice-to-haves: an uncredited deposit
+    # and a withdrawal that has not completed are both "a user's money is somewhere we are not showing".
+    # The columns are the schema's own vocabulary, not a guess: a deposit is stuck when it is not `credited` and
+    # not yet resolved, and a withdrawal is in flight while its status says so.
+    stuck_row = _one("SELECT COUNT(*), COALESCE(MIN(first_seen_ms), 0) FROM deposits"
+                     " WHERE status <> 'credited' AND resolved_ms IS NULL")
+    wip_row = _one("SELECT COUNT(*), COALESCE(MIN(requested_ms), 0) FROM withdrawals"
+                   " WHERE status IN ('awaiting_confirmation','queued','submitted','confirmed')"
+                   " AND completed_ms IS NULL")
+    tel_row = _one("SELECT SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END),"
+                   " SUM(CASE WHEN status = 'sent' THEN 1 ELSE 0 END)"
+                   " FROM alert_deliveries WHERE queued_ms >= ?", (day_ago,))
+
+    # ------------------------------------------------------------------ 5. liveness and the security posture
+    # Both are pages rather than dashboards (D5's SEV1 list): an executor that stopped beating, and a key-shaped
+    # incident. Neither is money *state*, but both predict money state, which is why they sit here and not in a
+    # separate tool nobody opens at 2am.
+    beat = _one("SELECT at_ms, pid, version, ticks FROM executor_state WHERE id = 1")
+    # The indicator set is deliberately small and each one is a row somebody wrote: a revocation job opened, a
+    # wallet suspended for an export investigation or an insider flag, or an export request itself. Counting
+    # "suspicious things" would be inventing a signal; counting these three is reporting one.
+    sec_rows = {str(r[0]): int(r[1]) for r in _db.execute(
+        "SELECT event, COUNT(*) FROM wallet_events WHERE at_ms >= ? AND event IN"
+        " ('export_requested','export_completed','suspended','reinstated','policy_drift','policy_gap')"
+        " GROUP BY event", (day_ago,)).fetchall()}
+    susp_row = _one("SELECT COUNT(*) FROM wallets WHERE state = 'suspended'")
+    revoke_row = _one("SELECT COUNT(*), COALESCE(SUM(CASE WHEN finished_ms IS NULL THEN 1 ELSE 0 END), 0)"
+                      " FROM revoke_jobs WHERE started_ms >= ?", (day_ago,))
+    old_sessions = _count("SELECT COUNT(*) FROM auth_sessions WHERE revoked_ms IS NULL AND expires_ms < ?", (now,))
+
+    # ------------------------------------------------------------------ 6. the builder code, from the venue's own answer
+    builder_code = (os.environ.get("PGM_BUILDER_CODE") or "").strip()
+    bc_row = None
+    bc_states = {}
+    if builder_code:
+        bc_row = _one("SELECT state, changed_ms, reject_count FROM builder_code_status WHERE code = ?",
+                      (builder_code,))
+    bc_states = {str(r[0]): int(r[1]) for r in _db.execute(
+        "SELECT state, COUNT(*) FROM builder_code_status GROUP BY state").fetchall()}
+
+    return _stamped({
+        # The one switch an operator wants on every screen, and its age: "engaged" without "for how long" is a
+        # fact with no decision attached to it.
+        "killSwitch": {"engaged": bool(kill_row[0]) if kill_row else False,
+                       "reason": str(kill_row[1]) if kill_row else "",
+                       "engagedForMs": (now - int(kill_row[2])) if kill_row and kill_row[2] else 0},
+        "money": {
+            "unreconciled": {"count": unreconciled_n, "oldestAgeMs": oldest_age, "byCase": by_case,
+                             "page": unreconciled_n > 0 and oldest_age > UNRECONCILED_PAGE_MS,
+                             "thresholdMs": UNRECONCILED_PAGE_MS,
+                             "source": "reconcile_open (a row per unresolved case, deleted when it resolves)"},
+            "ordersUnknownState": {"count": unknown_n, "states": list(_BLOCKING_INTENT_STATES),
+                                   "source": "order_intents.state"},
+            "positionDrift": {"mismatchedOrders": int(drift_row[0] or 0) if drift_row else 0,
+                              "worstMicro": int(drift_row[1] or 0) if drift_row else 0,
+                              "source": "our fills vs the venue's OrderFilled log (a proxy for holdings, not"
+                                        " the holdings themselves)"},
+            "feeEstimateDelta": {"measured": int(fee_row[0] or 0) if fee_row else 0,
+                                 "sumAbsMicro": int(fee_row[1] or 0) if fee_row else 0,
+                                 "worstMicro": int(fee_row[2] or 0) if fee_row else 0,
+                                 "source": "venue_fees: estimate at submit, actual at fill, delta forever"},
+            "builderFees": {"days": int(bf_row[0] or 0) if bf_row else 0,
+                            "orders": int(bf_row[1] or 0) if bf_row else 0,
+                            "volumeMicro": int(bf_row[2] or 0) if bf_row else 0,
+                            "expectedMicro": int(bf_row[3] or 0) if bf_row else 0,
+                            "chainMeasuredMicro": int(bf_row[4] or 0) if bf_row else 0,
+                            "deltaMicro": int(bf_row[5] or 0) if bf_row else 0,
+                            "daysUnmatched": int(bf_row[6] or 0) if bf_row else 0,
+                            "independent": True,
+                            "source": "builder_revenue_daily: expected from our ledger, chain from OrderFilled"
+                                      " events — measured without reading the venue's dashboard"},
+        },
+        "orderPath": {
+            "intentsByState": by_state,
+            "blockingStates": list(_BLOCKING_INTENT_STATES),
+            "rejectionsLastHour": int(rejects_row[0] or 0) if rejects_row else 0,
+            "rejectionsByReason": reasons,
+            "hops": {"risk": _pcts(risk_ms), **{k: _pcts(v) for k, v in hops.items()}},
+            "rateBuckets": [{"key": str(r[0]), "bucketMs": int(r[1]), "count": int(r[2])}
+                            for r in _db.execute("SELECT key, bucket_ms, count FROM rate_counters"
+                                                 " WHERE updated_ms >= ? ORDER BY count DESC LIMIT 10",
+                                                 (now - 3_600_000,)).fetchall()],
+        },
+        # Liveness, with the two fields an operator actually asks for after "it is down": since when, and which
+        # artifact. `lastBeatAgeMs` is null when no beat has ever been written, which is *worse* than a big number
+        # and must not render as fresh.
+        "executor": {
+            "state": ("live" if beat and (now - int(beat[0])) <= BEAT_PAGE_MS else "down") if beat else "never",
+            "lastBeatAgeMs": (now - int(beat[0])) if beat and beat[0] else None,
+            "lastBeatMs": int(beat[0]) if beat and beat[0] else 0,
+            "ticks": int(beat[3] or 0) if beat else 0,
+            "pid": str(beat[1] or "") if beat else "",
+            "version": str(beat[2] or "") if beat else "",
+            "draining": bool(flags().on("executor_draining")),
+            "pageAfterMs": BEAT_PAGE_MS,
+            "source": "executor_state (one row, written by the executor at the top of every tick)",
+        },
+        "security": {
+            "compromiseIndicators24h": (int(sec_rows.get("export_requested", 0))
+                                       + int(sec_rows.get("suspended", 0))
+                                       + int(revoke_row[0] or 0) if revoke_row else 0),
+            "suspensions24h": int(sec_rows.get("suspended", 0)),
+            "exportRequests24h": int(sec_rows.get("export_requested", 0)),
+            "revocations24h": int(revoke_row[0] or 0) if revoke_row else 0,
+            "pendingRevocations": int(revoke_row[1] or 0) if revoke_row else 0,
+            "walletsSuspended": int(susp_row[0] or 0) if susp_row else 0,
+            "expiredSessionsOpen": int(old_sessions),
+            "events": sec_rows,
+            "source": "wallet_events (export_requested / suspended) + revoke_jobs — three named rows, never a score",
+        },
+        "builderCode": {
+            "code": builder_code or None,
+            "state": str(bc_row[0]) if bc_row else ("unconfigured" if not builder_code else "unknown"),
+            "changedMs": int(bc_row[1] or 0) if bc_row else 0,
+            "rejectCount": int(bc_row[2] or 0) if bc_row else 0,
+            "states": bc_states,
+            "source": "builder_code_status, written by the venue's own rejections and by the operator path",
+        },
+        "freshness": {"feeds": feeds, "silent": silent, "lagging": lagging,
+                      "silentThresholdMs": SILENT_FEED_MS,
+                      "source": "ingest_cursors, written by the data plane; `silent` is measured on frames and"
+                                " `lagging` on the venue's event clock, which is the difference between a dead"
+                                " pipe and a quiet market"},
+        "business": {
+            "fills24h": int(fills_row[0] or 0) if fills_row else 0,
+            "volume24hMicro": int(fills_row[1] or 0) if fills_row else 0,
+            "traders24h": traders,
+            "deposits24h": {"count": int(dep_row[0] or 0) if dep_row else 0,
+                            "sumMicro": int(dep_row[1] or 0) if dep_row else 0},
+            "withdrawals24h": {"count": int(wd_row[0] or 0) if wd_row else 0,
+                               "sumMicro": int(wd_row[1] or 0) if wd_row else 0},
+            "withdrawalSpikeRatio": round(spike_ratio, 3),
+            "stuckDeposits": {"count": int(stuck_row[0] or 0) if stuck_row else 0,
+                              "oldestAgeMs": (now - int(stuck_row[1])) if stuck_row and stuck_row[1] else 0,
+                              "page": bool(stuck_row and int(stuck_row[0] or 0) > 0
+                                           and stuck_row[1] and (now - int(stuck_row[1])) > STUCK_DEPOSIT_PAGE_MS),
+                              "thresholdMs": STUCK_DEPOSIT_PAGE_MS},
+            "withdrawalsInFlight": {"count": int(wip_row[0] or 0) if wip_row else 0,
+                                    "oldestAgeMs": (now - int(wip_row[1])) if wip_row and wip_row[1] else 0},
+            "telegram": {"failed24h": int(tel_row[0] or 0) if tel_row else 0,
+                         "delivered24h": int(tel_row[1] or 0) if tel_row else 0,
+                         "source": "alert_deliveries by status"},
+            "proConversions7d": pro,
+            "alertFires24h": alert_fires,
+        },
+    }, ttl_ms=0, stale_ms=0)
+
+
 # ============================================================================================ #
 # P10 · the terminal's read surfaces, the copy confirm gate, and the portfolio
 #
@@ -8370,6 +8810,17 @@ _levels_p12 = {
 
 _authz.LEVELS_TABLE.update(_levels_p11)
 _authz.LEVELS_TABLE.update(_levels_p12)
+
+# P15 · the two deploy-time surfaces. Both ADMIN: one reports whether the money path may be replaced, and the
+# other flips a switch the whole fleet reads. Neither is reachable with a user token, and the table is where
+# that claim lives — not in a default somewhere.
+_levels_p15 = {
+    "GET /v1/admin/drain-status": (_authz.ADMIN, ""),
+    "GET /v1/admin/metrics": (_authz.ADMIN, ""),
+    "GET /v1/admin/flags": (_authz.ADMIN, ""),
+    "POST /v1/admin/flags": (_authz.ADMIN, ""),
+}
+_authz.LEVELS_TABLE.update(_levels_p15)
 _authz._MATCHERS.clear()                    # the matchers cache the table; a new row must invalidate it
 
 

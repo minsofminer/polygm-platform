@@ -812,17 +812,39 @@ def perf_findings(text: str, age_note: str = "") -> list:
     return f
 
 
+
+def perf_source_hash() -> str:
+    """The tape files the frame budget describes — the same three the measure script names, in the same order."""
+    import hashlib
+    h = hashlib.sha256()
+    for rel in sorted(PERF_SOURCES):
+        path = ROOT / rel
+        # The measure script hashes paths relative to `web/` (it runs from there); the list here is repo-relative.
+        # Hashing the two spellings of the same file gives the two sides different digests, which is a bug the
+        # comparison reports as drift — so the strip is part of the convention, not a convenience.
+        h.update(rel.removeprefix("web/").encode())
+        h.update(b"\0")
+        h.update(path.read_bytes() if path.exists() else b"")
+        h.update(b"\0")
+    return h.hexdigest()[:16]
+
+
 def c11_tape_frame_budget(p: Probe) -> tuple[str, bool, str]:
     """The 60fps line is measured, on the tape's real functions, at 200 fills/s — and the pixels are not claimed."""
-    newest = 0.0
-    for rel in PERF_SOURCES:
-        path = ROOT / rel
-        if path.exists():
-            newest = max(newest, path.stat().st_mtime)
-    note = ""
-    if PERF.exists() and newest and PERF.stat().st_mtime < newest:
-        note = "the measurement is older than the newest terminal source it describes"
     text = PERF.read_text() if PERF.exists() else ""
+    # Content, not timestamps. The rule here used to compare mtimes, which a `git checkout` defeats in both
+    # directions: it makes an accurate record look stale (every file is touched — this check failed on a clean
+    # reset with sources it had never measured differently) and a stale one look current (which is how the P08
+    # payload record stayed green for five phases while three routes were over budget). The artefact now states
+    # the hash of the files it measured; this recomputes it.
+    want = perf_source_hash()
+    said = re.search(r"sources-sha256:\s*([0-9a-f]{16})", text)
+    note = ""
+    if not said:
+        note = "the artefact carries no `sources-sha256` line, so nothing in it says which sources it measured"
+    elif said.group(1) != want:
+        note = ("the measurement describes different sources (it says %s, the tree hashes to %s) — re-run "
+                "`npm run measure:tape`" % (said.group(1), want))
     findings = perf_findings(text, note)
     mean = re.search(r"mean work per second of load\s+([0-9.]+) ms", text)
     detail = ("%s ms per second of load at 200 fills/s, worst release %s ms, budget %.1f ms; %d findings%s"

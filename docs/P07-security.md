@@ -9,7 +9,7 @@ Measured in this tree on 2026-09-18: `make p07` → **32/32 checks in 45 s** (tr
 `docs/verification/P07-gate.txt`); `make drill-p07` → **pass** — 10,000 wrapped keys revoked in 42 ms of our own
 time across 20 batch statements, 0 of 800 sessions surviving the global revocation, the queue sweep landing inside
 the same statement that engaged the switch (`docs/verification/P07-key-drill.txt`); `make gate-p07-mutate` →
-**28 planted weaknesses, 28 KILLED, 0 survived** (`docs/verification/P07-mutation.txt`);
+**30 planted weaknesses, 30 KILLED, 0 survived** (`docs/verification/P07-mutation.txt`);
 `python3 -m unittest discover -s tests` → **641 tests OK**, 141 of them P07 (94 in `tests/test_security_core.py`,
 stdlib-only, and 47 in `tests/test_security_plane.py` against a booted API); `make lint` → **8/8 rules clean, 8/8
 canaries fire**; `python3 tools/check-openapi.py` → **176/176**; `tools/ci-log-scan.py --sources` → **133 files,

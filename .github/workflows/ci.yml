@@ -57,6 +57,18 @@ jobs:
       # P07 D6: the log pipeline is scanned before it is trusted. `--sources` is the repo-wide half (a
       # hard-coded secret in a helper), and the CI job's own log lines are scanned by the same rules on the
       # artifacts the steps below produce.
+      - name: the migration gate (expand-contract only) and the SQLite twin
+        run: python3 tools/p15-migration-check.py --since origin/main
+      - name: the alarm registry (runbooks both ways, owners, page budget, metric paths)
+        run: python3 tools/p15-alerts.py --check
+      - name: runbooks are procedures (sections, real paths, real flags, recent drills)
+        run: python3 tools/p15-runbooks-check.py --self-test && python3 tools/p15-runbooks-check.py
+      - name: the cost envelope (config, docs and Terraform agree; inside the kit's ceiling)
+        run: python3 tools/p15-cost.py --check
+      - name: dashboards (three pages, one read, no external requests, inside the budgets)
+        run: python3 tools/p15-dashboards.py --check
+      - name: the pipeline's own shape (stage order, the manual gate, digests, fail-closed guards)
+        run: python3 tools/p15-pipeline-check.py --self-test && python3 tools/p15-pipeline-check.py
       - name: log scanner can fail (self-test)
         run: python3 tools/ci-log-scan.py --self-test
       - name: log scanner over tracked sources
@@ -87,6 +99,7 @@ jobs:
         run: |
           python3 tools/build-sqlite-migrations.py --check
           python3 tools/run-sql.py --check
+          python3 services/api/seed.py --check
       # P13's money-path matrix is the ONE coverage gate this repo has (D8: coverage is reported, not gated).
       # `--check` proves every row still names a test that exists; `--run` proves those tests pass. Both, in the
       # pull-request path, because a row that rots is a hole in the money path that reads as complete.
