@@ -184,7 +184,7 @@
   --pgm-dur-press: 100ms; /* range 100–160ms — button/row :active scale(0.97–0.98) */
   --pgm-dur-micro: 80ms; /* range 80–120ms — flash-on-change in, tooltip appear after first */
   --pgm-dur-small: 125ms; /* range 125–200ms — popovers, small overlays, chip toggles */
-  --pgm-dur-medium: 150ms; /* range 150–250ms — dropdowns, selects, disclosure, tab underline slide */
+  --pgm-dur-medium: 150ms; /* range 150–250ms — dropdowns, selects, disclosure, the tab bar's indicator (a grow-in from the leading edge; a marker that TRAVELS between tabs needs each tab's offset measured at runtime, deferred with the reason in plans/animation-audit.md §P5) */
   --pgm-dur-large: 200ms; /* range 200–300ms — modals, sheet settle */
   --pgm-dur-drawer: 300ms; /* range 300–450ms — drag-to-dismiss with velocity, ease-drawer — the ONLY surface allowed past 300ms, and only because it is gesture-driven and interruptible (springs keep velocity on reversal) */
   --pgm-ui-ceiling: 300px; /* nothing on a data surface may exceed this */
@@ -196,7 +196,7 @@
   --pgm-flash-bg-up: var(--pgm-action-buy);
   --pgm-flash-bg-down: var(--pgm-action-sell);
   /* number_policy: nothing animates a number — no counting/tweening to a new price */
-  --pgm-rise-sm: 8px; /* the sheet, the card, the confirm row, the skeleton and the refusal nudge — no other class animates */
+  --pgm-rise-sm: 8px; /* the sheet, the card, the confirm row, the skeleton and the refusal nudge (P12); the desktop dialog panel, its layer and the toast row (P-post, plans/animation-audit.md). The list is the contract and the check reads it: 'no other class animates' was unfalsifiable */
   --pgm-nudge: 4px;
   --pgm-scrim: color-mix(in srgb, var(--pgm-bg-base) 62%, transparent);
 
@@ -255,6 +255,29 @@
 .pgm-outcome--no::before  { content: "● "; }
 
 /* flash-on-change: background only — the glyph and the digits never move (number_policy) */
+/* Desktop shell motion (plans/animation-audit.md). These live here rather than in src/globals.css for the same
+   reason the flash and the Mini App block do: the token file is where the design system's motion is DEFINED, and
+   the shell stylesheet is where it is USED. The values are the ladder's own — --pgm-rise-sm is the product's single
+   entrance distance, the curve is --pgm-ease-out, and the durations are the rungs the ladder already assigns to
+   these surfaces (--pgm-dur-large "modals, sheet settle"; --pgm-dur-small "popovers, small overlays").
+   The -out classes carry the forwards fill so the surface holds its last frame until React removes it; under
+   prefers-reduced-motion both components skip the exit rather than waiting for an animationend event that the
+   reduced-motion block in src/globals.css has made impossible. (Backticks are not used in this comment on
+   purpose: this CSS lives in a JavaScript template literal, and a backtick here is an interpolation.) */
+@keyframes pgm-panel-in { from { opacity: 0; transform: translateY(var(--pgm-rise-sm)); } to { opacity: 1; transform: none; } }
+@keyframes pgm-panel-out { from { opacity: 1; transform: none; } to { opacity: 0; transform: translateY(var(--pgm-rise-sm)); } }
+@keyframes pgm-toast-in { from { opacity: 0; transform: translateY(var(--pgm-rise-sm)); } to { opacity: 1; transform: none; } }
+@keyframes pgm-toast-out { from { opacity: 1; transform: none; } to { opacity: 0; transform: translateY(var(--pgm-rise-sm)); } }
+@keyframes pgm-fade-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes pgm-fade-out { from { opacity: 1; } to { opacity: 0; } }
+
+.pgm-panel-in   { animation: pgm-panel-in var(--pgm-dur-large) var(--pgm-ease-out) 1; }
+.pgm-panel-out  { animation: pgm-panel-out var(--pgm-dur-large) var(--pgm-ease-out) 1 forwards; }
+.pgm-toast-in   { animation: pgm-toast-in var(--pgm-dur-small) var(--pgm-ease-out) 1; }
+.pgm-toast-out  { animation: pgm-toast-out var(--pgm-dur-small) var(--pgm-ease-out) 1 forwards; }
+.pgm-fade-in    { animation: pgm-fade-in var(--pgm-dur-small) var(--pgm-ease-out) 1; }
+.pgm-fade-out   { animation: pgm-fade-out var(--pgm-dur-small) var(--pgm-ease-out) 1 forwards; }
+
 @keyframes pgm-flash-up { from { background: var(--pgm-flash-bg-up); } to { background: transparent; } }
 @keyframes pgm-flash-down { from { background: var(--pgm-flash-bg-down); } to { background: transparent; } }
 .pgm-flash--up   { animation: pgm-flash-up   var(--pgm-flash-out) var(--pgm-ease-out) 1; }

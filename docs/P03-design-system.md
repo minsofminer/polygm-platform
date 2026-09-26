@@ -145,7 +145,17 @@ interruptibility → cost). Rejected, with the answer that killed each:**
 | hover lift on rows | tens/day | **reject** — transform shifts 1px and reads as jitter at 22px rows; background only |
 | skeleton shimmer | every load | **reject the motion, keep the state** — linear motion on a surface whose message is "data is NOT arriving"; static opacity instead |
 
-Accepted: sheet/drawer enter+exit, popover open, toast, command palette, tab indicator, copy-confirmation.
+Accepted: sheet/drawer enter+exit, **modal/dialog enter+exit**, popover open, toast, command palette, tab
+indicator, copy-confirmation.
+
+**Where that acceptance list stood for four phases (added by the motion pass in `plans/animation-audit.md`).** The
+list above is a *permission*, and three of its entries had no implementation on the desktop shell: the dialog
+appeared from nothing, the toast stack jumped, and the tab indicator swapped a `box-shadow` with no transition while
+`duration_ms.medium`'s own text promised a slide. The permission was written in P03 and shipped in P12 only inside
+the Mini App block — every motion consumer in the product was in the webview. The audit that found this also found
+two rules that contradicted the ladder (a `translateY` press where `brand/tokens.json` says
+`:active scale(0.97–0.98)`, and `--pgm-dur-micro` with zero consumers), and all of it is fixed in
+`tools/build-tokens.mjs` + `web/src/globals.css` with the values read from the tokens rather than typed.
 
 ### D1.7 Layers
 

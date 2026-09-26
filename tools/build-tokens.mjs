@@ -209,6 +209,29 @@ ${bpCss}
 .pgm-outcome--no::before  { content: "● "; }
 
 /* flash-on-change: background only — the glyph and the digits never move (number_policy) */
+/* Desktop shell motion (plans/animation-audit.md). These live here rather than in src/globals.css for the same
+   reason the flash and the Mini App block do: the token file is where the design system's motion is DEFINED, and
+   the shell stylesheet is where it is USED. The values are the ladder's own — --pgm-rise-sm is the product's single
+   entrance distance, the curve is --pgm-ease-out, and the durations are the rungs the ladder already assigns to
+   these surfaces (--pgm-dur-large "modals, sheet settle"; --pgm-dur-small "popovers, small overlays").
+   The -out classes carry the forwards fill so the surface holds its last frame until React removes it; under
+   prefers-reduced-motion both components skip the exit rather than waiting for an animationend event that the
+   reduced-motion block in src/globals.css has made impossible. (Backticks are not used in this comment on
+   purpose: this CSS lives in a JavaScript template literal, and a backtick here is an interpolation.) */
+@keyframes pgm-panel-in { from { opacity: 0; transform: translateY(var(--pgm-rise-sm)); } to { opacity: 1; transform: none; } }
+@keyframes pgm-panel-out { from { opacity: 1; transform: none; } to { opacity: 0; transform: translateY(var(--pgm-rise-sm)); } }
+@keyframes pgm-toast-in { from { opacity: 0; transform: translateY(var(--pgm-rise-sm)); } to { opacity: 1; transform: none; } }
+@keyframes pgm-toast-out { from { opacity: 1; transform: none; } to { opacity: 0; transform: translateY(var(--pgm-rise-sm)); } }
+@keyframes pgm-fade-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes pgm-fade-out { from { opacity: 1; } to { opacity: 0; } }
+
+.pgm-panel-in   { animation: pgm-panel-in var(--pgm-dur-large) var(--pgm-ease-out) 1; }
+.pgm-panel-out  { animation: pgm-panel-out var(--pgm-dur-large) var(--pgm-ease-out) 1 forwards; }
+.pgm-toast-in   { animation: pgm-toast-in var(--pgm-dur-small) var(--pgm-ease-out) 1; }
+.pgm-toast-out  { animation: pgm-toast-out var(--pgm-dur-small) var(--pgm-ease-out) 1 forwards; }
+.pgm-fade-in    { animation: pgm-fade-in var(--pgm-dur-small) var(--pgm-ease-out) 1; }
+.pgm-fade-out   { animation: pgm-fade-out var(--pgm-dur-small) var(--pgm-ease-out) 1 forwards; }
+
 @keyframes pgm-flash-up { from { background: var(--pgm-flash-bg-up); } to { background: transparent; } }
 @keyframes pgm-flash-down { from { background: var(--pgm-flash-bg-down); } to { background: transparent; } }
 .pgm-flash--up   { animation: pgm-flash-up   var(--pgm-flash-out) var(--pgm-ease-out) 1; }

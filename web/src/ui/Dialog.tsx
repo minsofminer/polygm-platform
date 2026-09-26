@@ -7,10 +7,23 @@
  *
  * This is why the shell has no Radix: its Dialog traps by default, and un-trapping a third-party component
  * is a permanent negotiation. The version here is small enough to read.
+ *
+ * **The close is a two-step, and the first step is the animation.** A modal that vanishes between frames reads as
+ * a glitch, so closing plays `pgm-panel-out` and then removes the panel — the same shape the Mini App's sheet uses.
+ * The step that is easy to miss: `onAnimationEnd` never fires when `prefers-reduced-motion: reduce` has turned
+ * animations off, so the exit path short-circuits to `onClose()` for exactly those users. A dialog that waits for
+ * an animation that cannot run is a dialog nobody can close. See `plans/animation-audit.md` §P1.
  */
 "use client";
-import { useEffect, useRef, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { t } from "@/i18n/t";
+
+/** True when the user has asked their system for less motion. Both exit paths ask this before they animate. */
+function prefersReducedMotion(): boolean {
+  return typeof window !== "undefined" && typeof window.matchMedia === "function"
+    ? window.matchMedia("(prefers-reduced-motion: reduce)").matches
+    : false;
+}
 
 export type DialogProps = {
   open: boolean;
@@ -25,6 +38,20 @@ export type DialogProps = {
 export function Dialog({ open, onClose, title, busy, children, describeBy }: DialogProps) {
   const panel = useRef<HTMLDivElement | null>(null);
   const restore = useRef<Element | null>(null);
+  const [leaving, setLeaving] = useState(false);
+
+  /** Close, with the exit played first — or immediately, when motion is off or the browser cannot animate. */
+  const requestClose = useCallback(() => {
+    if (prefersReducedMotion()) {
+      onClose();
+      return;
+    }
+    setLeaving(true);
+  }, [onClose]);
+
+  useEffect(() => {
+    if (open) setLeaving(false);           // a reopened dialog enters again rather than reusing the exit frame
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
@@ -37,19 +64,19 @@ export function Dialog({ open, onClose, title, busy, children, describeBy }: Dia
         announce("A request is in flight. The dialog stays open until it answers.");
         return;
       }
-      onClose();
+      requestClose();
     };
     document.addEventListener("keydown", onKey);
     return () => {
       document.removeEventListener("keydown", onKey);
       if (restore.current instanceof HTMLElement) restore.current.focus();
     };
-  }, [open, busy, onClose]);
+  }, [open, busy, requestClose]);
 
   if (!open) return null;
   return (
     <div
-      className="overlay"
+      className={`overlay ${leaving ? "pgm-fade-out" : "pgm-fade-in"}`}
       role="presentation"
       onMouseDown={(e) => {
         if (e.target !== e.currentTarget) return;
@@ -57,10 +84,23 @@ export function Dialog({ open, onClose, title, busy, children, describeBy }: Dia
           announce("A request is in flight. The dialog stays open until it answers.");
           return;
         }
-        onClose();
+        requestClose();
       }}
     >
-      <div className="overlay__panel" role="dialog" aria-modal="false" aria-label={title} aria-describedby={describeBy} ref={panel}>
+      <div
+        className={`overlay__panel ${leaving ? "pgm-panel-out" : "pgm-panel-in"}`}
+        role="dialog"
+        aria-modal="false"
+        aria-label={title}
+        aria-describedby={describeBy}
+        ref={panel}
+        // The panel's animation is the longer of the two, so IT decides when the dialog is gone. `onAnimationEnd`
+        // fires for the panel's own exit only; a child's bubbling animation is filtered out by the target check.
+        onAnimationEnd={(event) => {
+          if (!leaving || event.target !== event.currentTarget) return;
+          onClose();
+        }}
+      >
         {busy ? <span className="a11y-only" role="status">{t("common.state.loading")}</span> : null}
         {children}
       </div>

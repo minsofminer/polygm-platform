@@ -133,7 +133,10 @@ MOTION = {
         "press": {"min": 100, "max": 160, "use": "button/row :active scale(0.97–0.98)"},
         "micro": {"min": 80, "max": 120, "use": "flash-on-change in, tooltip appear after first"},
         "small": {"min": 125, "max": 200, "use": "popovers, small overlays, chip toggles"},
-        "medium": {"min": 150, "max": 250, "use": "dropdowns, selects, disclosure, tab underline slide"},
+        "medium": {"min": 150, "max": 250,
+                   "use": "dropdowns, selects, disclosure, the tab bar's indicator (a grow-in from the leading "
+                          "edge; a marker that TRAVELS between tabs needs each tab's offset measured at runtime, "
+                          "deferred with the reason in plans/animation-audit.md §P5)"},
         "large": {"min": 200, "max": 300, "use": "modals, sheet settle"},
         "drawer": {"min": 300, "max": 450, "use": "drag-to-dismiss with velocity, ease-drawer — the ONLY surface allowed past 300ms, and only because it is gesture-driven and interruptible (springs keep velocity on reversal)"},
         "forbidden": "anything animated on a data value: see number_policy",
@@ -170,7 +173,9 @@ MOTION = {
         "rise_sm_px": 8,
         "nudge_px": 4,
         "scrim": "color-mix(in srgb, var(--pgm-bg-base) 62%, transparent)",
-        "surfaces": "the sheet, the card, the confirm row, the skeleton and the refusal nudge — no other class animates",
+        "surfaces": "the sheet, the card, the confirm row, the skeleton and the refusal nudge (P12); the desktop "
+                   "dialog panel, its layer and the toast row (P-post, plans/animation-audit.md). The list is the "
+                   "contract and the check reads it: 'no other class animates' was unfalsifiable",
         "why_own_token": "P03's motion section owns durations and easings; a *distance* has no home there, and inventing "
                          "one in the webview's CSS makes the promise 'the Mini App is the same design system' unverifiable",
     },
@@ -187,7 +192,8 @@ MOTION = {
         "why_banned": "each is a data-integrity risk here: morphing or sharing an element between a market row and a detail view means the same pixels represent two prices at once",
     },
     "where_motion_is_allowed": {
-        "allowed": ["sheet/drawer enter+exit", "popover open", "toast", "command palette", "tab indicator slide", "copy-confirmation icon"],
+        "allowed": ["sheet/drawer enter+exit", "modal/dialog enter+exit", "popover open", "toast",
+                    "command palette", "tab indicator slide", "copy-confirmation icon"],
         "rejected_after_review": [
             {"candidate": "stagger-in market cards on the Explore grid", "verdict": "reject — seen on every navigation, adds 200ms to the slowest thing (perception), and the grid is data not marketing"},
             {"candidate": "animated count-up on portfolio value", "verdict": "reject — violates number_policy and hides the fact that a number changed"},

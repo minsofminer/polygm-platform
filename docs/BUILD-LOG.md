@@ -977,3 +977,55 @@ is NO-GO until the Supabase token is rotated and 2FA is on. `PGM_TELEGRAM_BOT_TO
 BotFather Mini App URL is still a manual step, the real-phone acceptance run has not happened, and the $50/72 h
 canary stays blocked while the gate says no.
 
+---
+
+## Post-P16 — the skills are installed, and the motion pass they implied · 2026-09-26
+
+**Installed, and made reproducible.** The named repos are vendored in `skills/` with provenance in
+`skills/VENDOR.json` (44 skills from six sources: the higgsfield brand/image kit, emilkowalski's animation set,
+`vercel-labs/agent-skills` including `web-design-guidelines` and `react-best-practices`, Leonxlnx's taste-skill and
+its image-to-code skill, VoltAgent's awesome-design-md, and microsoft's playwright-cli). The vendored copy is what
+survives this workspace's resets — and the mirrors under `~/skills`, `~/.claude/skills` and `~/.agents/skills` are
+not part of the snapshot, so `tools/install-skills.sh --apply` rebuilds all three from the repo in one command
+instead of leaving the installation in a shell history nobody kept.
+
+**Then the work the skills are for.** `plans/animation-audit.md` is the audit that
+`improve-animations` prescribes — recon, findings, vetting — and it found something worth writing down: **the
+design system already permitted this motion and the shell had never shipped it.** Every motion consumer in the
+product lived in the Mini App block; the desktop animated a number flash and a button press and nothing else.
+`brand/tokens.json` even allowed "toast" and "tab indicator slide" by name, while `--pgm-dur-micro` had zero
+consumers and `--pgm-dur-medium`'s comment promised a slide no rule implemented.
+
+**Six fixes, all values read from the ladder rather than typed.** The dialog enters and exits at
+`--pgm-dur-large` with `--pgm-rise-sm` and a fade for the layer behind it; the toast stack rises at
+`--pgm-dur-small` and its rows leave through a `dismissing` state, so `dismiss` stays the only remover and a row
+is never removed between two frames; the press is the design system's own `scale(0.97)` (it was a `translateY`,
+a drift from `P03 §D3`) with the transition moved to the base rule, because a transition declared inside `:active`
+animates the press and not the *release*; `--pgm-dur-micro` gets its first desktop consumer on the rail handle;
+and the tab indicator grows from the leading edge at `--pgm-dur-medium` instead of popping.
+
+**Two things the pass is careful about, and one it deliberately is not.** The exit paths short-circuit under
+`prefers-reduced-motion`, because the reduced-motion block removes animations and an exit that waits for an
+`animationend` that cannot fire is a **dialog nobody can close** — that case has a test, and a second test exists
+because the first draft of the rule was wrong: a browser too old to have `matchMedia` still runs CSS animations, so
+waiting there is correct. A true cross-tab slide is **deferred with its reason** (the marker lives on each tab in a
+`grid-auto-flow: column` bar, so travelling needs each tab's offset measured at runtime) and the token's own text now
+describes what exists. And auto-dismiss is **not** in scope: `ttlMs` is carried by every row and no timer reads it —
+that is a product behaviour change, so the leaving state is built and documented for the day somebody adds it.
+
+**The contract comments were updated rather than quietly broken.** `--pgm-rise-sm`'s text ended *"no other class
+animates"*; it now lists its consumers, because "no other" is unfalsifiable while a list can be checked. That edit
+belongs in the *generator*, not the generated file — `web/styles/tokens.css` is built from `brand/tokens.css`, which
+is built from `brand/tokens.json` — and P08's c6 said so out loud by failing on the first hand-edit.
+
+**Verified.** Web **67 files / 601 tests** (was 65/580: `src/ui/motion.test.ts` asserts the stylesheet's values, the
+`Dialog` and `Toast` tests assert the lifecycle), Python **1543 OK** unittest and pytest as recorded, and the gates
+a stylesheet change touches, re-run rather than assumed: **P03 62/62** with all 20 mutations caught, **P08 16/16**
+(bundle re-measured from the product's own build), **P10 15/15**, **P12 41/0**, **P09 7/7**. `build-foundations
+--check` and `build-web-tokens --check` both clean, so the generated layers are reproducible from their sources.
+
+**`[UNVERIFIED]`.** The values are asserted mechanically; **how 8px of rise and a 125ms toast actually feel has not
+been eyeballed on a device** — this box has no browser session, and the honest statement is that the mechanics are
+proven and the feel is a judgement the owner can now make against a real screen. That is the one line in this
+change a test cannot carry.
+

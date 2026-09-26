@@ -159,6 +159,14 @@ body {
   background: var(--pgm-border-strong);
 }
 
+.handle {
+  /* The rail handle is dragged constantly, so it gets the frequency table's "drastically reduce": a colour that
+     arrives over --pgm-dur-micro reads as responsive, while the same change over a "normal" 300ms reads as lag.
+     This is also --pgm-dur-micro's first consumer on the desktop — it was documented with no rule using it
+     (plans/animation-audit.md §P4). */
+  transition: background var(--pgm-dur-micro) var(--pgm-ease-out);
+}
+
 .topbar {
   position: sticky;
   inset-block-start: 0;
@@ -214,7 +222,27 @@ body {
 
 .tab[aria-current="page"] {
   color: var(--pgm-text-primary);
-  box-shadow: inset 0 calc(var(--pgm-space-off-3) * -1) 0 var(--pgm-brand-primary);
+  /* The indicator is a pseudo-element rather than a box-shadow, because a shadow cannot be scaled from an edge
+     and this one has to arrive with a direction. It grows from the LEADING edge (`transform-origin: left`, which
+     is the correct cap for a horizontal bar in both writing directions only because the bar's own box is used;
+     the RTL flip is handled by the logical inset below). */
+  position: relative;
+}
+
+.tab::after {
+  content: "";
+  position: absolute;
+  inset-block-end: 0;
+  inset-inline: 0;
+  block-size: var(--pgm-space-off-3);
+  background: var(--pgm-brand-primary);
+  transform: scaleX(0);
+  transform-origin: left center;
+  transition: transform var(--pgm-dur-medium) var(--pgm-ease-out);
+}
+
+.tab[aria-current="page"]::after {
+  transform: scaleX(1);
 }
 
 .dot {
@@ -259,6 +287,12 @@ body {
   color: var(--pgm-text-primary);
   font: inherit;
   cursor: pointer;
+  /* On the BASE rule, not on `:active`. A transition declared inside `:active` animates the press and nothing
+     else: the release has no transition to run, so the button snaps back at exactly the moment the user is
+     watching it. Both directions, one declaration. */
+  transition: transform var(--pgm-dur-press) var(--pgm-ease-out),
+              background var(--pgm-dur-micro) var(--pgm-ease-out),
+              border-color var(--pgm-dur-micro) var(--pgm-ease-out);
 }
 
 .button[data-variant="primary"] {
@@ -273,8 +307,10 @@ body {
 }
 
 .button:active {
-  transform: translateY(var(--pgm-space-off-1));
-  transition: transform var(--pgm-dur-press) var(--pgm-ease-out);
+  /* The design system's own value (P03 §D3 `active │ pressed │ scale(0.97) 100ms ease-out`, and
+     `brand/tokens.json` duration_ms.press: ":active scale(0.97–0.98) on any pressable"). This was a translateY
+     until the motion pass — a drift from the documented physicality, found in plans/animation-audit.md §P3. */
+  transform: scale(0.97);
 }
 
 .button[disabled] {

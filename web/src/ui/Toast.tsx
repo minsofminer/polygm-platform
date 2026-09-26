@@ -14,11 +14,23 @@ export type Toast = {
   count: number;
   /** 0 means it stays until dismissed — used for a refusal that blocks an action the user is looking at. */
   ttlMs: number;
+  /**
+   * The toast is playing its exit. `dismiss` stays the only thing that removes a row, and this is what a click
+   * sets first, so the removal happens on `animationend` rather than between two frames.
+   *
+   * It is also the field a TTL would use: `ttlMs` is carried by every row and **no timer reads it yet** (there is
+   * no `setTimeout` in this module — verified, and stated here rather than implied, because a comment claiming an
+   * auto-dismiss the product does not have is worse than no comment). When one lands it calls `requestDismiss`,
+   * so a toast leaving on its own and a toast leaving on a click are the same code path.
+   */
+  dismissing: boolean;
 };
 
 type Store = {
   toasts: Toast[];
   push: (args: { key: string; text: string; tone?: Toast["tone"]; ttlMs?: number }) => void;
+  /** Start the exit. Does not remove — `dismiss` does, on the animation's own end. */
+  requestDismiss: (id: string) => void;
   dismiss: (id: string) => void;
 };
 
@@ -29,11 +41,17 @@ export const useToasts = create<Store>((set) => ({
       const found = state.toasts.find((x) => x.id === key);
       if (found) {
         return {
-          toasts: state.toasts.map((x) => (x.id === key ? { ...x, count: x.count + 1, text, tone, ttlMs } : x)),
+          // A repeat that arrives while the row is leaving un-cancels the exit: the news is newer than the click,
+          // and a toast that vanished mid-update would take the update with it.
+          toasts: state.toasts.map((x) =>
+            x.id === key ? { ...x, count: x.count + 1, text, tone, ttlMs, dismissing: false } : x,
+          ),
         };
       }
-      return { toasts: [{ id: key, text, tone, count: 1, ttlMs }, ...state.toasts].slice(0, 4) };
+      return { toasts: [{ id: key, text, tone, count: 1, ttlMs, dismissing: false }, ...state.toasts].slice(0, 4) };
     }),
+  requestDismiss: (id) =>
+    set((state) => ({ toasts: state.toasts.map((x) => (x.id === id ? { ...x, dismissing: true } : x)) })),
   dismiss: (id) => set((state) => ({ toasts: state.toasts.filter((x) => x.id !== id) })),
 }));
 
@@ -47,20 +65,40 @@ export function pushRefusal(code: string, message: string, requestId: string): v
   });
 }
 
+/** Ask the system whether motion is welcome. The exit cannot wait for an `animationend` that will not fire. */
+function prefersReducedMotion(): boolean {
+  return typeof window !== "undefined" && typeof window.matchMedia === "function"
+    ? window.matchMedia("(prefers-reduced-motion: reduce)").matches
+    : false;
+}
+
 export function Toasts() {
-  const { toasts, dismiss } = useToasts();
+  const { toasts, dismiss, requestDismiss } = useToasts();
   if (!toasts.length) return null;
   return (
     <div className="toasts" role="region" aria-label={t("common.state.errorTitle")}>
       {toasts.map((toast) => (
-        <div key={toast.id} className="toast" data-tone={toast.tone} role={toast.tone === "error" ? "alert" : "status"}>
+        <div
+          key={toast.id}
+          className={`toast ${toast.dismissing ? "pgm-toast-out" : "pgm-toast-in"}`}
+          data-tone={toast.tone}
+          role={toast.tone === "error" ? "alert" : "status"}
+          onAnimationEnd={(event) => {
+            if (!toast.dismissing || event.target !== event.currentTarget) return;
+            dismiss(toast.id);
+          }}
+        >
           <span>{toast.text}</span>
           {toast.count > 1 ? (
             <span className="toast__count">
               ×{toast.count} — {t("common.button.dismiss")}
             </span>
           ) : null}
-          <button type="button" className="button" onClick={() => dismiss(toast.id)}>
+          <button
+            type="button"
+            className="button"
+            onClick={() => (prefersReducedMotion() ? dismiss(toast.id) : requestDismiss(toast.id))}
+          >
             {t("common.button.dismiss")}
           </button>
         </div>
