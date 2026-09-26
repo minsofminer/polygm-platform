@@ -24,6 +24,8 @@ Four decisions worth stating, because each could have gone the other way:
 """
 from __future__ import annotations
 
+from . import webhook as _webhook
+
 CHANNELS = ("telegram", "email", "webhook")
 
 #: Which plan each channel needs. Telegram is the default and free; email is for anyone paying; webhook is Pro,
@@ -287,6 +289,22 @@ def validate_alert_payload(payload: dict, *, plan: str) -> tuple[dict, list[str]
     if params is not None and not isinstance(params, dict):
         errs.append("params must be an object")
     params = params or {}
+    # A webhook's destination is the only address in this product a *user* chooses, so it is checked while the
+    # user still has the form open rather than discovered at 3am by a worker. This half is DNS-free on purpose:
+    # saving a rule must not fail because our resolver is having a bad minute, and a hostname's current
+    # resolution is not a property of the rule. What it does guarantee is that nothing *already* internal — a
+    # literal 127.0.0.1, 169.254.169.254, a private range, http, userinfo — can be stored at all; the resolution
+    # half runs at every send (`signals.webhook.deliver`), where a host that resolved publicly at save time and
+    # privately at fire time is still refused.
+    if channel == "webhook":
+        raw_url = params.get("url")
+        if not isinstance(raw_url, str) or not raw_url.strip():
+            errs.append("a webhook alert needs params.url: a destination is the whole channel")
+        else:
+            try:
+                _webhook.check_target(raw_url)
+            except _webhook.TargetRefused as exc:
+                errs.append("params.url %s (%s)" % (exc.message, exc.detail or exc.code))
     # The engine's params for this kind, and the reason each is unusable when it is. Checked at SAVE time: a rule
     # whose condition the engine cannot evaluate is a rule that looks armed and never fires, and the moment to say
     # so is while the user still has the form open.

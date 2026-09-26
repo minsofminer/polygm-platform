@@ -526,12 +526,145 @@ def section_injection(g: Gate, facts: dict, s: Surface) -> None:
     g.check("the fetch call sites are the ingest and executor clients, and each takes a constant rather than a "
             "request field (%d site(s))" % len(set(fetch_sites)), bool(fetch_sites),
             "no outbound call site was found in the tree at all, so this check has nothing to say")
-    g.open("NO OUTBOUND WEBHOOK TRANSPORT EXISTS YET, so the stored-URL SSRF path is latent rather than absent",
-           "the alert channel `webhook` is Pro's and its rows are held, not sent (P10 D9). When a transport lands "
-           "it must (a) parse the URL, (b) refuse any scheme but https, (c) resolve the host and refuse loopback, "
-           "link-local 169.254.0.0/16, RFC1918 and IPv6 ULA ranges, (d) re-check after every redirect or refuse "
-           "redirects outright. The check belongs in this section, and it must be a refusal *before* the socket "
-           "rather than a timeout after it")
+    #    CLOSED after P16, by building the transport with the guard in it rather than waiting for one.
+    #    `polygm_core.signals.webhook` is the only place a user-chosen address becomes a socket, and the guard is
+    #    the first thing that runs. This section measured the *latent* path in P14 because no transport existed;
+    #    now it measures the refusal, and it measures it two ways: through the library (with an opener that fails
+    #    the check if it is ever called, so "refused" is a claim about the socket) and through the served API as a
+    #    Pro account (so the guard is proven to be wired into the product, not just importable).
+    try:
+        from polygm_core.signals import webhook as _wh
+    except Exception as exc:                                                     # noqa: BLE001
+        _wh = None
+        g.check("the webhook transport is importable (%s)" % type(exc).__name__, False, str(exc)[:160])
+    if _wh is not None:
+        opened = []
+
+        def _never(url, body, headers, timeout):                                  # noqa: ARG001
+            opened.append(url)
+            raise AssertionError("connects-then-complains: %s" % url)
+
+        hostile = ["http://hooks.example.com/x", "https://127.0.0.1/v1/admin/kill-switch",
+                   "https://127.1.2.3/x", "https://169.254.169.254/latest/meta-data/iam/security-credentials/",
+                   "https://10.1.2.3/x", "https://192.168.0.1/x", "https://172.16.4.4/x", "https://100.64.0.7/x",
+                   "https://0.0.0.0/x", "https://[::1]/x", "https://[fd00::1]/x", "https://[fe80::1]/x",
+                   "https://[::ffff:169.254.169.254]/x", "https://2130706433/x", "https://0x7f000001/x",
+                   "https://user:pw@hooks.example.com/x", "https://hooks.example.com:22/x",
+                   "https://ex%61mple.com/x", "gopher://hooks.example.com/x", "file:///etc/passwd"]
+        refusals = {}
+        for url in hostile:
+            try:
+                _wh.deliver(url=url, payload={"probe": 1}, secret="s", delivery_id="d", at_ms=1,
+                            resolve=lambda host: [(2, 1, 6, "", ("93.184.216.34", 0))], opener=_never)
+                refusals[url] = "ALLOWED"
+            except _wh.TargetRefused as exc:
+                refusals[url] = exc.code
+        facts["injection"]["ssrf"]["webhook_guard"] = {"refused": refusals, "hostile_count": len(hostile),
+                                          "sockets_opened": len(opened)}
+        g.check("all %d hostile webhook URLs are refused, and not one of them opened a socket"
+                % len(hostile), "ALLOWED" not in refusals.values() and not opened,
+                "allowed: %s; sockets: %d" % (json.dumps([u for u, c in refusals.items() if c == "ALLOWED"])[:160],
+                                              len(opened)))
+        #    The half that only a resolver can catch: the URL's shape is ordinary and its *answer* is internal.
+        try:
+            _wh.check_target("https://hooks.example.com/x",
+                             resolve=lambda host: [(2, 1, 6, "", ("93.184.216.34", 0)),
+                                                   (2, 1, 6, "", ("10.0.0.5", 0))])
+            split_horizon = "ALLOWED"
+        except _wh.TargetRefused as exc:
+            split_horizon = exc.code
+        g.check("a host that resolves to a public AND a private address is refused (%s)" % split_horizon,
+                split_horizon == "TARGET_NOT_PUBLIC",
+                "split-horizon DNS is the realistic version of the attack: one bad answer must refuse the host")
+        #    The redirect: the first hop is public, the second is the metadata service. The refusal must land at
+        #    the hop, which is asserted by the number of connections rather than by the final status.
+        class _Redir(Exception):
+            def __init__(self, code, loc):
+                super().__init__("redirect")
+                self.code = code
+                self.headers = {"Location": loc}
+
+        hops = []
+
+        def _redirecting(url, body, headers, timeout):                            # noqa: ARG001
+            hops.append(url)
+            raise _Redir(302, "https://169.254.169.254/latest/meta-data/")
+        hop_refusal = "ALLOWED"
+        try:
+            _wh.deliver(url="https://hooks.example.com/x", payload={"probe": 1}, secret="s", delivery_id="d",
+                        at_ms=1, resolve=lambda host: [(2, 1, 6, "", ("93.184.216.34", 0))], opener=_redirecting)
+        except _wh.TargetRefused as exc:
+            hop_refusal = exc.code
+        g.check("a redirect into the metadata range is refused at the hop (%s, %d connection(s))"
+                % (hop_refusal, len(hops)), hop_refusal == "TARGET_NOT_PUBLIC" and len(hops) == 1,
+                "the redirect hop was dialled: the guard is checking the first URL only")
+        #    And the signature a receiver verifies, computed here from first principles rather than from our own
+        #    helper, because a signature the sender and the verifier compute with the same function is a
+        #    signature that agrees with itself.
+        seen = {}
+
+        class _Ok:
+            status = 200
+
+            def read(self, n):
+                return b"{}"
+
+        def _capture(url, body, headers, timeout):                                # noqa: ARG001
+            seen.update({"body": body, "headers": headers})
+            return _Ok()
+        _wh.deliver(url="https://hooks.example.com/x", payload={"b": 2, "a": 1}, secret="s3cret",
+                    delivery_id="deadbeef", at_ms=1_700_000_000_000,
+                    resolve=lambda host: [(2, 1, 6, "", ("93.184.216.34", 0))], opener=_capture)
+        import hashlib as _h, hmac as _hm
+        _expected = _hm.new(b"s3cret", b"1700000000000." + seen["body"], _h.sha256).hexdigest()
+        g.check("the delivery is signed over the timestamp and the body, and carries the queue's own key",
+                seen["headers"].get("X-PolyGM-Signature") == "t=1700000000000,v1=%s" % _expected
+                and seen["headers"].get("X-PolyGM-Delivery") == "deadbeef"
+                and seen["body"] == b'{"a":1,"b":2}',
+                json.dumps(seen["headers"].get("X-PolyGM-Signature"))[:80])
+        #    Through the product: a Pro account saves the same hostile URL through the served API. This is the
+        #    check that says the guard is where the user can reach it.
+        pro = s.bench.user("prohook")
+        s.bench.con.execute("UPDATE users SET tier='pro' WHERE id=?", (pro["uid"],))
+        s.bench.con.commit()
+        phdr = s.bench.bearer(pro["token"])
+        save = c.post("/v1/alerts", headers={**phdr, "Idempotency-Key": "p14-ssrf-%s" % uuid.uuid4().hex[:8]},
+                      json={"kind": "price_level", "channel": "webhook", "marketId": s.market,
+                            "params": {"priceMicro": 550_000, "url": "https://169.254.169.254/latest/meta-data/"}})
+        sbody = save.json() if save.content else {}
+        good = c.post("/v1/alerts", headers={**phdr, "Idempotency-Key": "p14-ssrfok-%s" % uuid.uuid4().hex[:8]},
+                      json={"kind": "price_level", "channel": "webhook", "marketId": s.market,
+                            "params": {"priceMicro": 550_000, "url": "https://hooks.example.com/alerts"}})
+        gbody = good.json() if good.content else {}
+        stored = c.get("/v1/alerts", headers=phdr).json() or {}
+        urls = [str((r.get("params") or {}).get("url") or "") for r in (stored.get("rules") or [])]
+        facts["injection"]["ssrf"]["webhook_save"] = {"internal": {"status": save.status_code, "code": s.code(sbody)},
+                                         "public": {"status": good.status_code, "code": s.code(gbody)},
+                                         "stored_urls": urls}
+        g.check("a Pro account cannot SAVE an internal webhook URL (%d %s), and the same account CAN save a "
+                "public one (%d)" % (save.status_code, s.code(sbody) or "accepted", good.status_code),
+                save.status_code >= 400 and good.status_code == 200
+                and not any("169.254" in u for u in urls) and any("hooks.example.com" in u for u in urls),
+                "the stored rules carry %s" % json.dumps(urls)[:160])
+        #    The queue half: a refusal is dead on the first refusal, a provider failure is a retry.
+        try:
+            from polygm_core.signals import fanout as _fan
+        except Exception:                                                        # noqa: BLE001
+            _fan = None
+        if _fan is not None:
+            _claim = {"signal_id": "sig-p14", "user_id": pro["uid"], "channel": "webhook", "priority": 0,
+                      "status": _fan.STATUS_SENDING, "attempts": 0, "queued_ms": 1,
+                      "idempotency_key": _fan.idempotency_key("sig-p14", "webhook"),
+                      "target": "https://169.254.169.254/x"}
+            dead = _wh.send_claimed(_claim, payload={"a": 1}, secret="s", now_ms=2, resolve=lambda host: [],
+                                    opener=_never)
+            facts["injection"]["ssrf"]["webhook_queue"] = {"status": dead.get("status"), "reason": dead.get("dead_reason"),
+                                              "retry_in_ms": dead.get("retry_in_ms")}
+            g.check("a refused target is dead-lettered rather than retried into the queue (%s %s)"
+                    % (dead.get("status"), dead.get("dead_reason")),
+                    dead.get("status") == _fan.STATUS_DEAD and dead.get("dead_reason") ==
+                    "refused:TARGET_NOT_PUBLIC" and "retry_in_ms" not in dead,
+                    json.dumps(facts["injection"]["ssrf"]["webhook_queue"])[:160])
 
     # 5. ReDoS: a pathological input must not make a route take seconds. Measured, because "we use safe regexes"
     #    is a claim and the measured version is a number.

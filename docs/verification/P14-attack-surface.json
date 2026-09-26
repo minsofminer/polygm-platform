@@ -6,10 +6,6 @@
       "why": "measure the wall-clock and the aggregate notional of a real 500-copier fanout in the P13 chaos suite (which already kills the executor mid-fill), and record both numbers against these caps \u2014 500 configs is a load shape, and the bound that matters is the one the queue enforces"
     },
     {
-      "check": "NO OUTBOUND WEBHOOK TRANSPORT EXISTS YET, so the stored-URL SSRF path is latent rather than absent",
-      "why": "the alert channel `webhook` is Pro's and its rows are held, not sent (P10 D9). When a transport lands it must (a) parse the URL, (b) refuse any scheme but https, (c) resolve the host and refuse loopback, link-local 169.254.0.0/16, RFC1918 and IPv6 ULA ranges, (d) re-check after every redirect or refuse redirects outright. The check belongs in this section, and it must be a refusal *before* the socket rather than a timeout after it"
-    },
-    {
       "check": "NO CSV EXPORT ROUTE EXISTS YET, so formula injection could not be probed end to end",
       "why": "when the tax export ships: write a row whose fields begin `=`, `+`, `-`, `@`, then assert the writer prefixes each with a quote and that the header row is unchanged; add a test next to the wallet's own, and keep this probe as the outside view"
     },
@@ -23,12 +19,12 @@
     }
   ],
   "facts": {
-    "at_ms": 1790402056665,
+    "at_ms": 1790403272825,
     "bench": {
       "market": "0xM1",
       "token": "0xT10",
       "tick": "0.01",
-      "account": "u_attacker_edc2dad5"
+      "account": "u_attacker_13e9231e"
     },
     "trading": {
       "must_accept": {
@@ -40,7 +36,7 @@
         "tick": "0.01",
         "status": 422,
         "code": "OFF_TICK",
-        "detail": "{\"error\": {\"code\": \"OFF_TICK\", \"message\": \"price is not on a valid tick\", \"retryable\": false, \"requestId\": \"5cf0b945f14443d4\"}}"
+        "detail": "{\"error\": {\"code\": \"OFF_TICK\", \"message\": \"price is not on a valid tick\", \"retryable\": false, \"requestId\": \"dccb5ac2c9ba48eb\"}}"
       },
       "intents_after_off_tick": {
         "before": {
@@ -203,19 +199,64 @@
           "ws-subscriptions-clob.polymarket.com"
         ],
         "fetch_sites": [
+          "packages/polygm_core/signals/webhook.py:235 urllib.request.urlopen(req)",
           "services/executor-mock/transport.py:31 urllib.request.urlopen(req)",
           "services/ingest/net.py:232 urllib.request.urlopen(req)",
           "services/ingest/wsclient.py:109 socket.create_connection()"
-        ]
+        ],
+        "webhook_guard": {
+          "refused": {
+            "http://hooks.example.com/x": "TARGET_SCHEME",
+            "https://127.0.0.1/v1/admin/kill-switch": "TARGET_NOT_PUBLIC",
+            "https://127.1.2.3/x": "TARGET_NOT_PUBLIC",
+            "https://169.254.169.254/latest/meta-data/iam/security-credentials/": "TARGET_NOT_PUBLIC",
+            "https://10.1.2.3/x": "TARGET_NOT_PUBLIC",
+            "https://192.168.0.1/x": "TARGET_NOT_PUBLIC",
+            "https://172.16.4.4/x": "TARGET_NOT_PUBLIC",
+            "https://100.64.0.7/x": "TARGET_NOT_PUBLIC",
+            "https://0.0.0.0/x": "TARGET_NOT_PUBLIC",
+            "https://[::1]/x": "TARGET_NOT_PUBLIC",
+            "https://[fd00::1]/x": "TARGET_NOT_PUBLIC",
+            "https://[fe80::1]/x": "TARGET_NOT_PUBLIC",
+            "https://[::ffff:169.254.169.254]/x": "TARGET_NOT_PUBLIC",
+            "https://2130706433/x": "TARGET_MALFORMED",
+            "https://0x7f000001/x": "TARGET_MALFORMED",
+            "https://user:pw@hooks.example.com/x": "TARGET_USERINFO",
+            "https://hooks.example.com:22/x": "TARGET_PORT",
+            "https://ex%61mple.com/x": "TARGET_MALFORMED",
+            "gopher://hooks.example.com/x": "TARGET_SCHEME",
+            "file:///etc/passwd": "TARGET_SCHEME"
+          },
+          "hostile_count": 20,
+          "sockets_opened": 0
+        },
+        "webhook_save": {
+          "internal": {
+            "status": 422,
+            "code": "VALIDATION"
+          },
+          "public": {
+            "status": 200,
+            "code": ""
+          },
+          "stored_urls": [
+            "https://hooks.example.com/alerts"
+          ]
+        },
+        "webhook_queue": {
+          "status": "dead",
+          "reason": "refused:TARGET_NOT_PUBLIC",
+          "retry_in_ms": null
+        }
       },
       "redos": {
         "/v1/markets?q": {
           "status": 422,
-          "ms": 5.1
+          "ms": 4.3
         },
         "/v1/markets?category": {
           "status": 422,
-          "ms": 5.4
+          "ms": 5.3
         },
         "/v1/leaderboard?q": {
           "status": 422,
@@ -233,7 +274,7 @@
           "builder_code_revoked": true,
           "builder_code_state": "disabled",
           "reason": "self_referral",
-          "referrer": "u_attacker_edc2dad5",
+          "referrer": "u_attacker_13e9231e",
           "review": 1,
           "state": "refused"
         },
@@ -242,13 +283,13 @@
           "polygm-referral",
           "disabled",
           "manual",
-          "self-referral detected on account u_attacker_edc2dad5"
+          "self-referral detected on account u_attacker_13e9231e"
         ],
-        "referral_token": "ref_gmzqcwok\u2026"
+        "referral_token": "ref_bed6evts\u2026"
       },
       "duplicate_funding": {
         "first": {
-          "uid": "u_sybil-a_765e2b63",
+          "uid": "u_sybil-a_c5041470",
           "status": 200,
           "body_state": "attributed",
           "code": "",
@@ -258,7 +299,7 @@
           "notional_micro": 0
         },
         "second": {
-          "uid": "u_sybil-b_6c541302",
+          "uid": "u_sybil-b_27206de5",
           "status": 409,
           "body_state": null,
           "code": "REFUSED",
@@ -270,7 +311,7 @@
       },
       "sybil_claims": [
         {
-          "uid": "u_sybil-0_02da1d57",
+          "uid": "u_sybil-0_c01fbdf9",
           "status": 200,
           "body_state": "attributed",
           "code": "",
@@ -280,7 +321,7 @@
           "notional_micro": 0
         },
         {
-          "uid": "u_sybil-1_a236b910",
+          "uid": "u_sybil-1_10fbed61",
           "status": 200,
           "body_state": "attributed",
           "code": "",
@@ -290,7 +331,7 @@
           "notional_micro": 0
         },
         {
-          "uid": "u_sybil-2_ed7c5b96",
+          "uid": "u_sybil-2_6ecfa8c7",
           "status": 200,
           "body_state": "attributed",
           "code": "",
@@ -300,7 +341,7 @@
           "notional_micro": 0
         },
         {
-          "uid": "u_sybil-3_697efa90",
+          "uid": "u_sybil-3_c9842581",
           "status": 200,
           "body_state": "review",
           "code": "",
@@ -310,7 +351,7 @@
           "notional_micro": 0
         },
         {
-          "uid": "u_sybil-4_7d2b05bd",
+          "uid": "u_sybil-4_4ef81dfd",
           "status": 200,
           "body_state": "review",
           "code": "",
@@ -320,7 +361,7 @@
           "notional_micro": 0
         },
         {
-          "uid": "u_sybil-6_f5ead9f4",
+          "uid": "u_sybil-6_374428e4",
           "status": 200,
           "body_state": "review",
           "code": "",
@@ -372,7 +413,7 @@
       "free_webhook": {
         "status": 402,
         "code": "PLAN_REQUIRED",
-        "detail": "{\"error\": {\"code\": \"PLAN_REQUIRED\", \"message\": \"the plan on this account does not include that (webhook needs the pro plan): webhook needs the pro plan\", \"retryable\": true, \"requestId\": \"c0ae79a6a9794"
+        "detail": "{\"error\": {\"code\": \"PLAN_REQUIRED\", \"message\": \"the plan on this account does not include that (webhook needs the pro plan, a webhook alert needs params.url: a destination is the whole channel): webho"
       },
       "plan_injection": {
         "status": 422,
@@ -402,7 +443,7 @@
           "builder_code_revoked": false,
           "builder_code_state": "already-disabled",
           "reason": "self_referral",
-          "referrer": "u_attacker_edc2dad5",
+          "referrer": "u_attacker_13e9231e",
           "review": 1,
           "state": "refused"
         }
@@ -604,17 +645,42 @@
     },
     {
       "status": "PASS",
-      "name": "the fetch call sites are the ingest and executor clients, and each takes a constant rather than a request field (3 site(s))",
+      "name": "the fetch call sites are the ingest and executor clients, and each takes a constant rather than a request field (4 site(s))",
       "why": ""
     },
     {
-      "status": "OPEN",
-      "name": "NO OUTBOUND WEBHOOK TRANSPORT EXISTS YET, so the stored-URL SSRF path is latent rather than absent",
-      "why": "the alert channel `webhook` is Pro's and its rows are held, not sent (P10 D9). When a transport lands it must (a) parse the URL, (b) refuse any scheme but https, (c) resolve the host and refuse loopback, link-local 169.254.0.0/16, RFC1918 and IPv6 ULA ranges, (d) re-check after every redirect or refuse redirects outright. The check belongs in this section, and it must be a refusal *before* the socket rather than a timeout after it"
+      "status": "PASS",
+      "name": "all 20 hostile webhook URLs are refused, and not one of them opened a socket",
+      "why": ""
     },
     {
       "status": "PASS",
-      "name": "a 10,000-character pathological parameter is refused or answered quickly (worst 5.4 ms)",
+      "name": "a host that resolves to a public AND a private address is refused (TARGET_NOT_PUBLIC)",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "a redirect into the metadata range is refused at the hop (TARGET_NOT_PUBLIC, 1 connection(s))",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "the delivery is signed over the timestamp and the body, and carries the queue's own key",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "a Pro account cannot SAVE an internal webhook URL (422 VALIDATION), and the same account CAN save a public one (200)",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "a refused target is dead-lettered rather than retried into the queue (dead refused:TARGET_NOT_PUBLIC)",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "a 10,000-character pathological parameter is refused or answered quickly (worst 5.3 ms)",
       "why": ""
     },
     {
@@ -634,12 +700,12 @@
     },
     {
       "status": "PASS",
-      "name": "the refusal recorded the ground in the audit trail ({\"builder_code_revoked\": true, \"builder_code_state\": \"disabled\", \"reason\": \"self_referral\", \"referrer\": \"u_attacker_edc2)",
+      "name": "the refusal recorded the ground in the audit trail ({\"builder_code_revoked\": true, \"builder_code_state\": \"disabled\", \"reason\": \"self_referral\", \"referrer\": \"u_attacker_13e9)",
       "why": ""
     },
     {
       "status": "PASS",
-      "name": "the programme's builder code (polygm-referral) is marked disabled with the reason readable (['polygm-referral', 'disabled', 'manual', 'self-referral detected on account u_attacker_edc2dad5'])",
+      "name": "the programme's builder code (polygm-referral) is marked disabled with the reason readable (['polygm-referral', 'disabled', 'manual', 'self-referral detected on account u_attacker_13e9231e'])",
       "why": ""
     },
     {
@@ -754,7 +820,7 @@
     },
     {
       "status": "PASS",
-      "name": "a repeat self-referral still records the code's *state*, not just that nothing changed ({\"builder_code_revoked\": false, \"builder_code_state\": \"already-disabled\", \"reason\": \"self_referral\", \"referrer\": \"u_attacker_edc2dad5\", \"rev)",
+      "name": "a repeat self-referral still records the code's *state*, not just that nothing changed ({\"builder_code_revoked\": false, \"builder_code_state\": \"already-disabled\", \"reason\": \"self_referral\", \"referrer\": \"u_attacker_13e9231e\", \"rev)",
       "why": ""
     },
     {

@@ -153,12 +153,44 @@ class AlertsTestCase(unittest.TestCase):
         self.assertFalse(any(x["channel"] == "webhook" for x in self.alerts()["rules"]))
 
     def test_the_same_webhook_rule_saves_on_a_pro_plan(self):
+        # The `params.url` is not decoration: since the transport landed (P16's SSRF closure) a webhook rule
+        # without a destination is a rule that can never fire, so it is refused at save with the same reasoning
+        # the plan check uses. The URL is validated for shape and — for a literal address — for being public.
         r = self.client.post("/v1/alerts", json={"kind": "whale_fill", "marketId": self.market,
                                                  "channel": "webhook", "firesPerWindow": 1,
-                                                 "windowMs": 600_000},
+                                                 "windowMs": 600_000,
+                                                 "params": {"absUsdMicro": 100_000_000,
+                                                            "url": "https://hooks.example.com/polygm"}},
                              headers={**PRO, "Idempotency-Key": "alert-pro-1"})
         self.assertEqual(200, r.status_code, r.text)
         self.assertTrue(r.json()["rule"]["channelAllowed"])
+        self.assertEqual("https://hooks.example.com/polygm", r.json()["rule"]["params"]["url"])
+
+    def test_a_webhook_rule_with_no_destination_is_refused(self):
+        r = self.client.post("/v1/alerts", json={"kind": "whale_fill", "marketId": self.market,
+                                                 "channel": "webhook", "firesPerWindow": 1,
+                                                 "windowMs": 600_000, "params": {"absUsdMicro": 100_000_000}},
+                             headers={**PRO, "Idempotency-Key": "alert-pro-2"})
+        self.assertEqual(422, r.status_code, r.text)
+        self.assertIn("params.url", r.text)
+
+    def test_a_webhook_rule_pointing_inside_our_own_network_is_refused_at_save(self):
+        """The SSRF refusal, at the surface a user can reach, and for the address that matters most: the cloud
+        metadata service. Both halves matter — the loopback case proves our admin routes are not reachable
+        through a webhook, and the `169.254.169.254` case proves the credentials endpoint is not either."""
+        for url in ("https://169.254.169.254/latest/meta-data/iam/security-credentials/",
+                    "https://127.0.0.1/v1/admin/kill-switch",
+                    "https://10.0.0.5/hook",
+                    "http://hooks.example.com/cleartext"):
+            with self.subTest(url=url):
+                r = self.client.post("/v1/alerts", json={"kind": "whale_fill", "marketId": self.market,
+                                                        "channel": "webhook", "firesPerWindow": 1,
+                                                        "windowMs": 600_000,
+                                                        "params": {"absUsdMicro": 100_000_000, "url": url}},
+                                     headers={**PRO, "Idempotency-Key": "alert-pro-ssrf-%s" % abs(hash(url))})
+                self.assertEqual(422, r.status_code, r.text)
+                self.assertIn("params.url", r.text)
+        self.assertEqual([], [x for x in self.alerts()["rules"] if x["channel"] == "webhook"])
 
     def test_an_alert_with_no_target_is_refused(self):
         r = self.create("notarget", marketId="")

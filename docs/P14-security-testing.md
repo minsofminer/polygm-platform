@@ -153,6 +153,7 @@ and absences, not soft passes: they are listed at the end of the record with the
 | Stored XSS through the chat renderer (market question, side, refusal card, limbo card) | escaped at assembly; the renderer's own scanner reports no tag-level failure — **and a deliberately unescaped canary card is caught**, so the green is falsifiable |
 | The same hostile text stored in an alert rule's `params` | round-tripped byte-for-byte, escaped at render rather than at save |
 | SSRF: every declared route (87 paths) enumerated for a caller-supplied fetch target; every endpoint constant walked with an AST | **0 URL-ish parameters**, 5 endpoint constants all pointing at known vendors, 3 socket-opening call sites |
+| SSRF through the one caller-supplied address in the product (a Pro webhook's `params.url`): 20 hostile URLs through the transport, a split-horizon DNS answer, a redirect into `169.254.169.254`, and the same hostile URL saved through the served API | **all 20 refused with zero sockets opened**, the private DNS answer refused, the redirect refused **at the hop** (1 connection, not 2), the signed delivery verified against a signature recomputed from first principles, save refused `422 VALIDATION` while a public URL saves `200`, and a refused target dead-lettered rather than retried |
 | ReDoS: 10,000-character pathological parameters | worst 6 ms, all refused or answered |
 | CSV injection in a tax export | no such route exists yet — OPEN with the requirement |
 
@@ -239,6 +240,50 @@ the probe itself: the same three cards are re-rendered through the real renderer
 `docs/verification/P14-attack-surface.json` reads **56 passed, 0 failed, 7 OPEN** where it read 8. Four tests in
 `tests/test_telegrambot.py::TestTheMarkdownScanner` hold both directions: real Markdown still fires, ordinary
 questions, brackets and refusal codes do not.
+
+**Also closed after the phase (P16).** *No outbound webhook transport exists yet, so the stored-URL SSRF path is
+latent rather than absent.* The right way to close this one was to build the transport **with** the guard in it
+rather than to write a promise next to the absence, because the promise is what a hurried week deletes.
+
+`packages/polygm_core/signals/webhook.py` is now the only place in the product where a *user-chosen* address
+becomes a socket — every other outbound call site takes a constant, which is why P14 could enumerate them. The
+guard is the first thing that runs, and it is split deliberately in two:
+
+* **At save time** (`signals.console.validate_alert_payload`) the URL's *shape*: https only, no userinfo, a real
+  host, no percent-escapes or integer notations in the host, no privileged port, and — for a literal address —
+  nothing internal. This half is **DNS-free on purpose**: saving a rule must not fail because our resolver is
+  having a bad minute, and a hostname's current resolution is not a property of the rule. What it guarantees is
+  that nothing *already* internal can be stored at all.
+* **At send time** (`webhook.deliver`) everything above **plus** resolution: every address the host resolves to
+  must be globally routable, and *no resolution at all is a refusal* (fail closed — an unresolvable host is not a
+  safe host, it is a host we can make no claim about). A hostname that resolved publicly when the rule was saved
+  and privately when it fired is exactly the attack, so this check is repeated on **every send and every redirect
+  hop**.
+
+Three details are the whole of the closure, and each was found by writing it rather than by reasoning about it:
+
+* **`is_global`, not a hand-written list of ranges.** `100.64.0.0/10` (carrier-grade NAT) is `is_private=False`
+  on this interpreter while also not being routable — the kind of gap a hand-written filter has and does not
+  know it has. The named ranges come first so the refusal can explain itself; `not is_global` is the last word.
+* **A redirect hop is a new decision, and both shapes of it are guarded.** A client that *raises* on a 3xx and a
+  client that *returns* one must take the same path, or the guard is only as good as the client's exception
+  style: the returned-`Location` branch was the gap, and it is now the same code as the raised one. Redirects are
+  followed (refusing them outright breaks the ordinary `example.com → www.example.com` case) but capped at three,
+  re-guarded each hop, and a downgrade to `http` is refused by the scheme rule.
+* **A refused target is dead, not retried.** `fanout.fail` schedules a backoff for failures that might not
+  repeat; a URL that resolves into `10.0.0.0/8` is not going to stop being private on the fourth attempt, and
+  retrying it keeps a hostile rule alive in the queue. The row lands in `dead` with `dead_reason` naming the code.
+
+Evidence: `docs/verification/P14-attack-surface.txt` / `.json` → **70 passed, 0 failed, 4 OPEN** where it read
+56/0/7 before the phase's post-fixes and 64/0/5 after the copy-farm closure. Six of the new checks are this
+section, including the one that reads through the *product* rather than the library: a Pro account saving
+`https://169.254.169.254/latest/meta-data/` through the served API gets `422 VALIDATION`, saves an ordinary public
+URL beside it in the same breath, and the number of sockets opened by the whole battery is asserted to be **zero**
+— the opener the probe installs fails the run if it is ever called, so "refused" is a claim about the socket and
+not a status code. `tests/test_signals_webhook.py` (17 tests) holds the same line, plus the receiver's side of the
+contract: the `X-PolyGM-Signature` a delivery carries is recomputed in the test from the timestamp and body, and
+`X-PolyGM-Delivery` is asserted to be the queue's own idempotency key, which is what makes a redelivery after a
+lost lease droppable by the receiver.
 
 ---
 
