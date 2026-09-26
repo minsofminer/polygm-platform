@@ -877,3 +877,81 @@ token audit, the bundle record, and every gate that reads a page.
 cannot run from a workspace: the channel has no members yet, no alert has reached a real phone, the launch posts
 have not been published anywhere, and the five gates are dated in the future. P16 ships the plan and the machinery
 that keeps it honest; the numbers in it are the owner's to earn.
+
+---
+
+## Post-P16 — closing P14's open items, one measurement at a time · 2026-09-26
+
+P16 closed and the frontier became the only question left: **what stands between this and the owner pushing the
+button?** `docs/P14-security-gate.md` answers it, and the answer is now a short list. Each of the four measurable
+items the gate carried was closed the way the rest of this repository closes things — by re-running the probe that
+found it, not by writing a paragraph saying it was fixed.
+
+**The copy farm stops pairing by coincidence.** P14 measured that the rule could not tell a follower from two
+traders sharing a cadence: with the candidate's fills moved 200 s *earlier* — so it is never the one being followed
+in any pairing sense — 10 of 12 of our fills still matched, because *any* candidate fill inside 120 s counted and a
+60 s cadence always has one. The row that produces is a public "derived from 0x…", which is a claim about a person.
+`copy_farm()` now pairs **one-to-one** (same market and side, the candidate first, nearest first) and requires
+**coverage**: if the candidate still has fills left over in the markets where we paired, our fills were not
+following its fills, they were merely near them. Pairing alone does not fix the reported tape — 10 of 12 still pair
+— coverage does, at 2 left over against a 10% tolerance. The tolerance is deliberately tight, and the reason is the
+asymmetry: a missed farm costs a wallet a place it would have ranked into anyway, a false one accuses somebody.
+
+**The webhook transport lands with its guard already inside it.** The finding was that a stored-URL SSRF path
+existed in the product's channel list with no transport behind it — latent rather than absent. The right way to
+close that is not to wait for the transport: `packages/polygm_core/signals/webhook.py` (333 lines) parses the URL on
+landing, refuses any scheme but https, refuses loopback, link-local `169.254.0.0/16`, RFC1918 and IPv6 ULA
+targets, and re-checks every redirect hop — and refuses *before* the send rather than after. 17 tests in
+`tests/test_signals_webhook.py` hold it, including the DNS-rebinding shape.
+
+**The 500-copier cascade is measured, not argued.** The arithmetic bound was done first (the engine sizes 500
+copiers through the same code as one); the finding was that no run had ever placed 500 orders against a *filling*
+venue. Chaos drill 11 does exactly that: 500 funded copiers, one source fill through the product's own
+`CopyEngine`, 500 intents queued, the executor claiming them `batch_size` at a time, the venue filling all 500, the
+fills booked through the same `book_fill` the trade stream uses. Measured: **fan-out 124 ms (0.25 ms per copier)**,
+**$6,375.00 aggregate across 500 orders, largest $12.75 against the $25.00 per-trade ceiling**, zero new intents
+from replaying the same fill, and no fill above the decisions' own sum. Building it found the first version of the
+harness had 400 of 500 orders refused `STALE_QUOTE` — the pre-flight was right and the harness was wrong, which is
+worth writing down because it is the check doing its job.
+
+**Three harness bugs and one schema bug, found by running the gates rather than by reading them.** A dict-shaped
+allowlist entry (P15's RFC 4226 vector) crashed the AppSec scanner with `TypeError: unhashable type` and took the
+nightly down instead of reporting a finding; git's `b/` diff prefix made every line-scoped exemption read as stale;
+and the DSN rule matched our *own source* through a URL-shaped regex plus an `@import`. The AppSec scanner now
+parses both allowlist shapes, honours scoped entries only on the exact added line, and **fails on malformed or
+stale exemptions** rather than staying silent. The schema bug is the one P11's floor check (c27) named on the first
+full run after P16: **`telegram_kill_state` was declared append-only, granted the `polygm_app` half, and never
+given the Postgres trigger** — so our own code could rewrite the ledger of a switch thrown during an incident. The
+hermetic suite could not see it: the transpiler drops `CREATE TRIGGER` and generates the SQLite triggers from the
+declared list, so the test database had both halves all along. Fixed in 0019, next to the table it describes, and
+it is the second time the same shape has been found in the same place — which is the argument for the check reading
+the *declaration* rather than a scan of `CREATE TRIGGER` statements.
+
+**The last item was a decision, and it landed in the gate.** F19's fix covers *sized* actions; a close is sized by
+the position itself, so a $25,000 position could not be closed by a rule while the entry cap was $2,500 — an armed
+stop-loss that can never fire, which is the opposite of risk control. The decision: **a reduce-only sell answers to
+its own ceiling** (`max_close_notional_micro`, one position's worth) **instead of the entry cap**, because the entry
+cap bounds *new* exposure and refusing an exit is not risk reduction, it *is* risk. It is not an exemption. The
+size must not exceed what is actually held, read from `position_lots` by the caller — the API's order path and the
+executor each read their own copy, never the request body, because a client-supplied "I hold this much" is a cap
+bypass with extra steps; selling more than is held is not a close (the excess opens a short, which creates
+exposure) and keeps the entry cap; and an excessive close is refused by the close ceiling, with `OVER_CLOSE_CAP`
+existing so the refusal says *which* ceiling stopped it. `Decision.reduce_only` is set on refusals too, for the
+question actually asked after an incident. The first draft reported it only on the success path, and the refusal
+test caught that. Verified three ways: the probe re-measures the decision against the real gate with a real
+$25,000 position, three API tests drive it through `POST /v1/orders` (`TestTheCloseCeilingOverTheApi`), and two
+unit tests pin the edges.
+
+**Verified after the batch.** The P14 chain, re-recorded: authz **37/0/0**, attack surface **76/0/2** (was 8 open),
+key drills **15/0/1**, AppSec **38/0/1**, infra **19/2/6 FAIL**, abuse **18/0/1**; `docs/P14-security-gate.md`
+regenerated and `--check` clean. The gate is **NO-GO on two recorded failures, and both are the owner's** — the
+Supabase token in `~/.secrets/tokens.env` now returns 401 (the check says "rotate the token" out loud rather than
+printing a bare status) and GitHub 2FA is off on the account whose token holds `admin:org`. The two remaining
+probe OPENs are latent surfaces with no code behind them yet: a tax-export route that does not exist, and payment
+fulfilment that does not exist (both carry the exact work they need on the day they ship).
+
+**`[UNVERIFIED]`, and it is the same list as P16's.** No real funds: money waits for P13 **and** P14, and P14's gate
+is NO-GO until the Supabase token is rotated and 2FA is on. `PGM_TELEGRAM_BOT_TOKEN` is unset on `polygm-api`, the
+BotFather Mini App URL is still a manual step, the real-phone acceptance run has not happened, and the $50/72 h
+canary stays blocked while the gate says no.
+
