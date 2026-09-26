@@ -1,4 +1,4 @@
-P13 D7 — ten chaos tests
+P13 D7 — eleven chaos tests (the kit's ten, then the cascade P14 measured as an OPEN item)
 ==============================================================================
 
  1. PASS     executor killed mid-submit
@@ -16,7 +16,7 @@ P13 D7 — ten chaos tests
      expected: The ingest consumer killed mid-write: every fill that was acknowledged is on disk, the replay af…
      report: docs/verification/P13-chaos-3-ingest-killed-mid-write.txt
      distinct_keys: 4000
-     durable_at_kill: 3526
+     durable_at_kill: 3276
      rows_after_replay: 4000
 
  4. PASS     database killed mid-flight
@@ -24,7 +24,7 @@ P13 D7 — ten chaos tests
      report: docs/verification/P13-chaos-4-database-killed-mid-flight.txt
      idem_rows_added_while_locked: 0
      recovered_status: 202
-     refusal_ms: 5026.8
+     refusal_ms: 5021.9
      refused_status: 503
      rows_added_while_locked: 0
 
@@ -32,7 +32,7 @@ P13 D7 — ten chaos tests
      expected: No cache at all: every read still answers from the source, no request 5xx-es for a cache miss, a…
      report: docs/verification/P13-chaos-5-cache-killed.txt
      cache_entries_cleared: 0
-     ms_each: 3.3
+     ms_each: 3.8
      ok: 25
      reads: 25
 
@@ -72,6 +72,33 @@ P13 D7 — ten chaos tests
      report: docs/verification/P13-chaos-10-key-compromise.txt
      artifact: docs/verification/P13-chaos-10-key-compromise.txt
 
-CHAOS SUITE: PASS — 10 of 10 drills reported
-The kit's ten rows are all represented; the substitutions (no Redis, SQLite in dev/CI) are stated
+11. PASS     500 copiers on one source fill
+     expected: 500 copiers on one source fill, end to end: every configured copier produces exactly one intent …
+     report: docs/verification/P13-chaos-11-500-copiers-on-one-source-fill.txt
+     batch_size: 5
+     book_ms: 109.0
+     copied: 500
+     copiers: 500
+     db_notional_usd: 6375.0
+     decided_notional_usd: 6375.0
+     distinct_keys: 500
+     fanout_ms: 81.1
+     fanout_ms_per_copier: 0.16
+     intents: 500
+     largest_order_usd: 12.75
+     max_per_cycle: 5
+     outcomes: 500
+     reconciler_passes: 2
+     replay_new_intents: 0
+     skips: {}
+     states: {"submitted": 500}
+     submit_ms: 417.9
+     ticks: 400
+     total_ms: 526.9
+     venue_fills: 500
+     venue_notional_usd: 6375.0
+
+CHAOS SUITE: PASS — 11 of 11 drills reported
+The kit's ten rows are all represented, and 11 is the one P14 could not close from arithmetic
+alone (500 copiers, end to end); the substitutions (no Redis, SQLite in dev/CI) are stated
 in the artifact of the drill that hits them rather than left implicit.

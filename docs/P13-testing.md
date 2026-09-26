@@ -23,7 +23,7 @@ Evidence lives in `docs/verification/`, the gate is `tools/p13-gate-check.py`, a
 | **Unit** | Pure modules: money/`cents`, the ledger, the risk gate, `Reconciler` cases, the signal engine, order construction, the property sweeps. No sockets, no HTTP, no migrated database | < 60 s | **559 tests in 22.9 s** |
 | **Integration** | The API under a real HTTP client against a migrated SQLite file, the executor service with the scenario venue, ingest, the Telegram and wallet routes, the contracts. Everything that can fail because two components disagree | < 5 min | **773 tests in 100.9 s** |
 | **End-to-end** | `web/e2e/*.spec.ts` on Playwright: buy flow (intercepted at the wire, geometry asserted), withdrawal ceremony, Telegram webview | < 15 min | not runnable in this sandbox — see the note below |
-| **Nightly** | The ten chaos drills, the 100× kill loop, D5's full load clauses, the browser suite, the phase gate over the night's records | ~2 h | `.github/workflows/nightly.yml` |
+| **Nightly** | The eleven chaos drills, the 100× kill loop, D5's full load clauses, the browser suite, the phase gate over the night's records | ~2 h | `.github/workflows/nightly.yml` |
 
 The whole Python suite is **1,332 tests in 120.4 s** (`PGM_TEST_TMPDIR=/home/user/.cache/pytest-tmp python3 -m
 pytest tests/ -q`), which is the integration budget for everything at once. The split above is real rather than
@@ -263,10 +263,20 @@ than letting the number look like a Postgres benchmark.
 
 ## D7. Chaos tests
 
-`tools/p13-chaos-suite.py` — ten drills, each with a written artifact, each artifact now headed by the
-**expected outcome written before the drill ran** (the kit's own constraint, made mechanical: the text lives in
-the suite's `EXPECT` table, the artifact prints it above the observations, and the gate refuses an index that
-lacks one). Current record: **9 of 9 run here, all PASS**, plus drill 2's live artifact.
+`tools/p13-chaos-suite.py` — the kit's ten drills plus **11, the 500-copier cascade**, each with a written
+artifact, each artifact headed by the **expected outcome written before the drill ran** (the kit's own
+constraint, made mechanical: the text lives in the suite's `EXPECT` table, the artifact prints it above the
+observations, and the gate refuses an index that lacks one). Current record: **11 of 11 run here, all PASS**,
+plus drill 2's live artifact.
+
+Drill 11 was added after P16, and it is a P14 finding rather than a kit row: P14 measured the 500-copier cascade
+**arithmetically** — it sized 500 configs through the engine and found every one inside its own caps — while
+recording, honestly, that *"no run placed 500 real orders against a filling venue."* Arithmetic is the wrong half
+to be confident about, because 500 configs is a load shape and the bound that matters is the one the queue
+enforces. So the same 500 copiers now run end to end: 500 funded accounts, 500 `copy_configs` rows on one source,
+one `SourceFill` through the product's own `CopyEngine`, 500 intents through `enqueue_intent` (the same door a
+human order uses), the executor claiming them `batch_size` at a time, the venue filling all 500, and the fills
+booked through the same `book_fill` the venue's trade stream uses.
 
 | # | Drill | Evidence |
 |---|---|---|
@@ -280,6 +290,7 @@ lacks one). Current record: **9 of 9 run here, all PASS**, plus drill 2's live a
 | 8 | Signer / wallet provider down | `SIGNATURE_REFUSED`, 0 posts, reads still 200 |
 | 9 | Kill switch during a copy-trade | stops in 2.1–2.2 s, nothing placed |
 | 10 | Key compromise | 10,000 keys, revocation in 1.0 s |
+| 11 | **500 copiers on one source fill** (P14's open item, closed) | fan-out **86–92 ms** (0.17–0.18 ms per copier), $6,375.00 aggregate over 500 orders, largest **$12.75 of a $25.00 ceiling**, replay of the same fill **0 new intents**, 500/500 filled at the venue and booked in 2 reconciler passes |
 
 **The headline loop** (`tools/p13-recovery-loop.py`, kit quality gate): 100 kills between signing and the
 response, random timing, fixed seed 13 → **100/100, zero duplicate orders, zero lost positions, zero limbo**,
@@ -300,7 +311,7 @@ Measured by the phase gate: `p13-gate-check: 25 passed, 0 failed` — recorded i
 | Workflow | Trigger | What it runs |
 |---|---|---|
 | `.github/workflows/ci.yml` | PR + push to `main` | lint + lint-canary, OpenAPI audit + self-test, dependency scan, P07 gate, unit and integration tests, the envelope demo, every earlier phase gate, generated artefact drift, **the money matrix (`--check` and `--run`)**, **the P13 gate (`--skip-heavy`)**, a `web` job (typecheck, generated-client drift, vitest incl. the P13 suites) and the container/compose job |
-| `.github/workflows/nightly.yml` | 03:17 daily + manual | the ten chaos drills with `--execute-live`, the 100× kill loop, `p13-load.py --test all --pace`, the money matrix `--run`, the Playwright suite, then the phase gate over the night's records |
+| `.github/workflows/nightly.yml` | 03:17 daily + manual | the eleven chaos drills with `--execute-live`, the 100× kill loop, `p13-load.py --test all --pace`, the money matrix `--run`, the Playwright suite, then the phase gate over the night's records |
 | `.github/workflows/release.yml` | `v*` tags | `make check`, the phase gate re-running the drills and the load clauses, the money matrix, then images labelled with the release version and a smoke order through the built stack |
 
 * **Flaky-test policy**: `tests/quarantine.txt` — one test per line with its reason, an owner and an expiry

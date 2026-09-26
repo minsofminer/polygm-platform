@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""P13 D7 — the ten chaos tests, each with a written report.
+"""P13 D7 — the ten chaos tests the kit names, plus the cascade the kit does not, each with a report.
 
     python3 tools/p13-chaos-suite.py --record docs/verification/P13-chaos-suite.txt
     python3 tools/p13-chaos-suite.py --only 4,6,7            # one drill at a time while editing
@@ -99,6 +99,11 @@ EXPECT: dict[int, str] = {
        "nothing, and both surfaces read the same stopped state.",
     10: "Key compromise: 10,000 keys inventoried and the compromised one revoked inside the P14 budget, with "
         "every signature from it refused afterwards and an audit trail that names the actor and the time.",
+    11: "500 copiers on one source fill, end to end: every configured copier produces exactly one intent "
+        "(no duplicate keys, no dropped copier), the aggregate notional the queue holds equals the sum of the "
+        "decisions exactly, no single order exceeds the per-trade ceiling, a replay of the same source fill "
+        "creates zero new intents, the venue takes no more than the decisions allowed, and both wall clocks are "
+        "recorded — the fan-out and the drain — against the executor's own batch size.",
 }
 
 
@@ -591,6 +596,216 @@ def _has_table(store, name: str) -> bool:
     return bool(store.conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)).fetchone())
 
 
+# ------------------------------------------------------------------------------- 11. the 500-copier cascade --
+def chaos_11(r: Report, *, copiers: int = 500) -> None:
+    """THE CASCADE, END TO END: 500 copiers, one source fill, real intents, real orders, a filling venue.
+
+    P14 recorded this as an open item in exactly these words: *"the cascade was bounded arithmetically, not end
+    to end: 500 copiers were sized through the engine, but no run placed 500 real orders against a filling
+    venue"*. Arithmetic is the wrong half to be confident about — `size_for` is a pure function, and what a
+    fan-out actually costs is a property of the *queue*: 500 decisions against a store, 500 intents, and the
+    executor claiming them `batch_size` at a time against a venue that answers.
+
+    So the drill is deliberately not a sizing test. It is:
+
+      * **a real fan-out**: 500 `copy_configs` rows all pointing at one source, one `SourceFill`, the product's
+        own `CopyEngine.on_source_fill`, and the clock running around it;
+      * **real orders**: every copy goes through `enqueue_intent` — the same door a human order and an
+        automation rule use, which is the product's answer to "does automation skip the risk gate?" — and then
+        through the executor's pre-flight against the scenario venue, which fills;
+      * **measured against the caps the queue enforces**, not against a number invented here: the per-trade
+        ceiling (`max_order_micro`), the daily ceiling, the executor's `batch_size` per claim cycle, and the
+        notional the venue actually took.
+
+    Two things it asserts that a sizing test cannot: the aggregate notional equals the sum of the decisions
+    **exactly** (integer micro, no drift anywhere between the decision and the venue), and a replay of the same
+    source fill creates **zero** new intents — the idempotency key is per (config, source fill), and this is
+    the end-to-end version of that claim rather than a unit test of the key.
+    """
+    plane = make_plane("chaos11")
+    store = plane["store"]
+    try:
+        from polygm_core.copy import engine as cp
+        at = plane["at"]
+        source = "u-whale"
+        # Every copier is a real account: funded, and with a funded wallet the pre-flight will accept. The
+        # numbers are deliberately modest ($50 of stock each, a $25 per-trade ceiling) because the point is the
+        # *shape* of the fan-out, and a load shape that spends the whole budget of a real user is a poor one.
+        users = ["u-copy-%03d" % i for i in range(copiers)]
+        # The accounts themselves first: `balances.user_id`, `wallets.user_id` and `copy_configs.user_id` are all
+        # foreign keys into `users`, and the first version of this drill found that out the way a drill should —
+        # by failing with `FOREIGN KEY constraint failed` and writing the traceback into its own artifact.
+        store.conn.executemany("INSERT OR IGNORE INTO users (id, created_ms, tier) VALUES (?,?,?)",
+                               [(u, at, "trader") for u in users])
+        store.conn.executemany("INSERT OR REPLACE INTO balances (user_id,usdc_available_micro,"
+                               "usdc_locked_micro,version,reconcile_ms) VALUES (?,?,?,?,?)",
+                               [(u, 50_000_000, 0, 1, at) for u in users])
+        from polygm_core.wallets import lifecycle as wl
+        policy = wl.Policy(allowed_spender="0xexchange")
+        store.conn.executemany("INSERT OR REPLACE INTO wallets (user_id,provider,custody,address,"
+                               "proxy_address,signature_type,policy_hash,state,created_ms,updated_ms) VALUES "
+                               "(?, 'turnkey', 'delegated', ?, ?, 3, ?, 'trading', ?, ?)",
+                               [(u, "0xw%038d" % i, "0xp%038d" % i, policy.policy_hash(), at, at)
+                                for i, u in enumerate(users)])
+        store.conn.executemany("INSERT OR REPLACE INTO copy_configs (id,user_id,source_user,mode,ratio_bps,"
+                               "max_order_micro,max_daily_micro,blocked_markets,enabled,created_ms) VALUES "
+                               "(?,?,?,?,?,?,?,?,?,?)",
+                               [("cc-%03d" % i, u, source, "ratio", 2_500, 25_000_000, 250_000_000, "[]", 1, at)
+                                for i, u in enumerate(users)])
+        store.conn.commit()
+        for u in users:
+            store.set_allowance(user_id=u, token="pUSD", spender="0xexchange",
+                                amount_micro=v2.UNLIMITED_ALLOWANCE, at=at)
+        store.conn.commit()
+        configured = int(store.conn.execute("SELECT COUNT(*) FROM copy_configs WHERE enabled=1 AND "
+                                           "source_user=?", (source,)).fetchone()[0])
+
+        eng = cp.CopyEngine(store, builder_bps=100, fee_rate_bps=0)
+        fill = cp.SourceFill(wallet=source, intent_id="src-1", token_id=plane["token"],
+                             market_id=plane["market"], side="BUY", price_micro=550_000,
+                             size_shares_micro=100 * 10 ** 6, at_ms=at)
+        t0 = time.perf_counter()
+        outcomes = eng.on_source_fill(fill, at=at)
+        fanout_ms = (time.perf_counter() - t0) * 1000
+
+        copied = [o for o in outcomes if o.get("action") == "copied"]
+        queued = int(store.conn.execute("SELECT COUNT(*) FROM order_intents WHERE state='queued'").fetchone()[0])
+        decided_total = sum(int(o["notional_micro"]) for o in copied)
+        db_total = int(store.conn.execute("SELECT COALESCE(SUM(notional_micro),0) FROM order_intents"
+                                          ).fetchone()[0])
+        biggest = int(store.conn.execute("SELECT COALESCE(MAX(notional_micro),0) FROM order_intents"
+                                         ).fetchone()[0])
+        keys = [str(o["idempotency_key"]) for o in copied]
+        # The replay, before anything has executed: the same fill, a second time. This is the duplicate-WS-frame
+        # case and the restart case in one line, and the assertion is that the queue is *bit-identical* after it.
+        replay = eng.on_source_fill(fill, at=at + 250)
+        replay_new = int(store.conn.execute("SELECT COUNT(*) FROM order_intents").fetchone()[0]) - queued
+
+        r.say("%d configured copiers, %d outcomes, %d copied" % (configured, len(outcomes), len(copied)))
+        r.say("fan-out: %.0f ms total (%.2f ms per copier), %d intents queued"
+              % (fanout_ms, fanout_ms / max(1, len(copied)), queued))
+        r.say("aggregate notional: $%.2f across %d orders, largest $%.2f (per-trade ceiling $%.2f)"
+              % (decided_total / 10 ** 6, queued, biggest / 10 ** 6, 25_000_000 / 10 ** 6))
+        r.say("replay of the same source fill: %d new intents"
+              % replay_new)
+
+        skips: dict[str, int] = {}
+        for o in outcomes:
+            if o.get("action") != "copied":
+                skips[str(o.get("reason") or "?")] = skips.get(str(o.get("reason") or "?"), 0) + 1
+
+        # ---- then the queue: the executor claims `batch_size` at a time and the venue fills. The wall clock
+        # here is the part an operator cares about ("how long until the last copier is in"), so it is recorded
+        # per tick and in total rather than summarised as one number.
+        # The book has to stay fresh while the queue drains, and that is not a harness convenience: in the real
+        # plane `ingest` writes `book_levels` continuously, and the pre-flight's freshness check is what refuses
+        # an order priced off a stale book. The first version of this drill forgot to refresh and 400 of the 500
+        # orders were refused `STALE_QUOTE` — which is the *correct* answer to a plane whose book has not moved
+        # in four minutes, and a good demonstration that the check is real.
+        def refresh(when: int) -> int:
+            store.conn.execute("UPDATE book_levels SET updated_ms=?", (when,))
+            store.conn.execute("UPDATE markets SET updated_ms=? WHERE id=?", (when, plane["market"]))
+            store.conn.commit()
+            return when
+
+        ticks, per_tick = 0, []
+        t1 = time.perf_counter()
+        while ticks < 400:
+            now = refresh(at + ticks * 250)
+            rep = plane["ex"].tick(at=now, reconcile=False)
+            handled = len(rep.get("handled") or [])
+            per_tick.append(handled)
+            ticks += 1
+            if not handled and not int(store.conn.execute(
+                    "SELECT COUNT(*) FROM order_intents WHERE state IN ('queued','claimed','signing','submitted')"
+                    ).fetchone()[0]):
+                break
+        submit_ms = (time.perf_counter() - t1) * 1000
+
+        # ---- and then the venue takes the other side of all 500. One fill per live order, at the price we
+        # asked, which is what a market that moved on the source's trade looks like from the copiers' side.
+        live_orders = [oid for oid, o in plane["mock"].orders.items() if o.get("status") == "live"]
+        for oid in live_orders:
+            o = plane["mock"].orders[oid]
+            plane["mock"].fill(oid, price=float(o["payload"]["price"]), size=float(o["payload"]["size"]))
+        # The fills are booked by the reconciler's `open_orders` case, through the same `book_fill` the venue
+        # WebSocket uses — so this half of the drill is the money path and not a fixture write.
+        t2 = time.perf_counter()
+        passes, booked = 0, 0
+        while passes < 60:
+            now = refresh(at + (ticks + passes) * 250)
+            plane["ex"].tick(at=now, reconcile=True)
+            passes += 1
+            booked = int(store.conn.execute("SELECT COUNT(*) FROM fills").fetchone()[0])
+            if booked >= len(live_orders):
+                break
+        book_ms = (time.perf_counter() - t2) * 1000
+        drain_ms = submit_ms + book_ms
+        states = dict(store.conn.execute("SELECT state, COUNT(*) FROM order_intents GROUP BY state").fetchall())
+        filled = int(store.conn.execute("SELECT COUNT(*) FROM fills").fetchone()[0])
+        venue_notional = int(store.conn.execute("SELECT COALESCE(SUM(notional_micro),0) FROM fills"
+                                                ).fetchone()[0])
+        r.say("drained in %d claim cycle(s), %.0f ms wall clock (%.1f ms per order); max %d per cycle "
+              "(batch_size=%d)" % (ticks, submit_ms, submit_ms / max(1, queued), max(per_tick or [0]),
+                                   plane["ex"].batch_size))
+        r.say("venue filled %d live order(s); booked in %d reconciler pass(es), %.0f ms — %d of %d fills in the "
+              "ledger" % (len(live_orders), passes, book_ms, booked, queued))
+        r.say("states: %s; venue fills: %d worth $%.2f" % (json.dumps(states), filled, venue_notional / 10 ** 6))
+        reasons = {}
+        for code, n in store.conn.execute("SELECT COALESCE(risk_code,''), COUNT(*) FROM order_intents WHERE "
+                                          "state='rejected' GROUP BY risk_code"):
+            reasons[str(code)] = int(n)
+        if reasons:
+            r.say("refusals: %s" % json.dumps(reasons))
+        for row in store.conn.execute("SELECT DISTINCT reason FROM order_lifecycle ORDER BY reason LIMIT 4"):
+            r.say("  lifecycle: %s" % str(row[0])[:110])
+
+        for k, v in (("copiers", configured), ("outcomes", len(outcomes)), ("copied", len(copied)),
+                     ("fanout_ms", round(fanout_ms, 1)), ("fanout_ms_per_copier", round(fanout_ms / max(1, len(copied)), 2)),
+                     ("intents", queued), ("decided_notional_usd", round(decided_total / 10 ** 6, 2)),
+                     ("db_notional_usd", round(db_total / 10 ** 6, 2)), ("largest_order_usd", round(biggest / 10 ** 6, 2)),
+                     ("distinct_keys", len(set(keys))), ("replay_new_intents", replay_new),
+                     ("submit_ms", round(submit_ms, 1)), ("book_ms", round(book_ms, 1)),
+                     ("total_ms", round(drain_ms, 1)), ("ticks", ticks), ("reconciler_passes", passes),
+                     ("max_per_cycle", max(per_tick or [0])),
+                     ("batch_size", plane["ex"].batch_size), ("states", json.dumps(states)),
+                     ("venue_fills", filled), ("venue_notional_usd", round(venue_notional / 10 ** 6, 2)),
+                     ("skips", json.dumps(skips) if skips else "{}")):
+            r.fact(k, v)
+
+        if configured != copiers:
+            r.fail("only %d of %d copier configs were visible to the engine" % (configured, copiers))
+        if len(copied) != copiers:
+            r.fail("%d of %d copiers copied; skips: %s" % (len(copied), copiers, json.dumps(skips)[:160]))
+        if queued != copiers:
+            r.fail("%d intents for %d copiers" % (queued, copiers))
+        if len(set(keys)) != len(keys):
+            r.fail("copiers collided on an idempotency key: one copier's order would suppress another's")
+        if decided_total != db_total:
+            r.fail("the queue holds $%.2f where the decisions summed to $%.2f: the notional moved between the "
+                   "decision and the row" % (db_total / 10 ** 6, decided_total / 10 ** 6))
+        if replay_new:
+            r.fail("replaying one source fill created %d more intents: a duplicate WS frame would double-place"
+                   % replay_new)
+        if biggest > 25_000_000:
+            r.fail("an order of $%.2f was queued against a $25.00 per-trade ceiling" % (biggest / 10 ** 6))
+        if max(per_tick or [0]) > plane["ex"].batch_size:
+            r.fail("a claim cycle placed %d orders against a batch size of %d"
+                   % (max(per_tick or [0]), plane["ex"].batch_size))
+        if fanout_ms > 60_000:
+            r.fail("the fan-out took %.1f s for %d copiers; a copy that arrives a minute late has already "
+                   "missed the price" % (fanout_ms / 1000.0, copiers))
+        if filled != queued:
+            r.fail("%d of %d orders reached the venue's fill tape" % (filled, queued))
+        if venue_notional > decided_total:
+            # The venue took more money than the copiers' own decisions allowed: no rounding, anywhere, may
+            # push a fill above the notional the copier was sized for.
+            r.fail("the venue took $%.2f where the decisions summed to $%.2f"
+                   % (venue_notional / 10 ** 6, decided_total / 10 ** 6))
+    finally:
+        plane["store"].close()
+
+
 # ----------------------------------------------------------------------------------------- 8. signer down ----
 def chaos_8(r: Report) -> None:
     """The wallet provider stops signing. Trading stops; the read side does not notice."""
@@ -711,7 +926,7 @@ def app_token(db: str, *, user: str = "u-demo") -> str:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="P13 D7's ten chaos tests")
+    ap = argparse.ArgumentParser(description="P13 D7's ten chaos tests (1-10, the kit's rows) and 11, the 500-copier cascade P14 left open")
     ap.add_argument("--only", default="", help="comma-separated drill numbers (default: all)")
     ap.add_argument("--skip-live", action="store_true", help="skip drill 2 (live venue, ~7 minutes)")
     ap.add_argument("--execute-live", action="store_true", help="run drill 2 here instead of citing the artifact")
@@ -720,7 +935,7 @@ def main() -> int:
     ap.add_argument("--json", dest="json_path", default="")
     a = ap.parse_args()
 
-    want = {int(x) for x in a.only.split(",") if x.strip()} if a.only else set(range(1, 11))
+    want = {int(x) for x in a.only.split(",") if x.strip()} if a.only else set(range(1, 12))
     VERIF.mkdir(parents=True, exist_ok=True)
     reports: dict[int, Report] = {}
 
@@ -774,6 +989,7 @@ def main() -> int:
                               str(VERIF / "P13-chaos-9-kill-switch.txt")],
                           VERIF / "P13-chaos-9-kill-switch.txt", timeout=900),
           artifact=VERIF / "P13-chaos-9-kill-switch.txt")
+    drill(11, "500 copiers on one source fill", lambda r: chaos_11(r))
     drill(10, "key compromise drill",
           lambda r: rerun(r, [PY, str(ROOT / "tools" / "p07-drill.py"), "--keys", str(a.keys), "--record",
                               str(VERIF / "P13-chaos-10-key-compromise.txt")],
@@ -781,7 +997,8 @@ def main() -> int:
           artifact=VERIF / "P13-chaos-10-key-compromise.txt")
 
     failed = [n for n, r in sorted(reports.items()) if r.verdict != "PASS"]
-    lines = ["P13 D7 — ten chaos tests", "=" * 78, ""]
+    lines = ["P13 D7 — eleven chaos tests (the kit's ten, then the cascade P14 measured as an OPEN item)",
+             "=" * 78, ""]
     for n, r in sorted(reports.items()):
         lines.append("%2d. %-8s %s" % (n, r.verdict, r.title))
         lines.append("     expected: %s" % (r.expect[:96] + ("…" if len(r.expect) > 96 else "")))
@@ -793,7 +1010,8 @@ def main() -> int:
         lines.append("")
     lines += ["CHAOS SUITE: %s — %d of %d drills reported" %
               ("PASS" if not failed else "FAIL", len(reports) - len(failed), len(reports)),
-              "The kit's ten rows are all represented; the substitutions (no Redis, SQLite in dev/CI) are stated",
+              "The kit's ten rows are all represented, and 11 is the one P14 could not close from arithmetic",
+              "alone (500 copiers, end to end); the substitutions (no Redis, SQLite in dev/CI) are stated",
               "in the artifact of the drill that hits them rather than left implicit."]
     text = "\n".join(lines) + "\n"
     if a.record:

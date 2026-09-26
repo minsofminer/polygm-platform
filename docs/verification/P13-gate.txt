@@ -1,16 +1,16 @@
 # P13 gate — recorded by tools/p13-gate-check.py
 # command: python3 tools/p13-gate-check.py 
-# date: 2026-09-21
+# date: 2026-09-26
 
 PASS every one of the matrix's 43 rows resolves to a collected test
 PASS matrix canary: a row naming a test that does not exist is refused
 PASS matrix canary: a run where pytest collected nothing is refused
 PASS matrix canary: a run that skipped a third of the mapped tests is refused
 PASS matrix canary: a green run whose warnings summary names a test is still green (must-accept)
-PASS the money matrix, the contracts and the property sweep run green: 48 passed in 15.38s
+PASS the money matrix, the contracts and the property sweep run green: 48 passed in 14.97s
 PASS the recorded contract fixtures still match the product
 PASS contract canary: a perturbed fixture (normalised) is refused by the checker
-PASS all 10 recorded chaos drills pass and their artifacts exist
+PASS all 11 recorded chaos drills pass and their artifacts exist
 PASS chaos canary: a recorded FAIL is reported, not counted
 PASS chaos canary: a drill with no written expectation is refused
 PASS the load harness's quick run passes and the kit's 30-minute soak meets its clause

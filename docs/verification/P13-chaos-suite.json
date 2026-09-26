@@ -1,5 +1,5 @@
 {
-  "at": "2026-09-21T06:14:50+0000",
+  "at": "2026-09-26T06:31:42+0000",
   "drills": {
     "1": {
       "artifact": "docs/verification/P13-chaos-1-executor-kill.txt",
@@ -20,6 +20,36 @@
       "title": "key compromise drill",
       "verdict": "PASS"
     },
+    "11": {
+      "artifact": "docs/verification/P13-chaos-11-500-copiers-on-one-source-fill.txt",
+      "expected": "500 copiers on one source fill, end to end: every configured copier produces exactly one intent (no duplicate keys, no dropped copier), the aggregate notional the queue holds equals the sum of the decisions exactly, no single order exceeds the per-trade ceiling, a replay of the same source fill creates zero new intents, the venue takes no more than the decisions allowed, and both wall clocks are recorded \u2014 the fan-out and the drain \u2014 against the executor's own batch size.",
+      "facts": {
+        "batch_size": 5,
+        "book_ms": 109.0,
+        "copied": 500,
+        "copiers": 500,
+        "db_notional_usd": 6375.0,
+        "decided_notional_usd": 6375.0,
+        "distinct_keys": 500,
+        "fanout_ms": 81.1,
+        "fanout_ms_per_copier": 0.16,
+        "intents": 500,
+        "largest_order_usd": 12.75,
+        "max_per_cycle": 5,
+        "outcomes": 500,
+        "reconciler_passes": 2,
+        "replay_new_intents": 0,
+        "skips": "{}",
+        "states": "{\"submitted\": 500}",
+        "submit_ms": 417.9,
+        "ticks": 400,
+        "total_ms": 526.9,
+        "venue_fills": 500,
+        "venue_notional_usd": 6375.0
+      },
+      "title": "500 copiers on one source fill",
+      "verdict": "PASS"
+    },
     "2": {
       "artifact": "docs/verification/P13-chaos-2-ws-kill.txt",
       "expected": "Five minutes without the socket: no duplicate orders, no missed fills (the fallback poll finds each one), every stale surface marked stale for the whole outage, and no alert delivered twice.",
@@ -34,7 +64,7 @@
       "expected": "The ingest consumer killed mid-write: every fill that was acknowledged is on disk, the replay after restart adds each one exactly once (the durable cursor), and no alert fires twice for one event.",
       "facts": {
         "distinct_keys": 4000,
-        "durable_at_kill": 3526,
+        "durable_at_kill": 3276,
         "rows_after_replay": 4000
       },
       "title": "ingest killed mid-write",
@@ -46,7 +76,7 @@
       "facts": {
         "idem_rows_added_while_locked": 0,
         "recovered_status": 202,
-        "refusal_ms": 5026.8,
+        "refusal_ms": 5021.9,
         "refused_status": 503,
         "rows_added_while_locked": 0
       },
@@ -58,7 +88,7 @@
       "expected": "No cache at all: every read still answers from the source, no request 5xx-es for a cache miss, and the upstream call count stays inside the per-IP budget (a cold cache must not become a rate-limit ban).",
       "facts": {
         "cache_entries_cleared": 0,
-        "ms_each": 3.3,
+        "ms_each": 3.8,
         "ok": 25,
         "reads": 25
       },

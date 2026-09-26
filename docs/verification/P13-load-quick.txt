@@ -2,16 +2,16 @@ P13 D5 load tests — quick (CI)
 ==============================================================================
 
 [soak] starting
-[soak] PASS in 2.9 s
+[soak] PASS in 2.1 s
 
 [books] starting
 [books] PASS in 5.0 s
 
 [api] starting
-[api] PASS in 10.4 s
+[api] PASS in 9.9 s
 
 [storm] starting
-[storm] PASS in 6.7 s
+[storm] PASS in 6.9 s
 
 [fanout] starting
 [fanout] PASS in 5.1 s
@@ -20,7 +20,7 @@ P13 D5 load tests — quick (CI)
 [budget] PASS in 9.3 s
 
 ==============================================================================
-LOAD: PASS — 6 of 6 tests passed in 39.4 s
+LOAD: PASS — 6 of 6 tests passed in 38.3 s
 
 Adaptations, stated rather than hidden:
   * the API runs on SQLite (this box's engine); one writer, so its concurrency numbers are a floor

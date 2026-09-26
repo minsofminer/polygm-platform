@@ -4,7 +4,7 @@ expected outcome (written before the drill ran):
   Key compromise: 10,000 keys inventoried and the compromised one revoked inside the P14 budget, with every signature from it refused afterwards and an audit trail that names the actor and the time.
 
 verdict: PASS
-elapsed: 1.0 s
+elapsed: 1.4 s
 
 command: /usr/local/bin/python3 /home/user/polygm-platform/tools/p07-drill.py --keys 10000 --record /home/user/polygm-platform/docs/verification/P13-chaos-10-key-compromise.txt
 exit: 0, artifact: docs/verification/P13-chaos-10-key-compromise.txt

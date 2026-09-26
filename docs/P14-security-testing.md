@@ -142,7 +142,7 @@ and absences, not soft passes: they are listed at the end of the record with the
 | The same idempotency key with the same body, then with a different body | one order, then `409 IDEM_CONFLICT` |
 | Eight concurrent over-cap submits (the race the gate runs on SQLite) | all `403 OVER_ORDER_CAP`, no 5xx, nothing half-placed |
 | An automation action above the per-order cap | refused at **save** time with a sentence naming the cap (F19) |
-| 500 mirror copiers of one whale fill | each capped at its own $25 order ceiling, 500 distinct keys, a replayed fill producing exactly one key |
+| 500 mirror copiers of one whale fill | each capped at its own $25 order ceiling, 500 distinct keys, a replayed fill producing exactly one key — and, since P16, **run end to end**: 500 real intents, a filling venue, fan-out 86–92 ms, $6,375.00 aggregate (largest $12.75 of $25.00), 500/500 fills booked |
 
 #### Injection
 
@@ -210,11 +210,24 @@ moving the ceiling without a restart).
 One limitation is recorded as OPEN rather than as a failure, because the alternative was to change a product
 decision that is not a probe's to make:
 
-* **The copy-farm rule cannot tell a follower from two active traders on the same cadence.** Measured: with the
-  candidate's fills moved 200 s earlier — so it is never the one being followed in any pairing sense — 10 of 12
-  fills still matched, because *any* candidate fill inside 120 s counts and a 60 s cadence always has one. The row
-  this produces is a public suspicion ("derived from 0x…"), which is a claim about a person. The fix needs pairing
-  (a matched candidate cannot match twice) or a cadence comparison, and the tape is in the tool to use as the test.
+* ~~**The copy-farm rule cannot tell a follower from two active traders on the same cadence.**~~ **CLOSED in
+  P16**, and by the tape the finding itself used. `copy_farm()` now pairs fills **one-to-one** (within a market and
+  side, a candidate fill explains at most one of ours, nearest first) and requires **coverage**: if the candidate
+  still has fills left over in the markets where we paired, our fills were not following its fills, they were
+  merely near some of them. Pairing alone does not fix the reported tape (10 of 12 still pair); coverage does
+  (2 of its fills left over, 20% against a 10% tolerance — deliberately tight, because a missed farm costs
+  nothing while a false one accuses somebody). The same tape is now the test in both directions, and two more
+  isolate the mechanisms: one leader fill cannot explain twelve of ours, and a market maker's dense tape is not a
+  leader's tape.
+* ~~**The cascade was bounded arithmetically, not end to end.**~~ **CLOSED in P16** as drill 11 of the P13 chaos
+  suite, which the probe re-runs rather than citing: 500 funded copiers, one source fill through the product's own
+  `CopyEngine`, 500 intents through `enqueue_intent`, the executor claiming them `batch_size` at a time, the venue
+  filling all 500, and the fills booked through the same `book_fill` the venue's trade stream uses. The two
+  numbers the finding asked for: **fan-out 86–92 ms** (0.17–0.18 ms per copier) and **$6,375.00 aggregate**, with
+  the largest order **$12.75 against the $25.00 per-trade ceiling**, zero new intents from replaying the same
+  fill, and no fill above the decisions' own sum. Building it also found that the drill's first version had 400 of
+  500 orders refused `STALE_QUOTE` — the pre-flight was right and the harness was wrong, which is worth recording
+  because it is the check doing its job.
 
 **Closed after the phase, with the re-test the rule demands (P16).** *The revocation ground is the programme-wide
 builder code, and nothing re-enables it in the product* named two gaps. Both are closed, and both by the probe

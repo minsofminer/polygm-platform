@@ -2,10 +2,6 @@
   "verdict": "CONDITIONAL",
   "open_conditions": [
     {
-      "check": "THE CASCADE WAS BOUNDED ARITHMETICALLY, NOT END TO END: 500 copiers were sized through the engine, but no run placed 500 real orders against a filling venue",
-      "why": "measure the wall-clock and the aggregate notional of a real 500-copier fanout in the P13 chaos suite (which already kills the executor mid-fill), and record both numbers against these caps \u2014 500 configs is a load shape, and the bound that matters is the one the queue enforces"
-    },
-    {
       "check": "NO CSV EXPORT ROUTE EXISTS YET, so formula injection could not be probed end to end",
       "why": "when the tax export ships: write a row whose fields begin `=`, `+`, `-`, `@`, then assert the writer prefixes each with a quote and that the header row is unchanged; add a test next to the wallet's own, and keep this probe as the outside view"
     },
@@ -19,12 +15,12 @@
     }
   ],
   "facts": {
-    "at_ms": 1790403272825,
+    "at_ms": 1790403969871,
     "bench": {
       "market": "0xM1",
       "token": "0xT10",
       "tick": "0.01",
-      "account": "u_attacker_13e9231e"
+      "account": "u_attacker_5c0edbac"
     },
     "trading": {
       "must_accept": {
@@ -36,7 +32,7 @@
         "tick": "0.01",
         "status": 422,
         "code": "OFF_TICK",
-        "detail": "{\"error\": {\"code\": \"OFF_TICK\", \"message\": \"price is not on a valid tick\", \"retryable\": false, \"requestId\": \"dccb5ac2c9ba48eb\"}}"
+        "detail": "{\"error\": {\"code\": \"OFF_TICK\", \"message\": \"price is not on a valid tick\", \"retryable\": false, \"requestId\": \"d9d7cc42eee6431b\"}}"
       },
       "intents_after_off_tick": {
         "before": {
@@ -121,6 +117,20 @@
       "cascade_daily_tail": {
         "shares": 1818181,
         "why": ""
+      },
+      "cascade_end_to_end": {
+        "exit": 0,
+        "fanout_ms": 110.0,
+        "per_copier_ms": 0.22,
+        "intents": 500,
+        "aggregate_usd": 6375.0,
+        "orders": 500,
+        "largest_usd": 12.75,
+        "venue_filled": 500,
+        "passes": 2,
+        "book_ms": 131.0,
+        "booked": 500,
+        "verdict": "PASS"
       }
     },
     "injection": {
@@ -252,15 +262,15 @@
       "redos": {
         "/v1/markets?q": {
           "status": 422,
-          "ms": 4.3
+          "ms": 4.4
         },
         "/v1/markets?category": {
           "status": 422,
-          "ms": 5.3
+          "ms": 4.8
         },
         "/v1/leaderboard?q": {
           "status": 422,
-          "ms": 4.3
+          "ms": 4.1
         }
       }
     },
@@ -274,7 +284,7 @@
           "builder_code_revoked": true,
           "builder_code_state": "disabled",
           "reason": "self_referral",
-          "referrer": "u_attacker_13e9231e",
+          "referrer": "u_attacker_5c0edbac",
           "review": 1,
           "state": "refused"
         },
@@ -283,13 +293,13 @@
           "polygm-referral",
           "disabled",
           "manual",
-          "self-referral detected on account u_attacker_13e9231e"
+          "self-referral detected on account u_attacker_5c0edbac"
         ],
-        "referral_token": "ref_bed6evts\u2026"
+        "referral_token": "ref_sc5is6tu\u2026"
       },
       "duplicate_funding": {
         "first": {
-          "uid": "u_sybil-a_c5041470",
+          "uid": "u_sybil-a_0c82efa2",
           "status": 200,
           "body_state": "attributed",
           "code": "",
@@ -299,7 +309,7 @@
           "notional_micro": 0
         },
         "second": {
-          "uid": "u_sybil-b_27206de5",
+          "uid": "u_sybil-b_271e5856",
           "status": 409,
           "body_state": null,
           "code": "REFUSED",
@@ -311,7 +321,7 @@
       },
       "sybil_claims": [
         {
-          "uid": "u_sybil-0_c01fbdf9",
+          "uid": "u_sybil-0_3854ae7a",
           "status": 200,
           "body_state": "attributed",
           "code": "",
@@ -321,7 +331,7 @@
           "notional_micro": 0
         },
         {
-          "uid": "u_sybil-1_10fbed61",
+          "uid": "u_sybil-1_618ae7c7",
           "status": 200,
           "body_state": "attributed",
           "code": "",
@@ -331,7 +341,7 @@
           "notional_micro": 0
         },
         {
-          "uid": "u_sybil-2_6ecfa8c7",
+          "uid": "u_sybil-2_9d1c112f",
           "status": 200,
           "body_state": "attributed",
           "code": "",
@@ -341,7 +351,7 @@
           "notional_micro": 0
         },
         {
-          "uid": "u_sybil-3_c9842581",
+          "uid": "u_sybil-3_95a9e3c4",
           "status": 200,
           "body_state": "review",
           "code": "",
@@ -351,7 +361,7 @@
           "notional_micro": 0
         },
         {
-          "uid": "u_sybil-4_4ef81dfd",
+          "uid": "u_sybil-4_bb3ff836",
           "status": 200,
           "body_state": "review",
           "code": "",
@@ -361,7 +371,7 @@
           "notional_micro": 0
         },
         {
-          "uid": "u_sybil-6_374428e4",
+          "uid": "u_sybil-6_94c0ab83",
           "status": 200,
           "body_state": "review",
           "code": "",
@@ -443,7 +453,7 @@
           "builder_code_revoked": false,
           "builder_code_state": "already-disabled",
           "reason": "self_referral",
-          "referrer": "u_attacker_13e9231e",
+          "referrer": "u_attacker_5c0edbac",
           "review": 1,
           "state": "refused"
         }
@@ -584,9 +594,19 @@
       "why": ""
     },
     {
-      "status": "OPEN",
-      "name": "THE CASCADE WAS BOUNDED ARITHMETICALLY, NOT END TO END: 500 copiers were sized through the engine, but no run placed 500 real orders against a filling venue",
-      "why": "measure the wall-clock and the aggregate notional of a real 500-copier fanout in the P13 chaos suite (which already kills the executor mid-fill), and record both numbers against these caps \u2014 500 configs is a load shape, and the bound that matters is the one the queue enforces"
+      "status": "PASS",
+      "name": "the 500-copier cascade runs end to end (drill 11 exit 0, 500 intents, 500 orders filled)",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "the fan-out is fast enough to be a copy (110.0 ms total for 500 copiers, 0.22 ms each)",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "no copier's order exceeds the per-trade ceiling in the real run (largest $12.75 of $25.00, aggregate $6375.0)",
+      "why": ""
     },
     {
       "status": "PASS",
@@ -680,7 +700,7 @@
     },
     {
       "status": "PASS",
-      "name": "a 10,000-character pathological parameter is refused or answered quickly (worst 5.3 ms)",
+      "name": "a 10,000-character pathological parameter is refused or answered quickly (worst 4.8 ms)",
       "why": ""
     },
     {
@@ -700,12 +720,12 @@
     },
     {
       "status": "PASS",
-      "name": "the refusal recorded the ground in the audit trail ({\"builder_code_revoked\": true, \"builder_code_state\": \"disabled\", \"reason\": \"self_referral\", \"referrer\": \"u_attacker_13e9)",
+      "name": "the refusal recorded the ground in the audit trail ({\"builder_code_revoked\": true, \"builder_code_state\": \"disabled\", \"reason\": \"self_referral\", \"referrer\": \"u_attacker_5c0e)",
       "why": ""
     },
     {
       "status": "PASS",
-      "name": "the programme's builder code (polygm-referral) is marked disabled with the reason readable (['polygm-referral', 'disabled', 'manual', 'self-referral detected on account u_attacker_13e9231e'])",
+      "name": "the programme's builder code (polygm-referral) is marked disabled with the reason readable (['polygm-referral', 'disabled', 'manual', 'self-referral detected on account u_attacker_5c0edbac'])",
       "why": ""
     },
     {
@@ -820,7 +840,7 @@
     },
     {
       "status": "PASS",
-      "name": "a repeat self-referral still records the code's *state*, not just that nothing changed ({\"builder_code_revoked\": false, \"builder_code_state\": \"already-disabled\", \"reason\": \"self_referral\", \"referrer\": \"u_attacker_13e9231e\", \"rev)",
+      "name": "a repeat self-referral still records the code's *state*, not just that nothing changed ({\"builder_code_revoked\": false, \"builder_code_state\": \"already-disabled\", \"reason\": \"self_referral\", \"referrer\": \"u_attacker_5c0edbac\", \"rev)",
       "why": ""
     },
     {

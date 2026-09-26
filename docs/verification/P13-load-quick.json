@@ -1,5 +1,5 @@
 {
-  "at": "2026-09-21T06:15:30+0000",
+  "at": "2026-09-26T06:32:20+0000",
   "failures": [],
   "mode": "quick (CI)",
   "paced": false,
@@ -13,37 +13,37 @@
         {
           "as_of_top": [
             [
-              "1789971299032",
-              216
+              "1790404309208",
+              254
             ],
             [
-              "1789971299026",
-              110
+              "1790404309201",
+              127
             ]
           ],
-          "distinct_as_of": 205,
-          "max_ms": 429.9,
-          "ok": 766,
+          "distinct_as_of": 229,
+          "max_ms": 393.5,
+          "ok": 889,
           "other": {},
-          "p50_ms": 18.841,
-          "p95_ms": 172.503,
-          "p99_ms": 283.013,
-          "requests": 766,
-          "requests_per_s": 251.4,
+          "p50_ms": 18.171,
+          "p95_ms": 141.08,
+          "p99_ms": 211.029,
+          "requests": 889,
+          "requests_per_s": 293.5,
           "sample_errors": [],
-          "seconds": 3.05,
+          "seconds": 3.03,
           "server_errors": 0,
           "slowest": [
             [
-              429.9,
+              393.5,
               "/v1/leaderboard?limit=25"
             ],
             [
-              315.1,
+              357.0,
               "/v1/leaderboard?limit=25"
             ],
             [
-              307.6,
+              309.4,
               "/v1/leaderboard?limit=25"
             ]
           ],
@@ -53,37 +53,37 @@
         {
           "as_of_top": [
             [
-              "1789971299032",
-              210
+              "1790404309208",
+              254
             ],
             [
-              "1789971299030",
-              109
+              "1790404309205",
+              129
             ]
           ],
-          "distinct_as_of": 196,
-          "max_ms": 559.6,
-          "ok": 735,
+          "distinct_as_of": 230,
+          "max_ms": 589.9,
+          "ok": 878,
           "other": {},
-          "p50_ms": 88.426,
-          "p95_ms": 237.603,
-          "p99_ms": 365.135,
-          "requests": 735,
-          "requests_per_s": 227.6,
+          "p50_ms": 67.276,
+          "p95_ms": 201.156,
+          "p99_ms": 389.61,
+          "requests": 878,
+          "requests_per_s": 284.6,
           "sample_errors": [],
-          "seconds": 3.23,
+          "seconds": 3.08,
           "server_errors": 0,
           "slowest": [
             [
-              559.6,
+              589.9,
               "/v1/leaderboard?limit=25"
             ],
             [
-              542.9,
+              514.1,
               "/v1/leaderboard?limit=25"
             ],
             [
-              468.2,
+              494.0,
               "/v1/leaderboard?limit=25"
             ]
           ],
@@ -93,37 +93,37 @@
         {
           "as_of_top": [
             [
-              "1789971299032",
-              219
+              "1790404309208",
+              270
             ],
             [
-              "1789971299030",
-              114
+              "1790404309205",
+              137
             ]
           ],
-          "distinct_as_of": 204,
-          "max_ms": 623.5,
-          "ok": 780,
+          "distinct_as_of": 253,
+          "max_ms": 505.4,
+          "ok": 940,
           "other": {},
-          "p50_ms": 191.769,
-          "p95_ms": 354.768,
-          "p99_ms": 488.562,
-          "requests": 780,
-          "requests_per_s": 238.7,
+          "p50_ms": 157.637,
+          "p95_ms": 285.731,
+          "p99_ms": 380.096,
+          "requests": 940,
+          "requests_per_s": 294.2,
           "sample_errors": [],
-          "seconds": 3.27,
+          "seconds": 3.2,
           "server_errors": 0,
           "slowest": [
             [
-              623.5,
+              505.4,
               "/v1/leaderboard?limit=25"
             ],
             [
-              600.9,
+              494.5,
               "/v1/leaderboard?limit=25"
             ],
             [
-              596.8,
+              426.6,
               "/v1/leaderboard?limit=25"
             ]
           ],
@@ -131,15 +131,15 @@
           "users": 50
         }
       ],
-      "throughput_peak_req_s": 251.4,
-      "workers_needed_for_500": 0.99
+      "throughput_peak_req_s": 294.2,
+      "workers_needed_for_500": 0.85
     },
     "books": {
       "books": 300,
       "cap": 300,
-      "cpu_pct": 97.7,
-      "events": 444800,
-      "events_per_s": 88933,
+      "cpu_pct": 96.7,
+      "events": 587200,
+      "events_per_s": 117437,
       "modelled_bytes_per_book": 8240,
       "resyncs": 0,
       "rss_delta_mb": 0.0,
@@ -152,7 +152,7 @@
           "capacity": 200,
           "peak_10s": 61,
           "per_sec": 60,
-          "rate_per_s": 6.55,
+          "rate_per_s": 6.54,
           "sends": 61
         },
         "data.trades": {
@@ -160,23 +160,23 @@
           "capacity": 60,
           "peak_10s": 62,
           "per_sec": 5,
-          "rate_per_s": 6.66,
+          "rate_per_s": 6.65,
           "sends": 62
         },
         "gamma.markets": {
           "budget_10s": 300,
           "capacity": 100,
-          "peak_10s": 61,
+          "peak_10s": 57,
           "per_sec": 20,
-          "rate_per_s": 6.55,
-          "sends": 61
+          "rate_per_s": 6.11,
+          "sends": 57
         }
       },
       "demand": 1600,
-      "dropped_by_backpressure": 1372,
+      "dropped_by_backpressure": 1376,
       "note": "user demand is dropped by the bounded queue, never queued for minutes; what reaches the venue is the bucket's business, and that is the assertion",
       "seconds": 9.3,
-      "served": 184,
+      "served": 180,
       "straggler_threads": 4,
       "users": 40,
       "workers": 4
@@ -184,8 +184,8 @@
     "fanout": {
       "cycles": 63,
       "delivered": 1000,
-      "deliveries_per_s": 194.3,
-      "drain_seconds": 5.15,
+      "deliveries_per_s": 195.1,
+      "drain_seconds": 5.13,
       "send_ms": 80.0,
       "slo_seconds": 300.0,
       "subscribers": 1000,
@@ -194,51 +194,51 @@
     "soak": {
       "alerts_fired": 480,
       "alerts_suppressed": 144,
-      "cpu_s": 2.89,
+      "cpu_s": 2.05,
       "deliveries": 400,
       "duplicate_deliveries": 0,
-      "elapsed_s": 2.9,
+      "elapsed_s": 2.05,
       "fills": 6000,
       "notes": [
-        "virtual clock 6000 fills at 200/s (30.0 s of venue time in 2.9 s of wall clock)",
+        "virtual clock 6000 fills at 200/s (30.0 s of venue time in 2.0 s of wall clock)",
         "RSS slope measured after the first quarter of the run (warm-up excluded); the dedupe window is bounded at 100000 keys exactly as Tape's is",
         "cooldown memory 480 entries, queued deliveries 80 at the end"
       ],
       "rate": 200,
       "rss_end_mb": 33.0,
-      "rss_growth_mb_per_min": 108.904,
-      "rss_second_half_mb": 3.0,
-      "rss_start_mb": 26.1,
+      "rss_growth_mb_per_min": 152.309,
+      "rss_second_half_mb": 3.1,
+      "rss_start_mb": 26.0,
       "seconds": 30,
-      "skew_ms_first_tenth": -1608.1,
-      "skew_ms_last_tenth": -25968.3,
-      "skew_ms_max": -248.2,
+      "skew_ms_first_tenth": -1614.8,
+      "skew_ms_last_tenth": -26767.6,
+      "skew_ms_max": -248.8,
       "tape_dups": 0
     },
     "storm": {
       "as_of_after": [
         [
-          "1789971309406",
-          14
+          "1790404319096",
+          17
         ],
         [
-          "1789971309402",
+          "1790404319092",
           9
         ]
       ],
       "as_of_before": [
-        "1789971309405",
-        "1789971309406"
+        "1790404319095",
+        "1790404319096"
       ],
       "came_back": true,
       "clients": 200,
-      "err": 12936,
+      "err": 19423,
       "note": "the transport is REST polling; the kill is SIGKILL of the API process",
-      "ok": 1618,
-      "outage_seconds": 4.26,
-      "recovered": 56,
-      "restart_log_bytes": 168811,
-      "restart_seconds": 2.34,
+      "ok": 1688,
+      "outage_seconds": 4.46,
+      "recovered": 60,
+      "restart_log_bytes": 175190,
+      "restart_seconds": 2.77,
       "slow_err": 0,
       "status_after_restart": "clean"
     }

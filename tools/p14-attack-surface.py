@@ -26,6 +26,7 @@ import json
 import os
 import pathlib
 import re
+import subprocess
 import sys
 import time
 import uuid
@@ -290,11 +291,49 @@ def section_trading(g: Gate, facts: dict, s: Surface) -> None:
             % (tail_shares, tail_why or "no reason"),
             copy.notional_floor(max(tail_shares, 0), 550_000) <= 1_000_000,
             "the daily budget was exceeded by the per-order cap: %d shares" % tail_shares)
-    g.open("THE CASCADE WAS BOUNDED ARITHMETICALLY, NOT END TO END: 500 copiers were sized through the engine, "
-           "but no run placed 500 real orders against a filling venue",
-           "measure the wall-clock and the aggregate notional of a real 500-copier fanout in the P13 chaos "
-           "suite (which already kills the executor mid-fill), and record both numbers against these caps — "
-           "500 configs is a load shape, and the bound that matters is the one the queue enforces")
+    #    CLOSED after P16, by measuring it: the arithmetic above is one thing, and the same 500 copiers are now
+    #    run end to end as drill 11 of the P13 chaos suite (500 real intents, the executor claiming them
+    #    `batch_size` at a time against a filling venue, the fills booked through the same `book_fill` the
+    #    venue's trade stream uses). The probe re-runs that drill here rather than citing it, because a number
+    #    quoted from another artifact is a number this probe cannot vouch for — drill 11 takes about a second.
+    rc, out = 0, ""
+    try:
+        proc = subprocess.run([sys.executable, str(ROOT / "tools" / "p13-chaos-suite.py"), "--only", "11"],
+                              cwd=str(ROOT), capture_output=True, text=True, timeout=300)
+        rc = proc.returncode
+        art = ROOT / "docs" / "verification" / "P13-chaos-11-500-copiers-on-one-source-fill.txt"
+        out = art.read_text() if art.exists() else (proc.stdout + proc.stderr)
+    except Exception as exc:                                                     # noqa: BLE001
+        rc, out = -1, "%s: %s" % (type(exc).__name__, str(exc)[:160])
+    numbers: dict[str, float] = {}
+    m = re.search(r"fan-out: ([0-9.]+) ms total \(([0-9.]+) ms per copier\), (\d+) intents queued", out)
+    if m:
+        numbers.update({"fanout_ms": float(m.group(1)), "per_copier_ms": float(m.group(2)),
+                        "intents": int(m.group(3))})
+    m = re.search(r"aggregate notional: \$([0-9.]+) across (\d+) orders, largest \$([0-9.]+)", out)
+    if m:
+        numbers.update({"aggregate_usd": float(m.group(1)), "orders": int(m.group(2)),
+                        "largest_usd": float(m.group(3))})
+    m = re.search(r"venue filled (\d+) live order\(s\); booked in (\d+) reconciler pass\(es\), ([0-9.]+) ms — "
+                  r"(\d+) of (\d+) fills in the ledger", out)
+    if m:
+        numbers.update({"venue_filled": int(m.group(1)), "passes": int(m.group(2)),
+                        "book_ms": float(m.group(3)), "booked": int(m.group(4))})
+    facts["trading"]["cascade_end_to_end"] = {"exit": rc, **numbers,
+                                             "verdict": "PASS" if "verdict: PASS" in out else "not recorded"}
+    g.check("the 500-copier cascade runs end to end (drill 11 exit %d, %s intents, %s orders filled)"
+            % (rc, numbers.get("intents"), numbers.get("venue_filled")),
+            rc == 0 and "verdict: PASS" in out and numbers.get("intents") == 500
+            and numbers.get("venue_filled") == 500 and numbers.get("booked") == 500,
+            "the cascade did not complete: %s" % ((out.strip().splitlines() or ["no output"])[-1][:160]))
+    g.check("the fan-out is fast enough to be a copy (%s ms total for 500 copiers, %s ms each)"
+            % (numbers.get("fanout_ms"), numbers.get("per_copier_ms")),
+            (numbers.get("fanout_ms") or 1e9) < 60_000,
+            "a copy that arrives a minute late has already missed the price")
+    g.check("no copier's order exceeds the per-trade ceiling in the real run (largest $%s of $25.00, aggregate "
+            "$%s)" % (numbers.get("largest_usd"), numbers.get("aggregate_usd")),
+            (numbers.get("largest_usd") or 1e9) <= 25.0 and (numbers.get("orders") or 0) == 500,
+            "an order above the ceiling reached the queue")
 
 
 # ------------------------------------------------------------------------------------------------ injection

@@ -3,16 +3,16 @@
   "facts": {
     "matrix": {
       "rows": 43,
-      "collected_ids": 1332
+      "collected_ids": 1558
     },
     "matrix_tests": {
-      "summary": "48 passed in 15.38s"
+      "summary": "48 passed in 14.97s"
     },
     "contracts": {
       "fixture_bytes": 11720
     },
     "chaos": {
-      "drills": 10,
+      "drills": 11,
       "live_drill": "PASS"
     },
     "load": {
@@ -37,8 +37,11 @@
     "ci": {
       "workflows": [
         "ci.yml",
+        "infra.yml",
         "nightly.yml",
-        "release.yml"
+        "pipeline.yml",
+        "release.yml",
+        "security.yml"
       ],
       "quarantine_entries": 0
     },
@@ -72,7 +75,7 @@
     },
     {
       "status": "PASS",
-      "name": "the money matrix, the contracts and the property sweep run green: 48 passed in 15.38s",
+      "name": "the money matrix, the contracts and the property sweep run green: 48 passed in 14.97s",
       "why": ""
     },
     {
@@ -87,7 +90,7 @@
     },
     {
       "status": "PASS",
-      "name": "all 10 recorded chaos drills pass and their artifacts exist",
+      "name": "all 11 recorded chaos drills pass and their artifacts exist",
       "why": ""
     },
     {

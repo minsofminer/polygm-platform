@@ -7,8 +7,8 @@ verdict: PASS
 elapsed: 5.9 s
 
 before the lock: POST /v1/orders -> 202
-with the write lock held: POST /v1/orders -> 503 in 5027 ms, code SERVICE_UNAVAILABLE
-body: {"error": {"code": "SERVICE_UNAVAILABLE", "message": "a dependency is unavailable; nothing was placed - retry", "retryable": true, "requestId": "69387ae206944db5"}}
+with the write lock held: POST /v1/orders -> 503 in 5022 ms, code SERVICE_UNAVAILABLE
+body: {"error": {"code": "SERVICE_UNAVAILABLE", "message": "a dependency is unavailable; nothing was placed - retry", "retryable": true, "requestId": "de18b6951fe74f10"}}
 rows with the lock held (intents, cash, idem): (1, 0, 1)
 after the lock is released: GET /v1/markets/0xM1 -> 200
 and an order is accepted again: POST /v1/orders -> 202; rows now (intents, cash, idem) (2, 0, 2)

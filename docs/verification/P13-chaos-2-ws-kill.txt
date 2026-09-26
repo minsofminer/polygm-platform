@@ -6,9 +6,9 @@ expected outcome (written before the drill ran):
 verdict: PASS
 elapsed: 0.0 s
 
-live drill artifact: docs/verification/P13-chaos-2-ws-kill.txt (463 bytes)
-     "fired": 10,
-     "suppressed": 33
-    }
-    ALL 7 CHECKS PASSED (outage 300s, 141 WS msgs, 151 REST polls)
+live drill artifact: docs/verification/P13-chaos-2-ws-kill.txt (614 bytes)
+               "fired": 10,
+               "suppressed": 33
+              }
+              ALL 7 CHECKS PASSED (outage 300s, 141 WS msgs, 151 REST polls)
 
