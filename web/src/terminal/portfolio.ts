@@ -169,9 +169,19 @@ export function unresolvedText(row: { state: string; reason: string }): string {
 /**
  * The CSV, from the payload.
  *
- * Columns come from the wire so the export and the table are the same document; the values are integers of
- * micro-USDC where the name says `Micro`, which the header row states in the second line rather than leaving a
- * tax preparer to guess whether `notionalMicro` is dollars.
+ * Columns come from the WIRE (`portfolio.csv.columns`), so the export and the table are the same document; the
+ * values are integers of micro-USDC where the name says `Micro`, which the header row states in the second line
+ * rather than leaving a tax preparer to guess whether `notionalMicro` is dollars.
+ *
+ * Every data cell goes through `csvCell`, and that is a security boundary rather than formatting. A spreadsheet
+ * treats a cell beginning `=` (or `+`, `-`, `@`, tab, carriage return) as a **formula**, so a value the server
+ * puts in this file — today hex ids and states, tomorrow a market's own title, which is venue text and arrives
+ * through the ingest path — would execute in the reviewer's Excel when the tax export is opened. P14 recorded
+ * that requirement as an open item while there was no writer to test; this IS the writer, the columns are chosen
+ * by the payload, so the guard belongs here, in the one function every cell passes through.
+ *
+ * The header row is deliberately NOT neutralised: it is our own column names, the requirement says the header
+ * stays as-is, and a header that quietly became `'intentId` would be a different document than the table.
  */
 export function csvText(portfolio: Portfolio): string {
   const cols = portfolio.csv.columns;
@@ -186,9 +196,46 @@ export function csvText(portfolio: Portfolio): string {
       notionalMicro: String(o.notionalMicro),
       createdMs: String(o.createdMs),
     };
-    lines.push(cols.map((c) => quoteCsv(cell[c] ?? "")).join(","));
+    lines.push(cols.map((c) => quoteCsv(csvCell(cell[c] ?? ""))).join(","));
   }
   return lines.join("\n") + "\n";
+}
+
+/**
+ * The characters a spreadsheet treats as the start of a formula, and the check that reads them.
+ *
+ * Written as an explicit Set of single characters with TAB and CR built from their code points rather than as a
+ * regex character class — not style, and not defensiveness: this file is read by tooling that re-escapes
+ * backslashes on the way in and out, and a guard whose *meaning* depends on how many backslashes survived the
+ * round trip is a guard nobody can review. `\t` and `\r` here are two characters that have to be neutralised
+ * exactly like `=` does, and the code points say so without a layer of quoting in between.
+ */
+const FORMULA_LEADING = new Set(["=", "+", "-", "@", String.fromCharCode(9), String.fromCharCode(13)]);
+
+/** `-5` and `+12` are numbers. Digits only, optionally signed — no regex, for the reason above. */
+function isPlainInteger(value: string): boolean {
+  if (!value) return false;
+  let i = value.charCodeAt(0) === 43 || value.charCodeAt(0) === 45 ? 1 : 0;   // 43 "+", 45 "-"
+  if (i >= value.length) return false;
+  for (; i < value.length; i++) {
+    const code = value.charCodeAt(i);
+    if (code < 48 || code > 57) return false;
+  }
+  return true;
+}
+
+/**
+ * Neutralise a value a spreadsheet would otherwise execute.
+ *
+ * A well-formed integer is left alone, and that carve-out is the point rather than a convenience: this export
+ * exists to be added up, and prefixing `-5` with a quote to defend against a formula that `-5` cannot be would
+ * trade a real number for a hypothetical attack. Everything else that *starts* like a formula gets a leading
+ * apostrophe, which is how a spreadsheet is told "this is text" — the standard defence, applied where the value
+ * came from the wire rather than where it was typed.
+ */
+export function csvCell(value: string): string {
+  if (isPlainInteger(value)) return value;
+  return value && FORMULA_LEADING.has(value[0] as string) ? `'${value}` : value;
 }
 
 function quoteCsv(value: string): string {

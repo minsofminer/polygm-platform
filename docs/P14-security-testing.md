@@ -128,11 +128,11 @@ purpose**. Every probe in it is made by the rightful owner of a qualified accoun
 the kit names: a user attacking the venue's rules, the risk gate, or another user through the product's own
 surfaces.
 
-**76 checks, 0 failures, 2 OPEN** (`docs/verification/P14-attack-surface.{txt,json}`). Both remaining OPENs are *latent
-surfaces* rather than soft passes — a route that does not exist yet (the tax export) and a fulfilment path that does
-not exist yet (payments) — and each is listed at the end of the record with the exact work it needs on the day it
-ships. Every finding this phase made *about the product's own detectors* has since been closed, the last one as a
-risk-review decision recorded in the gate (see below).
+**77 checks, 0 failures, 1 OPEN** (`docs/verification/P14-attack-surface.{txt,json}`). The one remaining OPEN is a
+*latent surface* rather than a soft pass — a payment-fulfilment path that does not exist yet — and it is listed at the
+end of the record with the exact work it needs on the day it ships. Every finding this phase made *about the
+product's own detectors* has since been closed, the last two as changes to the product rather than to the probe: the
+close ceiling (a risk-review decision, in the gate) and the tax export's writer (below).
 
 #### Trading: what a bad order does
 
@@ -158,7 +158,7 @@ risk-review decision recorded in the gate (see below).
 | SSRF: every declared route (87 paths) enumerated for a caller-supplied fetch target; every endpoint constant walked with an AST | **0 URL-ish parameters**, 5 endpoint constants all pointing at known vendors, 3 socket-opening call sites |
 | SSRF through the one caller-supplied address in the product (a Pro webhook's `params.url`): 20 hostile URLs through the transport, a split-horizon DNS answer, a redirect into `169.254.169.254`, and the same hostile URL saved through the served API | **all 20 refused with zero sockets opened**, the private DNS answer refused, the redirect refused **at the hop** (1 connection, not 2), the signed delivery verified against a signature recomputed from first principles, save refused `422 VALIDATION` while a public URL saves `200`, and a refused target dead-lettered rather than retried |
 | ReDoS: 10,000-character pathological parameters | worst 6 ms, all refused or answered |
-| CSV injection in a tax export | no such route exists yet — OPEN with the requirement |
+| CSV injection in a tax export | **closed after P16**: the export is built in the browser (no route exists to probe), so the guard lives in the writer every cell passes through — `csvCell` in `web/src/terminal/portfolio.ts`, with 12 assertions in the module's own tests (see below) |
 
 #### Business logic: getting value you did not earn
 
@@ -231,6 +231,22 @@ closed — the last one as a *risk-review decision*, which is what it needed to 
   nothing held still `OVER_ORDER_CAP`, an excessive close `OVER_CLOSE_CAP`), at the door by three API tests
   (`tests/test_api.py::TestTheCloseCeilingOverTheApi`), and at the gate by two unit tests including the hoisted
   `reduce_only` a first draft of this fix only reported on the success path — the refusal test caught it.
+* ~~**No CSV export route exists, so formula injection could not be probed end to end.**~~ **CLOSED after P16**,
+  and the item's framing was half wrong in a way worth recording: there is no *route* because there is no
+  server-side export at all — the tax CSV is built in the browser from the payload on screen, with its columns
+  chosen by the wire (`portfolio.csv.columns`). "So it cannot be probed" did not follow: the writer is a module,
+  and the guard belongs in the one function every cell passes through. `csvCell` neutralises a value a spreadsheet
+  would execute — a leading `=`, `+`, `-`, `@`, tab or CR gets an apostrophe — while leaving a well-formed signed
+  integer alone, because this export exists to be *added up* and prefixing `-5` to defend against a formula that
+  `-5` cannot be would trade a real number for a hypothetical attack. The header row stays verbatim, which is what
+  the requirement asked for and what keeps the file the same document as the table. The guard is written as an
+  explicit character Set with TAB and CR from their code points rather than as a regex class: the first version
+  depended on how many backslashes survived being written, and a security control whose meaning cannot be read off
+  the source is one nobody can review. The probe's re-test is a source-level check with that stated plainly (an
+  artifact that only exists in a browser blob cannot be fetched by a Python probe), and the arithmetic is executed
+  where it can be — `web/src/terminal/portfolio.test.ts` drives `csvCell` with the strings this item names, both
+  directions, and asserts the header is untouched. A market title arriving through ingest is venue text: tomorrow
+  that is what a column will carry, which is why the guard is in the writer and not in today's column list.
 * ~~**The copy-farm rule cannot tell a follower from two active traders on the same cadence.**~~ **CLOSED in
   P16**, and by the tape the finding itself used. `copy_farm()` now pairs fills **one-to-one** (within a market and
   side, a candidate fill explains at most one of ours, nearest first) and requires **coverage**: if the candidate

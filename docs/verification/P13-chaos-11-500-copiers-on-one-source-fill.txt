@@ -4,17 +4,17 @@ expected outcome (written before the drill ran):
   500 copiers on one source fill, end to end: every configured copier produces exactly one intent (no duplicate keys, no dropped copier), the aggregate notional the queue holds equals the sum of the decisions exactly, no single order exceeds the per-trade ceiling, a replay of the same source fill creates zero new intents, the venue takes no more than the decisions allowed, and both wall clocks are recorded — the fan-out and the drain — against the executor's own batch size.
 
 verdict: PASS
-elapsed: 1.7 s
+elapsed: 1.2 s
 
 500 configured copiers, 500 outcomes, 500 copied
-fan-out: 124 ms total (0.25 ms per copier), 500 intents queued
+fan-out: 115 ms total (0.23 ms per copier), 500 intents queued
 aggregate notional: $6375.00 across 500 orders, largest $12.75 (per-trade ceiling $25.00)
 replay of the same source fill: 0 new intents
-drained in 400 claim cycle(s), 848 ms wall clock (1.7 ms per order); max 5 per cycle (batch_size=5)
-venue filled 500 live order(s); booked in 2 reconciler pass(es), 269 ms — 500 of 500 fills in the ledger
+drained in 400 claim cycle(s), 628 ms wall clock (1.3 ms per order); max 5 per cycle (batch_size=5)
+venue filled 500 live order(s); booked in 2 reconciler pass(es), 179 ms — 500 of 500 fills in the ledger
 states: {"submitted": 500}; venue fills: 500 worth $6375.00
   lifecycle: 10 checks, est fees 0.1275
   lifecycle: on the book
-  lifecycle: payload 0170729e8bb7
-  lifecycle: payload 01e84fec91f6
+  lifecycle: payload 00766e93d5d7
+  lifecycle: payload 019f3c701122
 

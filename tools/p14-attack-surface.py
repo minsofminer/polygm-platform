@@ -726,10 +726,34 @@ def section_injection(g: Gate, facts: dict, s: Surface) -> None:
     exporters = [p for p in ("/v1/tax/export", "/v1/export/tax", "/v1/wallet/tax-export", "/v1/tax/csv")
                  if c.get(p, headers=hdr).status_code != 404]
     if not exporters:
-        g.open("NO CSV EXPORT ROUTE EXISTS YET, so formula injection could not be probed end to end",
-               "when the tax export ships: write a row whose fields begin `=`, `+`, `-`, `@`, then assert the "
-               "writer prefixes each with a quote and that the header row is unchanged; add a test next to the "
-               "wallet's own, and keep this probe as the outside view")
+        #    CLOSED after P16, and the closing move is the correction this OPEN item needed: there is no ROUTE
+        #    because there is no server-side export — the tax CSV is built in the browser from the payload on
+        #    screen (`web/src/terminal/portfolio.ts`), and its columns come from the wire (`csv.columns`). So the
+        #    prompt's own framing was wrong in one detail: "no such route exists" was true, and "so it cannot be
+        #    probed" was not — the writer is a module with tests, and the guard belongs in the function every cell
+        #    passes through. The probe checks the writer's shape here and the arithmetic is done where it can be
+        #    executed (`web/src/terminal/portfolio.test.ts`, which drives `csvCell` with the strings this item
+        #    names). A source-level check is the honest instrument for an artifact that only exists in a browser
+        #    blob, and it is stated as such rather than dressed up as a live probe.
+        ts = (ROOT / "web" / "src" / "terminal" / "portfolio.ts").read_text()
+        routed = "quoteCsv(csvCell(" in ts
+        # The set's members are parsed out of the source rather than matched with a regex of its own: the guard is
+        # written as an explicit character Set (single characters, TAB and CR from code points) precisely so that
+        # neither the module nor this check depends on how backslashes survived being written — a check that has to
+        # re-escape the thing it is checking is a check that reports on its own quoting.
+        m = re.search(r"FORMULA_LEADING = new Set\(\[(.*?)\]\)", ts)
+        members = m.group(1) if m else ""
+        leading = all(x in members for x in ('"="', '"+"', '"-"', '"@"', "9", "13"))
+        integer = "isPlainInteger" in ts
+        header_raw = 'lines = [cols.join(",")' in ts
+        facts["injection"]["csv_writer"] = {"route_exists": False, "export_is_client_side": True,
+                                        "every_cell_through_guard": routed, "formula_leading_class": leading,
+                                        "signed_integer_carve_out": integer, "header_left_verbatim": header_raw}
+        g.check("the tax export's writer neutralises formula-leading cells in every column it emits (%s)"
+                % ("guarded" if (routed and leading) else "UNGUARDED"),
+                routed and leading and integer and header_raw,
+                "a market title arriving through ingest and beginning `=` would execute in the reviewer's "
+                "spreadsheet when the tax export is opened")
     else:
         rows = []
         for path in exporters:

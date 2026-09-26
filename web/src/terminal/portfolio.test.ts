@@ -21,6 +21,7 @@ import {
   totalRows,
   unresolvedText,
   unrealisedKnown,
+  csvCell,
 } from "./portfolio";
 import type { Portfolio, PortfolioPosition } from "./wire";
 
@@ -181,6 +182,30 @@ describe("the tax export", () => {
     expect(lines[1]).toContain("integer micro-USDC");
     expect(lines[1]?.startsWith(",")).toBe(true);
     expect(lines[2]).toContain("i1,0xM1,filled,120.00,0.4000,48000000,1700000000000");
+  });
+
+  it("neutralises a cell a spreadsheet would execute, in the writer every cell passes through", () => {
+    // P14's requirement, closed at the only place that can close it: the export is built in the browser from
+    // columns the payload chooses, so the guard is the writer. The strings are the ones the probe names.
+    expect(csvCell("=1+1")).toBe("'=1+1");
+    expect(csvCell("+SUM(A1:A9)")).toBe("'+SUM(A1:A9)");
+    expect(csvCell("@cmd|'/C calc'!A1")).toBe("'@cmd|'/C calc'!A1");
+    expect(csvCell("=HYPERLINK(\"https://x.example\")")).toBe("'=HYPERLINK(\"https://x.example\")");
+    expect(csvCell(String.fromCharCode(9) + "leading tab")).toBe("'" + String.fromCharCode(9) + "leading tab");
+    expect(csvCell(String.fromCharCode(13) + "leading cr")).toBe("'" + String.fromCharCode(13) + "leading cr");
+    // Ordinary text and hex ids are untouched: a guard that rewrites everything is a different document.
+    expect(csvCell("filled")).toBe("filled");
+    expect(csvCell("0xM1")).toBe("0xM1");
+    expect(csvCell("")).toBe("");
+  });
+
+  it("leaves the header row exactly as the table's columns, guard and all", () => {
+    const p = portfolio();
+    p.orders[0]!.marketId = "=1+1";
+    p.orders[0]!.state = "-5";
+    const lines = csvText(p).trim().split("\n");
+    expect(lines[0]).toBe("intentId,marketId,state,shares,price,notionalMicro,createdMs");
+    expect(lines[2]).toContain("i1,'=1+1,-5,");
   });
 
   it("quotes a value that would break the file", () => {

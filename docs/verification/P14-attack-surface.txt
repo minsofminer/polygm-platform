@@ -24,7 +24,7 @@ PASS the 500 copiers are 500 distinct orders and 500 distinct idempotency keys (
 PASS replaying the same source fill produces ONE key, so a duplicate WS frame cannot double-place
 PASS a copier with $1 of daily budget left cannot buy $25 of stock (sized to 1818181 shares, no reason)
 PASS the 500-copier cascade runs end to end (drill 11 exit 0, 500 intents, 500 orders filled)
-PASS the fan-out is fast enough to be a copy (124.0 ms total for 500 copiers, 0.25 ms each)
+PASS the fan-out is fast enough to be a copy (115.0 ms total for 500 copiers, 0.23 ms each)
 PASS no copier's order exceeds the per-trade ceiling in the real run (largest $12.75 of $25.00, aggregate $6375.0)
 PASS no SQLi payload changes the result set, 500s, or surfaces a SQL error (4 payload(s) x 4 routes)
 PASS the markets table survived `DROP TABLE markets` (the route still answers)
@@ -44,13 +44,12 @@ PASS a redirect into the metadata range is refused at the hop (TARGET_NOT_PUBLIC
 PASS the delivery is signed over the timestamp and the body, and carries the queue's own key
 PASS a Pro account cannot SAVE an internal webhook URL (422 VALIDATION), and the same account CAN save a public one (200)
 PASS a refused target is dead-lettered rather than retried into the queue (dead refused:TARGET_NOT_PUBLIC)
-PASS a 10,000-character pathological parameter is refused or answered quickly (worst 5.6 ms)
-OPEN NO CSV EXPORT ROUTE EXISTS YET, so formula injection could not be probed end to end
-        — when the tax export ships: write a row whose fields begin `=`, `+`, `-`, `@`, then assert the writer prefixes each with a quote and that the header row is unchanged; add a test next to the wallet's own, and keep this probe as the outside view
+PASS a 10,000-character pathological parameter is refused or answered quickly (worst 9.5 ms)
+PASS the tax export's writer neutralises formula-leading cells in every column it emits (guarded)
 PASS an account applying its own link is refused as a self-referral (409 SELF_REFERRAL)
 PASS the self-referral wrote no attribution row
-PASS the refusal recorded the ground in the audit trail ({"builder_code_revoked": true, "builder_code_state": "disabled", "reason": "self_referral", "referrer": "u_attacker_34c6)
-PASS the programme's builder code (polygm-referral) is marked disabled with the reason readable (['polygm-referral', 'disabled', 'manual', 'self-referral detected on account u_attacker_34c60913'])
+PASS the refusal recorded the ground in the audit trail ({"builder_code_revoked": true, "builder_code_state": "disabled", "reason": "self_referral", "referrer": "u_attacker_4910)
+PASS the programme's builder code (polygm-referral) is marked disabled with the reason readable (['polygm-referral', 'disabled', 'manual', 'self-referral detected on account u_attacker_4910cbb4'])
 PASS two accounts claiming one referrer from the same funding source: the second is refused for the funding collision (409, record says refused/duplicate_funding)
 PASS the refused claim is recorded as REFUSED rather than as a live attribution, and earns nothing (refused, $0.0)
 PASS every one of six fresh accounts claiming one referrer lands in a named state ({"pending": 3, "review": 3})
@@ -74,7 +73,7 @@ PASS the concurrent-rule cap binds on the server: 10 created, then {"status": 40
 PASS a Telegram update with the wrong secret is refused and claims nothing (503 SIGNER_UNAVAILABLE, 0 claim row(s))
 OPEN NEITHER STRIPE NOR TELEGRAM-STARS FULFILMENT EXISTS YET, so payment-webhook forgery has no target
         — both arrive as attacker-reachable POSTs, so before either ships: verify the signature over the RAW bytes with a constant-time compare (Stripe's `Stripe-Signature` includes a timestamp — refuse outside a 5-minute tolerance and store every event id to refuse replays; Telegram's is the secret header plus `successful_payment` arriving only in an update, never in a form post), and never read the amount, the user id or the plan from the body without cross-checking the record the provider keeps
-PASS a repeat self-referral still records the code's *state*, not just that nothing changed ({"builder_code_revoked": false, "builder_code_state": "already-disabled", "reason": "self_referral", "referrer": "u_attacker_34c60913", "rev)
+PASS a repeat self-referral still records the code's *state*, not just that nothing changed ({"builder_code_revoked": false, "builder_code_state": "already-disabled", "reason": "self_referral", "referrer": "u_attacker_4910cbb4", "rev)
 PASS clearing the review puts the programme's builder code back (['active', 'manual', "manual disable cleared by review 1 (p14-probe): probe: the second wallet was a colleague's"])
 PASS the restore is an audit event naming who cleared it and why ({"reason": "probe: the second wallet was a colleague's, reviewed and cleared", "review": 1, "state": "active"})
 PASS a review cannot clear a disable the venue wrote (['disabled', 'venue_rejection'])
@@ -82,16 +81,14 @@ PASS a $25,000 exit above the $2,500 entry cap is allowed, and says it was a clo
 PASS the same exit with nothing held is still refused the entry cap (OVER_ORDER_CAP)
 PASS an absurd close is refused by the close ceiling, and the refusal says it was a close (OVER_CLOSE_CAP)
 
-  trading: {"must_accept": {"status": 202, "code": ""}, "off_tick": {"price": "0.5555", "tick": "0.01", "status": 422, "code": "OFF_TICK", "detail": "{\"error\": {\"code\": \"OFF_TICK\", \"message\": \"price is not on a valid tick\", \"retryable\": false, \"requestId\": \"f85df9cc651f4040\"}}"}, "intents_after_off_tick": {"before": {"queued": 1}, "after": {"queued": 1, "rejected": 1}, "delta": {"rejected": 1, "queued": 0}}, "sizes": {"below_minimum": {"status": 422, "code": "BELOW_MIN_SIZE"}, "zero": {"status": 422, "code": "ZERO_SIZE"}, "negative": {"status": 422, "code": "BAD_AMOUNT"}, "enormous": {"status": 403, "code": "OVER_ORDER_CAP"}, "not_a_number": {"status": 422, "code": "BAD_AMOUNT"}, "scientific": {"status": 422, "code": "BAD_AMOUNT"}}, "toctou": {"quote_status": 422, "submit_status": 503, "code": "STALE_QUOTE", "book_rows_aged": 24}, "idempotency": {"same_first": 202, "same_again": 202
+  trading: {"must_accept": {"status": 202, "code": ""}, "off_tick": {"price": "0.5555", "tick": "0.01", "status": 422, "code": "OFF_TICK", "detail": "{\"error\": {\"code\": \"OFF_TICK\", \"message\": \"price is not on a valid tick\", \"retryable\": false, \"requestId\": \"d85c60bdef814837\"}}"}, "intents_after_off_tick": {"before": {"queued": 1}, "after": {"queued": 1, "rejected": 1}, "delta": {"rejected": 1, "queued": 0}}, "sizes": {"below_minimum": {"status": 422, "code": "BELOW_MIN_SIZE"}, "zero": {"status": 422, "code": "ZERO_SIZE"}, "negative": {"status": 422, "code": "BAD_AMOUNT"}, "enormous": {"status": 403, "code": "OVER_ORDER_CAP"}, "not_a_number": {"status": 422, "code": "BAD_AMOUNT"}, "scientific": {"status": 422, "code": "BAD_AMOUNT"}}, "toctou": {"quote_status": 422, "submit_status": 503, "code": "STALE_QUOTE", "book_rows_aged": 24}, "idempotency": {"same_first": 202, "same_again": 202
 
   injection: {"sqli": {"baseline_rows": 18, "leaks": []}, "prototype_pollution": {"status": 422, "body": "{\"error\":{\"code\":\"VALIDATION\",\"message\":\"request body or parameters are not valid for this endpoint (unknown: __proto__, unknown: constructor)\",\"retryable\":fals"}, "chat_escaping": {"fill_card": {"has_raw_script": false, "has_raw_img": false, "findings": []}, "refusal_card": {"has_raw_script": false, "has_raw_img": false, "findings": []}, "unknown_order_card": {"has_raw_script": false, "has_raw_img": false, "findings": []}}, "scanner_findings": {"hard": {}, "cosmetic": {}}, "render_canary": ["a beat has a tag Telegram will reject"], "stored_params": {"status": 200, "roundtrip_exact": true, "rendered_escaped": true}, "ssrf": {"declared_paths": 90, "url_named_parameters": [], "endpoint_constants": [{"const": "GAMMA", "host": "gamma-api.polymarket.com", "where": "services/ingest/main.py:
 
-  logic: {"self_referral": {"code_status": 200, "apply_status": 409, "apply_code": "SELF_REFERRAL", "attribution_rows": 0, "audit": {"builder_code_revoked": true, "builder_code_state": "disabled", "reason": "self_referral", "referrer": "u_attacker_34c60913", "review": 1, "state": "refused"}, "programme_code": "polygm-referral", "builder_code": ["polygm-referral", "disabled", "manual", "self-referral detected on account u_attacker_34c60913"], "referral_token": "ref_ptzmn7qf\u2026"}, "duplicate_funding": {"first": {"uid": "u_sybil-a_591c03f5", "status": 200, "body_state": "attributed", "code": "", "record_state": "pending", "record_reason": "", "qualify_order": "", "notional_micro": 0}, "second": {"uid": "u_sybil-b_7de3a5cb", "status": 409, "body_state": null, "code": "REFUSED", "record_state": "refused", "record_reason": "duplicate_funding", "qualify_order": "", "notional_micro": 0}}, "sybil_claim
+  logic: {"self_referral": {"code_status": 200, "apply_status": 409, "apply_code": "SELF_REFERRAL", "attribution_rows": 0, "audit": {"builder_code_revoked": true, "builder_code_state": "disabled", "reason": "self_referral", "referrer": "u_attacker_4910cbb4", "review": 1, "state": "refused"}, "programme_code": "polygm-referral", "builder_code": ["polygm-referral", "disabled", "manual", "self-referral detected on account u_attacker_4910cbb4"], "referral_token": "ref_zxw5g2hx\u2026"}, "duplicate_funding": {"first": {"uid": "u_sybil-a_04aae60a", "status": 200, "body_state": "attributed", "code": "", "record_state": "pending", "record_reason": "", "qualify_order": "", "notional_micro": 0}, "second": {"uid": "u_sybil-b_7777ec30", "status": 409, "body_state": null, "code": "REFUSED", "record_state": "refused", "record_reason": "duplicate_funding", "qualify_order": "", "notional_micro": 0}}, "sybil_claim
 
-P14 ATTACK SURFACE: CONDITIONAL — 76 checks passed, 0 failed, 2 OPEN
+P14 ATTACK SURFACE: CONDITIONAL — 77 checks passed, 0 failed, 1 OPEN
 
 OPEN (not passes, not failures):
-  * NO CSV EXPORT ROUTE EXISTS YET, so formula injection could not be probed end to end
-      when the tax export ships: write a row whose fields begin `=`, `+`, `-`, `@`, then assert the writer prefixes each with a quote and that the header row is unchanged; add a test next to the wallet's own, and keep this probe as the outside view
   * NEITHER STRIPE NOR TELEGRAM-STARS FULFILMENT EXISTS YET, so payment-webhook forgery has no target
       both arrive as attacker-reachable POSTs, so before either ships: verify the signature over the RAW bytes with a constant-time compare (Stripe's `Stripe-Signature` includes a timestamp — refuse outside a 5-minute tolerance and store every event id to refuse replays; Telegram's is the secret header plus `successful_payment` arriving only in an update, never in a form post), and never read the amount, the user id or the plan from the body without cross-checking the record the provider keeps

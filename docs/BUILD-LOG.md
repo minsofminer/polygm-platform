@@ -942,13 +942,35 @@ test caught that. Verified three ways: the probe re-measures the decision agains
 $25,000 position, three API tests drive it through `POST /v1/orders` (`TestTheCloseCeilingOverTheApi`), and two
 unit tests pin the edges.
 
-**Verified after the batch.** The P14 chain, re-recorded: authz **37/0/0**, attack surface **76/0/2** (was 8 open),
+**A lint finding, and the one web-side open item.** Re-running the gates after the close ceiling found two more
+things, which is the whole reason a change gets re-run rather than reasoned about. `tools/lint-rules.py` reported
+`core-dep-free: imports socket` in the webhook transport — so `make p04` had been failing (55/56) on the tree the
+transport landed on, and a red gate is not a gate anybody reads. `socket` is stdlib and the SSRF guard genuinely
+needs it: refusing a URL that points at loopback is only a guard if the *hostname* is resolved before the send, and
+moving that call out of the module would move a security decision into whichever caller remembered it. The core's
+stdlib allowlist is finished the same way P07 finished it for `base64`/`struct`/`urllib` — with the reason written
+next to the name. **The tax export's formula-injection item turned out to be a real gap in the product, not just a
+missing route**: there is no server-side export because the CSV is built in the browser (`portfolio.ts`), whose
+columns come from the wire — so the guard belongs in the writer every cell passes through, and `quoteCsv` escaped
+quotes and newlines but nothing else. `csvCell` now neutralises a leading `=`, `+`, `-`, `@`, tab or CR with an
+apostrophe, leaves a well-formed signed integer alone (this export exists to be added up), and the header row stays
+verbatim. It is written as an explicit character Set with TAB and CR from their code points rather than a regex
+class, because the first version's meaning depended on how many backslashes survived being written — a guard nobody
+can read off the source is not a guard. 12 assertions in the module's tests drive both directions; a source-level
+check in the probe (stated as such: a browser blob cannot be fetched by a Python probe) holds the shape.
+
+**Verified after the batch.** The P14 chain, re-recorded: authz **37/0/0**, attack surface **77/0/1** (was 8 open),
 key drills **15/0/1**, AppSec **38/0/1**, infra **19/2/6 FAIL**, abuse **18/0/1**; `docs/P14-security-gate.md`
 regenerated and `--check` clean. The gate is **NO-GO on two recorded failures, and both are the owner's** — the
 Supabase token in `~/.secrets/tokens.env` now returns 401 (the check says "rotate the token" out loud rather than
 printing a bare status) and GitHub 2FA is off on the account whose token holds `admin:org`. The two remaining
 probe OPENs are latent surfaces with no code behind them yet: a tax-export route that does not exist, and payment
 fulfilment that does not exist (both carry the exact work they need on the day they ship).
+
+Suite counts on the final tree, both runners: **unittest 1543 OK** (189.0 s), **pytest 1563 passed**; web **65
+files / 580 tests**, `npm run build` (Turbopack) clean, `npm run measure` re-recorded — `/tma` 196.5 KB of the
+200 KB budget, route-level splitting proven. Neighbouring gates on the same tree: **P04 56/56, P06 31/31, P08 16/16,
+P10 15/15, P11 30/30, P12 41/0**, `tools/check-openapi.py` 685/0, `build-sqlite-migrations --check` clean.
 
 **`[UNVERIFIED]`, and it is the same list as P16's.** No real funds: money waits for P13 **and** P14, and P14's gate
 is NO-GO until the Supabase token is rotated and 2FA is on. `PGM_TELEGRAM_BOT_TOKEN` is unset on `polygm-api`, the

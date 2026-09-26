@@ -2,21 +2,17 @@
   "verdict": "CONDITIONAL",
   "open_conditions": [
     {
-      "check": "NO CSV EXPORT ROUTE EXISTS YET, so formula injection could not be probed end to end",
-      "why": "when the tax export ships: write a row whose fields begin `=`, `+`, `-`, `@`, then assert the writer prefixes each with a quote and that the header row is unchanged; add a test next to the wallet's own, and keep this probe as the outside view"
-    },
-    {
       "check": "NEITHER STRIPE NOR TELEGRAM-STARS FULFILMENT EXISTS YET, so payment-webhook forgery has no target",
       "why": "both arrive as attacker-reachable POSTs, so before either ships: verify the signature over the RAW bytes with a constant-time compare (Stripe's `Stripe-Signature` includes a timestamp \u2014 refuse outside a 5-minute tolerance and store every event id to refuse replays; Telegram's is the secret header plus `successful_payment` arriving only in an update, never in a form post), and never read the amount, the user id or the plan from the body without cross-checking the record the provider keeps"
     }
   ],
   "facts": {
-    "at_ms": 1790406078266,
+    "at_ms": 1790407978204,
     "bench": {
       "market": "0xM1",
       "token": "0xT10",
       "tick": "0.01",
-      "account": "u_attacker_34c60913"
+      "account": "u_attacker_4910cbb4"
     },
     "trading": {
       "must_accept": {
@@ -28,7 +24,7 @@
         "tick": "0.01",
         "status": 422,
         "code": "OFF_TICK",
-        "detail": "{\"error\": {\"code\": \"OFF_TICK\", \"message\": \"price is not on a valid tick\", \"retryable\": false, \"requestId\": \"f85df9cc651f4040\"}}"
+        "detail": "{\"error\": {\"code\": \"OFF_TICK\", \"message\": \"price is not on a valid tick\", \"retryable\": false, \"requestId\": \"d85c60bdef814837\"}}"
       },
       "intents_after_off_tick": {
         "before": {
@@ -116,15 +112,15 @@
       },
       "cascade_end_to_end": {
         "exit": 0,
-        "fanout_ms": 124.0,
-        "per_copier_ms": 0.25,
+        "fanout_ms": 115.0,
+        "per_copier_ms": 0.23,
         "intents": 500,
         "aggregate_usd": 6375.0,
         "orders": 500,
         "largest_usd": 12.75,
         "venue_filled": 500,
         "passes": 2,
-        "book_ms": 269.0,
+        "book_ms": 179.0,
         "booked": 500,
         "verdict": "PASS"
       }
@@ -258,16 +254,24 @@
       "redos": {
         "/v1/markets?q": {
           "status": 422,
-          "ms": 5.2
+          "ms": 9.5
         },
         "/v1/markets?category": {
           "status": 422,
-          "ms": 5.6
+          "ms": 8.5
         },
         "/v1/leaderboard?q": {
           "status": 422,
-          "ms": 4.4
+          "ms": 5.5
         }
+      },
+      "csv_writer": {
+        "route_exists": false,
+        "export_is_client_side": true,
+        "every_cell_through_guard": true,
+        "formula_leading_class": true,
+        "signed_integer_carve_out": true,
+        "header_left_verbatim": true
       }
     },
     "logic": {
@@ -280,7 +284,7 @@
           "builder_code_revoked": true,
           "builder_code_state": "disabled",
           "reason": "self_referral",
-          "referrer": "u_attacker_34c60913",
+          "referrer": "u_attacker_4910cbb4",
           "review": 1,
           "state": "refused"
         },
@@ -289,13 +293,13 @@
           "polygm-referral",
           "disabled",
           "manual",
-          "self-referral detected on account u_attacker_34c60913"
+          "self-referral detected on account u_attacker_4910cbb4"
         ],
-        "referral_token": "ref_ptzmn7qf\u2026"
+        "referral_token": "ref_zxw5g2hx\u2026"
       },
       "duplicate_funding": {
         "first": {
-          "uid": "u_sybil-a_591c03f5",
+          "uid": "u_sybil-a_04aae60a",
           "status": 200,
           "body_state": "attributed",
           "code": "",
@@ -305,7 +309,7 @@
           "notional_micro": 0
         },
         "second": {
-          "uid": "u_sybil-b_7de3a5cb",
+          "uid": "u_sybil-b_7777ec30",
           "status": 409,
           "body_state": null,
           "code": "REFUSED",
@@ -317,7 +321,7 @@
       },
       "sybil_claims": [
         {
-          "uid": "u_sybil-0_88f42baa",
+          "uid": "u_sybil-0_ea643d48",
           "status": 200,
           "body_state": "attributed",
           "code": "",
@@ -327,7 +331,7 @@
           "notional_micro": 0
         },
         {
-          "uid": "u_sybil-1_cfa47de4",
+          "uid": "u_sybil-1_d95ffbf7",
           "status": 200,
           "body_state": "attributed",
           "code": "",
@@ -337,7 +341,7 @@
           "notional_micro": 0
         },
         {
-          "uid": "u_sybil-2_fc6d8dd5",
+          "uid": "u_sybil-2_d73c6690",
           "status": 200,
           "body_state": "attributed",
           "code": "",
@@ -347,7 +351,7 @@
           "notional_micro": 0
         },
         {
-          "uid": "u_sybil-3_9984e11f",
+          "uid": "u_sybil-3_66ab746f",
           "status": 200,
           "body_state": "review",
           "code": "",
@@ -357,7 +361,7 @@
           "notional_micro": 0
         },
         {
-          "uid": "u_sybil-4_fc4521fc",
+          "uid": "u_sybil-4_c8b42f07",
           "status": 200,
           "body_state": "review",
           "code": "",
@@ -367,7 +371,7 @@
           "notional_micro": 0
         },
         {
-          "uid": "u_sybil-6_d5e1e85f",
+          "uid": "u_sybil-6_e98446f5",
           "status": 200,
           "body_state": "review",
           "code": "",
@@ -449,7 +453,7 @@
           "builder_code_revoked": false,
           "builder_code_state": "already-disabled",
           "reason": "self_referral",
-          "referrer": "u_attacker_34c60913",
+          "referrer": "u_attacker_4910cbb4",
           "review": 1,
           "state": "refused"
         }
@@ -616,7 +620,7 @@
     },
     {
       "status": "PASS",
-      "name": "the fan-out is fast enough to be a copy (124.0 ms total for 500 copiers, 0.25 ms each)",
+      "name": "the fan-out is fast enough to be a copy (115.0 ms total for 500 copiers, 0.23 ms each)",
       "why": ""
     },
     {
@@ -716,13 +720,13 @@
     },
     {
       "status": "PASS",
-      "name": "a 10,000-character pathological parameter is refused or answered quickly (worst 5.6 ms)",
+      "name": "a 10,000-character pathological parameter is refused or answered quickly (worst 9.5 ms)",
       "why": ""
     },
     {
-      "status": "OPEN",
-      "name": "NO CSV EXPORT ROUTE EXISTS YET, so formula injection could not be probed end to end",
-      "why": "when the tax export ships: write a row whose fields begin `=`, `+`, `-`, `@`, then assert the writer prefixes each with a quote and that the header row is unchanged; add a test next to the wallet's own, and keep this probe as the outside view"
+      "status": "PASS",
+      "name": "the tax export's writer neutralises formula-leading cells in every column it emits (guarded)",
+      "why": ""
     },
     {
       "status": "PASS",
@@ -736,12 +740,12 @@
     },
     {
       "status": "PASS",
-      "name": "the refusal recorded the ground in the audit trail ({\"builder_code_revoked\": true, \"builder_code_state\": \"disabled\", \"reason\": \"self_referral\", \"referrer\": \"u_attacker_34c6)",
+      "name": "the refusal recorded the ground in the audit trail ({\"builder_code_revoked\": true, \"builder_code_state\": \"disabled\", \"reason\": \"self_referral\", \"referrer\": \"u_attacker_4910)",
       "why": ""
     },
     {
       "status": "PASS",
-      "name": "the programme's builder code (polygm-referral) is marked disabled with the reason readable (['polygm-referral', 'disabled', 'manual', 'self-referral detected on account u_attacker_34c60913'])",
+      "name": "the programme's builder code (polygm-referral) is marked disabled with the reason readable (['polygm-referral', 'disabled', 'manual', 'self-referral detected on account u_attacker_4910cbb4'])",
       "why": ""
     },
     {
@@ -856,7 +860,7 @@
     },
     {
       "status": "PASS",
-      "name": "a repeat self-referral still records the code's *state*, not just that nothing changed ({\"builder_code_revoked\": false, \"builder_code_state\": \"already-disabled\", \"reason\": \"self_referral\", \"referrer\": \"u_attacker_34c60913\", \"rev)",
+      "name": "a repeat self-referral still records the code's *state*, not just that nothing changed ({\"builder_code_revoked\": false, \"builder_code_state\": \"already-disabled\", \"reason\": \"self_referral\", \"referrer\": \"u_attacker_4910cbb4\", \"rev)",
       "why": ""
     },
     {
