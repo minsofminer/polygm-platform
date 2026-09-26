@@ -129,6 +129,13 @@ Re-run these on any palette edit — `../prompts/P02-branding.md` requires the t
 | `tokens.css` | **new (P02)** generated CSS custom properties, `:root` light + `[data-theme=dark]` | proposed — regenerate with `node tools/build-tokens.mjs` |
 | `SIZE-RULES.md` | **new (P02)** measured size floor (24px), favicon switch, 1-bit and crop rules | proposed |
 | `palette-search.json` | **new (P02)** exhaustive ΔE*ab search evidence for chart palette + NO hue | proposed — evidence, not an asset |
+| `exports/` (9 files) | **new** deterministic exports from the canonical SVG: `mark-512/1024`, `mark-mono-light/dark-1024`, `app-icon-1024`, `app-icon-square-1024`, `logo-system.png`, `telegram-channel-avatar-512/1080` | generated — `python3 tools/render-brand-assets.py` (verifies the lock hash; never ImageMagick, which drops the stroked chevron) |
+| `boards/board-01-terminal-in-use-composed.png` | terminal-in-use board: a phone showing the order-book ladder + chart, with the canonical mark at 430px in the empty right panel | **canonical** — composited, provenance in `boards/COMPOSITES.json` |
+| `boards/board-02-channel-world-composed.png` | channel/world board: three market panels, a hero disc, and the four channel tiles | **canonical** — composited into the *empty* disc and tiles |
+| `boards/board-03-identity-objects-composed.png` | identity objects: a metal card (colour mark warped into the card's photographed quad), a mug (mono print, blurred to its depth of field), a sticker sheet (three marks squashed along the sheet's tilt; the fourth sticker is the peeled one) | **canonical** — composited |
+| `boards/board-0N-*-raw.png` | the mark-free bases the boards above are composited onto | working files — a spec may only build on one of these |
+| `boards/rejected/` | first-generation boards carrying the image generator's own redrawn mark | **rejected — do not ship** |
+| `boards/COMPOSITES.json` | which mark geometry each composed board was built from | machine-checked by `tools/compose-brand-board.py --check` |
 | `tokens.json` | extended: `semantic.{light,dark}`, per-theme `chart` arrays, `rules` incl. never-same-row | palette roles `proposed` (values audit-verified); mark/typography `fixed` fields untouched |
 
 ---
@@ -151,7 +158,16 @@ To produce more branded graphics from this kit, follow the vendored brandkit wor
 (`brand-lock.md`, `palette.md`, `logo.md`, `mockups.md`, `social-templates.md`, `brandbook.md`).
 
 Substitution rule for environments without the Higgsfield CLI: use the workspace's
-built-in image generator with prompts that paste the Brand Lock's palette hexes and
-the mark description verbatim (see `../SKILLS.md` for the exact adapter). Never let the
-image model free-hand the mark on top of an existing layout — regenerate from `svg/mark.svg`
+built-in image generator with prompts that paste the Brand Lock's palette hexes and the
+mark description verbatim (see `../SKILLS.md` for the exact adapter). Never let the image
+model free-hand the mark on top of an existing layout — regenerate from `svg/mark.svg`
 and composite deterministically.
+
+That last rule is not theoretical. Three boards were first generated from prompts that
+described the mark and all three came back with a near-miss logo (rounded chevrons,
+off-centre dot) that looked right at a glance. The pipeline that holds is: **prompt for
+empty identity surfaces** (`no logos, no emblems, no chevrons, no icons, no symbols, no
+text`), then **composite** the canonical geometry with
+`python3 tools/compose-brand-board.py --in brand/boards/<base>-raw.png --spec
+tools/brand-board-specs/<n>.json`, then **verify** with `--check`, which fails on a stale
+board, on a base that is not mark-free, or on provenance drift against the locked hash.

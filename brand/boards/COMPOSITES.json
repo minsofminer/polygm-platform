@@ -1,0 +1,30 @@
+{
+  "boards": {
+    "board-01-terminal-in-use-composed.png": {
+      "base": "brand/boards/board-01-terminal-in-use-raw.png",
+      "placements": 1,
+      "spec": null,
+      "variants": [
+        "mono_light"
+      ]
+    },
+    "board-02-channel-world-composed.png": {
+      "base": "brand/boards/board-02-channel-world-raw.png",
+      "placements": 5,
+      "spec": null,
+      "variants": [
+        "colour"
+      ]
+    },
+    "board-03-identity-objects-composed.png": {
+      "base": "brand/boards/board-03-identity-objects-raw.png",
+      "placements": 5,
+      "spec": null,
+      "variants": [
+        "colour",
+        "mono_light"
+      ]
+    }
+  },
+  "mark_geometry_sha256": "c33b4d5fd82b7acd"
+}

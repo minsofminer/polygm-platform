@@ -1,0 +1,15 @@
+{
+  "board": "brand/boards/board-01-terminal-in-use-raw.png",
+  "out": "brand/boards/board-01-terminal-in-use-composed.png",
+  "note": "Regenerated with an EMPTY right panel and composited from the canonical geometry. The first attempt prompted the mark and the generator drew a near-miss (rounded chevrons, off-centre dot) that survived two clearing passes before the leftover was measured; the pipeline that works is empty regions in, canonical renders out. A second mark was placed at the panel's foot and removed: it landed on the seam between two of the lower panels, and a mark that straddles a gutter is a mark that looks like a mistake.",
+  "placements": [
+    {
+      "cx": 1150,
+      "cy": 345,
+      "size": 430,
+      "variant": "mono_light",
+      "opacity": 0.96,
+      "blur": 0.6
+    }
+  ]
+}

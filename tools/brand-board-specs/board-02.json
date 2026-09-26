@@ -1,0 +1,37 @@
+{
+  "board": "brand/boards/board-02-channel-world-raw.png",
+  "out": "brand/boards/board-02-channel-world-composed.png",
+  "note": "The board is generated with EMPTY identity surfaces (a blank disc and four blank tiles) and the mark is composited from the canonical geometry \u2014 the regeneration the first attempt needed, because clearing a logo the generator had already drawn showed its chevrons were rounded and its dot off-centre.",
+  "placements": [
+    {
+      "cx": 1135,
+      "cy": 335,
+      "size": 380,
+      "variant": "colour"
+    },
+    {
+      "cx": 209,
+      "cy": 796,
+      "size": 150,
+      "variant": "colour"
+    },
+    {
+      "cx": 595,
+      "cy": 796,
+      "size": 130,
+      "variant": "colour"
+    },
+    {
+      "cx": 982,
+      "cy": 796,
+      "size": 110,
+      "variant": "colour"
+    },
+    {
+      "cx": 1369,
+      "cy": 796,
+      "size": 90,
+      "variant": "colour"
+    }
+  ]
+}

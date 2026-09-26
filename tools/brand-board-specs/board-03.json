@@ -1,0 +1,76 @@
+{
+  "board": "brand/boards/board-03-identity-objects-raw.png",
+  "out": "brand/boards/board-03-identity-objects-composed.png",
+  "note": "Generated as CLEAN, unbranded objects (blank metal card, blank mug, blank sticker circles) and the mark is composited from the canonical geometry: warped into the card's photographed quad, printed flat on the mug at the safe area with a blur matched to its depth of field, and squashed onto three of the four stickers along the sheet's own tilt. The fourth sticker is the peeled one, and a peeled sticker shows its back. Ink opacity and a sub-pixel blur are stated per object: print on brushed metal is not paint on ceramic, and a mark at full opacity on a matte surface reads as a sticker on a photograph. The fourth sticker stays blank because it is the peeled one, and a peeled sticker shows its back.",
+  "placements": [
+    {
+      "quad": [
+        [
+          303,
+          414
+        ],
+        [
+          714,
+          350
+        ],
+        [
+          753,
+          660
+        ],
+        [
+          246,
+          748
+        ]
+      ],
+      "quad_mode": "fit",
+      "size_frac": 0.3,
+      "variant": "colour",
+      "opacity": 0.93,
+      "blur": 0.4
+    },
+    {
+      "cx": 1157,
+      "cy": 300,
+      "size": 148,
+      "variant": "mono_light",
+      "blur": 1.9,
+      "opacity": 0.88
+    },
+    {
+      "cx": 1195,
+      "cy": 637,
+      "size": 196,
+      "variant": "mono_light",
+      "opacity": 0.9,
+      "ellipse": {
+        "rx": 98,
+        "ry": 45,
+        "rotate_deg": 8
+      }
+    },
+    {
+      "cx": 998,
+      "cy": 677,
+      "size": 190,
+      "variant": "mono_light",
+      "opacity": 0.9,
+      "ellipse": {
+        "rx": 95,
+        "ry": 43,
+        "rotate_deg": 8
+      }
+    },
+    {
+      "cx": 1102,
+      "cy": 800,
+      "size": 184,
+      "variant": "mono_light",
+      "opacity": 0.9,
+      "ellipse": {
+        "rx": 92,
+        "ry": 44,
+        "rotate_deg": 8
+      }
+    }
+  ]
+}

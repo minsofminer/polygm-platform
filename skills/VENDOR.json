@@ -1,0 +1,26 @@
+{
+  "vercel-agent-skills": {
+    "upstream": "https://github.com/vercel-labs/agent-skills",
+    "commit": "063bee94c3f4df8453406c830b0a7df0f2860278",
+    "license": "MIT (README '## License')",
+    "vendoring": "MIT (README '## License'). Pruned: packages/ (6.2 MB of vercel-optimize test fixtures, not skills) and package-lock.json."
+  },
+  "taste-skill": {
+    "upstream": "https://github.com/Leonxlnx/taste-skill",
+    "commit": "ce26fc25c0e5e8cab638f883de62d9a86ee5e45b",
+    "license": "MIT",
+    "vendoring": "MIT. Pruned: assets/ (sponsor banners) and examples/ (1.0 MB of webp screenshots, not prompts)."
+  },
+  "awesome-design-md": {
+    "upstream": "https://github.com/VoltAgent/awesome-design-md",
+    "commit": "f6961238d5cddcf8042a74a70fc400ec67181abb",
+    "license": "MIT",
+    "vendoring": "MIT. Nothing pruned: it is 74 brand systems as text."
+  },
+  "playwright-cli": {
+    "upstream": "https://github.com/microsoft/playwright-cli",
+    "commit": "74354ecc7a43da16d91a9bc54fa8db8283a3fcf5",
+    "license": "Apache-2",
+    "vendoring": "Apache-2.0. Pruned: CI configs and the repo's own dev skills (.claude/), which are about releasing this CLI."
+  }
+}
