@@ -160,7 +160,10 @@ and absences, not soft passes: they are listed at the end of the record with the
 
 | Probe | Result |
 | --- | --- |
-| An account applying its own referral link | `409 SELF_REFERRAL`, no attribution row, audit says `builder_code_revoked: true`, and the programme's builder code is `disabled`/`manual` with the account named |
+| An account applying its own referral link | `409 SELF_REFERRAL`, no attribution row, audit says `builder_code_revoked: true` **and** `builder_code_state: "disabled"`, and the programme's builder code is `disabled`/`manual` with the account named |
+| The same account applying it **again** | still `409`, and the audit row reads `builder_code_state: "already-disabled"` — the state is what tells an operator the programme is still off; the boolean alone said "nothing happened" (closed after the phase, see below) |
+| An operator clearing that review | `POST /v1/referrals/review` with `decision=clear` puts the code back (`active`/`manual`, note naming the review, the actor and the reason) and writes a `referral.builder_code.cleared` audit event |
+| The same clear against a code the **venue** disabled | untouched (`disabled`/`venue_rejection`), and no restore event is written — our review cannot overrule the programme's owner |
 | Two accounts claiming one referrer from the **same funding source** | the second is refused and recorded as `refused`/`duplicate_funding`, earning nothing |
 | Six fresh accounts claiming one referrer | 3 attributed, 3 held for `velocity`; every held claim carries its reason; **none has earned anything**, because a referral is worth $0 until a matched order clears the threshold |
 | Wash trading: a same-wallet round trip 30 s apart at one price, plus one genuine trade 3 h later | $500 of round-tripped volume subtracted exactly once, the genuine $620 trade kept (verified $1,120 of $1,620) |
@@ -203,17 +206,39 @@ moving the ceiling without a restart).
 
 #### What the probes found about the product's own detectors
 
-Two limitations are recorded as OPEN rather than as failures, because in both cases the alternative was to change a
-product decision that is not a probe's to make:
+One limitation is recorded as OPEN rather than as a failure, because the alternative was to change a product
+decision that is not a probe's to make:
 
 * **The copy-farm rule cannot tell a follower from two active traders on the same cadence.** Measured: with the
   candidate's fills moved 200 s earlier — so it is never the one being followed in any pairing sense — 10 of 12
   fills still matched, because *any* candidate fill inside 120 s counts and a 60 s cadence always has one. The row
   this produces is a public suspicion ("derived from 0x…"), which is a claim about a person. The fix needs pairing
   (a matched candidate cannot match twice) or a cadence comparison, and the tape is in the tool to use as the test.
-* **A market question containing `_`, `*`, `[` or a backtick trips the broadcast "looks like Markdown" warning.**
-  Cosmetic — Telegram renders the characters literally — but an operator warning that fires on ordinary questions is
-  a warning operators learn to skip, which is how the real confetti gets through later.
+
+**Closed after the phase, with the re-test the rule demands (P16).** *The revocation ground is the programme-wide
+builder code, and nothing re-enables it in the product* named two gaps. Both are closed, and both by the probe
+rather than by a note here: `_ref_invalidate_builder_code` now returns the code's **state** (`disabled` /
+`already-disabled` / `no-code`) instead of a bare flip, so the audit line answers the question an operator actually
+has; and `_ref_restore_builder_code` — called by `POST /v1/referrals/review` when a `self_referral` review is
+*cleared* — puts a **manual** disable back (`active`/`manual`, reason in the note) and writes a
+`referral.builder_code.cleared` event naming the actor. It refuses to touch a `venue_rejection` disable, which is
+the guard that keeps a review from overruling the party whose programme this is. The probe now drives all four
+behaviours: repeated apply, clear, the restore event, and the venue guard — `docs/verification/P14-attack-surface.json`
+reads **60 passed, 0 failed, 6 OPEN** where it read 8 open, and the schema's own CHECK constraints (`source IN
+('venue_rejection','manual','api')`) are why the restore writes `active`/`manual` rather than inventing a new value:
+the first attempt did exactly that and the insert was refused, which is the schema doing its job. Three tests in
+`tests/test_referrals_api.py::TestTheThreeCollisionsOverTheApi` hold the same ground hermetically.
+
+**Also closed after the phase (P16).** *A legitimate question containing `_`, `*`, `[`,
+`]` or a backtick trips the broadcast "looks like Markdown" warning* was recorded as cosmetic. Re-reading the probe
+showed it was not only questions: **every refusal card tripped it**, because refusal codes are `UPPER_SNAKE`
+(`OFF_TICK`, `STALE_QUOTE`, `IDEM_CONFLICT`) — the warning fired on the most-opened card in the product, which is how
+a warning becomes noise. `MARKDOWN_CONFETTI_RE` now matches the paired forms Markdown actually uses, with
+CommonMark's own two rules (no whitespace inside a delimiter pair, no intraword `_` emphasis), and the re-test is
+the probe itself: the same three cards are re-rendered through the real renderer and `cosmetic` is now empty —
+`docs/verification/P14-attack-surface.json` reads **56 passed, 0 failed, 7 OPEN** where it read 8. Four tests in
+`tests/test_telegrambot.py::TestTheMarkdownScanner` hold both directions: real Markdown still fires, ordinary
+questions, brackets and refusal codes do not.
 
 ---
 

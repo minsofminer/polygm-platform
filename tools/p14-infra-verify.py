@@ -201,8 +201,15 @@ def section_database(g: Gate, facts: dict) -> None:
         projects = json.loads(body) if status == 200 else []
         facts["database"]["providers"]["supabase"] = [{"id": p.get("id"), "name": p.get("name"),
                                                        "region": p.get("region")} for p in projects]
-        g.check("the Supabase account was queried and lists %d project(s)" % len(projects), status == 200,
-                "status %d: %s" % (status, body[:160]))
+        # The failure has three causes and they are not the same thing, so the message names which one it is: a
+        # credential that is missing (handled above), a credential the provider rejects (401 — rotate it; P16 found
+        # this token dead after it had worked during P14, and a check that only printed "status 401" left the
+        # operator to guess whose problem it was), or an account that genuinely has no projects.
+        hint = ("the token in ~/.secrets/tokens.env is rejected by the provider: rotate it and re-run. The check "
+                "cannot see the database this product will use until it does, so the D4 verdict stays FAIL"
+                if status in (401, 403) else body[:160])
+        g.check("the Supabase account was queried and lists %d project(s)" % len(projects), status == 200
+                and bool(projects), "status %d: %s" % (status, hint))
         for p in projects:
             ref = p.get("id")
             st2, _h2, b2 = http("https://api.supabase.com/v1/projects/%s/network-restrictions" % ref,

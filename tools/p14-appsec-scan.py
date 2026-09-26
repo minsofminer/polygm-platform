@@ -36,6 +36,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import io
+import fnmatch
 import json
 import os
 import pathlib
@@ -273,11 +274,42 @@ def _redact():
     return redact
 
 
+def _read_allowlist() -> tuple[set[str], list[dict], list[str]]:
+    """`(literals, line_scoped, malformed)` from `tools/secret-scan-allowlist.json`.
+
+    The file has three collections and this section reads two of them; the first version of this parse assumed
+    `allow` was a list of *strings* and crashed with `TypeError: unhashable type: 'dict'` the first time somebody
+    added an entry in the shape the file's own note describes (`{path, line, why}`). That entry was added in P15 and
+    the crash landed in P16's run of `make security`, which is the nightly: a scanner that cannot read its own
+    allowlist is a scanner that takes the nightly down instead of reporting a finding.
+
+    So: `strings` are literals (a shape that is not a secret wherever it appears), `allow` is either a literal or a
+    **line-scoped** exemption (this path, this line), and an entry that is neither is refused by name rather than
+    ignored — with three shapes in one file, "silently skipped" is how an exemption nobody wrote creeps in.
+    """
+    raw = json.loads(ALLOWLIST.read_text()) if ALLOWLIST.exists() else {}
+    literals: set[str] = set()
+    scoped: list[dict] = []
+    malformed: list[str] = []
+    for key in ("allow", "strings"):
+        for e in raw.get(key) or []:
+            if isinstance(e, str):
+                literals.add(e)
+                continue
+            if isinstance(e, dict) and e.get("string"):
+                literals.add(str(e["string"]))
+                continue
+            if key == "allow" and isinstance(e, dict) and e.get("line"):
+                scoped.append({"path": str(e.get("path") or "*"), "line": str(e["line"]),
+                               "why": str(e.get("why") or "")})
+                continue
+            malformed.append("%s: %s" % (key, json.dumps(e)[:120]))
+    return literals, scoped, malformed
+
+
 def section_secrets_history(g: Gate, facts: dict) -> None:
     """Every added line in every commit, on every branch — the kit says all history and means it."""
-    allow = json.loads(ALLOWLIST.read_text()) if ALLOWLIST.exists() else {}
-    allowed_literals = set(allow.get("allow", [])) | {e["string"] if isinstance(e, dict) else e
-                                                     for e in allow.get("strings", [])}
+    allowed_literals, scoped_allows, malformed_allow = _read_allowlist()
     code, head = sh(["git", "rev-list", "--all", "--count"])
     git_commits = int(head.strip() or 0)
     commits = 0
@@ -285,6 +317,7 @@ def section_secrets_history(g: Gate, facts: dict) -> None:
                     "--date=short"], timeout=900)
     findings: list[dict] = []
     lint_allowed: dict[str, int] = {}
+    scoped_honoured: dict[str, dict] = {}
     sha, scanned, skipped_path = "", 0, 0
     path = ""
     lines = log.splitlines()
@@ -294,7 +327,11 @@ def section_secrets_history(g: Gate, facts: dict) -> None:
             commits += 1
             continue
         if line.startswith("+++"):
+            # `+++ b/tools/x.py` (or `/dev/null` for a deletion): the comparison the exemptions are written
+            # against is the repository-relative path, and the first version of this kept git's `b/` prefix, so
+            # every path in the allowlist read as stale.
             path = line[4:].strip()
+            path = path[2:] if path.startswith("b/") else path
             continue
         if not line.startswith("+") or line.startswith("++++"):
             continue
@@ -304,6 +341,16 @@ def section_secrets_history(g: Gate, facts: dict) -> None:
         scanned += 1
         body = line[1:]
         if any(a and a in body for a in allowed_literals):
+            continue
+        # A line-scoped exemption: the path has to match and the line has to be the one written down. It is
+        # matched on the added line, not on the file, so an exemption cannot creep from one line to its neighbours —
+        # which is exactly how "this one test vector is fine" turns into "this file is fine".
+        hit = next((s for s in scoped_allows
+                    if fnmatch.fnmatch(path, s["path"]) and s["line"] and s["line"] in body), None)
+        if hit is not None:
+            scoped_honoured.setdefault(hit["line"], {"count": 0, "why": hit["why"], "path": hit["path"]})
+            scoped_honoured[hit["line"]]["count"] += 1
+            scanned -= 1
             continue
         # The repo's own escape hatch, honoured here so there is ONE mechanism for "this shape is not a secret"
         # rather than a second list: `# lint-allow: <reason>`. `tools/lint-rules.py` enforces that a marker carries
@@ -325,11 +372,23 @@ def section_secrets_history(g: Gate, facts: dict) -> None:
                                       and any(pat.search(body) for _n, pat in KEY_SHAPES)]:
             findings.append({"commit": sha[:10], "rule": hit, "path": path,
                              "line": _redact().redact_text(body.strip())[:120]})
+    stale = [s for s in scoped_allows if s["line"] not in scoped_honoured]
     facts["secrets_history"] = {"commits": commits, "added_lines_scanned": scanned,
                                 "lines_skipped_by_path_allowlist": skipped_path,
                                 "path_allowlist": [{"path": p, "why": w} for p, w in PATH_ALLOW],
                                 "lint_allow_reasons": lint_allowed,
+                                "line_scoped_allowlist": [{"path": s["path"], "line": s["line"][:60],
+                                                            "why": s["why"][:80], "honoured": s["line"] in scoped_honoured}
+                                                           for s in scoped_allows],
+                                "malformed_allowlist_entries": malformed_allow,
                                 "findings": findings[:40], "finding_count": len(findings)}
+    g.check("every allowlist entry is one of the two shapes this scanner can honour (%d malformed)"
+            % len(malformed_allow), not malformed_allow,
+            "an entry that exempts nothing because nobody can read it: %s" % json.dumps(malformed_allow[:3]))
+    g.check("every line-scoped exemption was used by the history it exempts (%d of %d honoured)"
+            % (len(scoped_honoured), len(scoped_allows)),
+            not stale, "a written exemption that matches no added line is a silence that outlived its reason: %s"
+            % json.dumps([s["path"] + " :: " + s["line"][:50] for s in stale]))
     # The guard is "did the walk read what git says exists", compared against git's own count — not a hardcoded
     # number of commits, which was the first version and simply failed on this repository's actual size (85
     # commits at P14, not the 100 the threshold assumed).
@@ -337,8 +396,9 @@ def section_secrets_history(g: Gate, facts: dict) -> None:
             % (commits, scanned), commits == git_commits and scanned > 10_000,
             "git reports %d commits, the walk read %d, %d added lines" % (git_commits, commits, scanned))
     g.check("no secret shape in any commit's added lines (%d findings; %d lines carry a written `lint-allow` "
-            "exemption: %s)" % (len(findings), sum(lint_allowed.values()),
-                                ", ".join("%s x%d" % (r, n) for r, n in lint_allowed.items())),
+            "exemption: %s; %d line-scoped exemption(s) honoured)" % (len(findings), sum(lint_allowed.values()),
+                                ", ".join("%s x%d" % (r, n) for r, n in lint_allowed.items()),
+                                sum(v["count"] for v in scoped_honoured.values())),
             not findings, json.dumps(findings[:3]))
 
     # Canary: a real fake credential, in a real git history, must be found.

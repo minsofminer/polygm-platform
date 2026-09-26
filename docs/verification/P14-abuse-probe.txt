@@ -8,7 +8,7 @@ PASS a metered operation stops the account that spent it ([200, 200, 200, 200, 2
 PASS the refusal names the budget rather than a generic 429 (QUOTA_EXCEEDED)
 PASS a *different* account is unaffected by the first account's spent budget
 PASS 100 aggressive users produced no 5xx (600 requests, {'200': 600})
-PASS the platform degrades gracefully, not collapses: p50 329.6 ms loaded vs 10.6 ms unloaded (31.2x), p95 737.0 ms, max 1010.3 ms, 86 req/s
+PASS the platform degrades gracefully, not collapses: p50 248.4 ms loaded vs 8.8 ms unloaded (28.2x), p95 495.9 ms, max 780.3 ms, 112 req/s
 PASS every refusal under load is a throttle answer (2xx=600, refusals=0)
 OPEN THIS IS ONE PROCESS, NOT A LOAD TEST: the 100 users are threads against an in-process ASGI app on one machine, which measures the product's own budgets and failure modes but not the deployed fleet
         — P13's load harness covers the fleet; re-run it against the deployed API before launch and attach the p95 and error-rate curves to the security gate document
@@ -26,7 +26,7 @@ PASS an absurd page size is bounded by a stated cap (100) and the response never
 
   per_user: {"codes": [200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 429], "refusal_code": "QUOTA_EXCEEDED", "refusal_retryable": true, "other_account_status": 200}
 
-  own_budget: {"baseline_p50_ms": 10.6, "users": 100, "requests": 600, "wall_ms": 6993.3, "statuses": {"200": 600}, "p50_ms": 329.6, "p95_ms": 737.0, "max_ms": 1010.3, "rps": 85.8, "p50_vs_baseline": 31.2}
+  own_budget: {"baseline_p50_ms": 8.8, "users": 100, "requests": 600, "wall_ms": 5333.1, "statuses": {"200": 600}, "p50_ms": 248.4, "p95_ms": 495.9, "max_ms": 780.3, "rps": 112.5, "p50_vs_baseline": 28.2}
 
   victim_lockout: {"attacker_codes": [401, 401, 401, 401, 401, 429], "locked_after": 6, "session_before": 200, "session_during_lock": 200, "lock_expires": {"locked_now": true, "locked_later": false}, "victim_events": ["identity_linked", "login_bad_password", "login_ok", "password_set", "session_mint"], "recovery_status": 404}
 

@@ -10,10 +10,6 @@
       "why": "run the kit's own probes on the built image: `docker run \u2026 id` (expect uid 10001, not 0), `touch /srv/app/x` (expect permission denied), `nc -l` (absent), `getent passwd polygm` (expect nologin), then record the output"
     },
     {
-      "check": "NO PRODUCTION DATABASE FOR THIS PRODUCT EXISTS YET: the deployed API runs the SQLite demo engine in /tmp (`api/index.py`), so there is nothing to be public or private",
-      "why": "when the real Postgres lands: create it with network restrictions set to the app's egress IPs (never 0.0.0.0/0), enable PITR, and re-run this section \u2014 the check above then applies to it"
-    },
-    {
       "check": "MANAGED-POSTGRES RESTORE UNPROVEN: the drill above is the SQLite twin, which is what this environment runs; no restore has been performed against the managed Postgres that production will use",
       "why": "on the managed instance: take a PITR snapshot, restore to a scratch branch at a known timestamp, run the same money-path queries, and record the wall-clock time and the recovery point"
     },
@@ -31,7 +27,7 @@
     }
   ],
   "facts": {
-    "at_ms": 1790109968813,
+    "at_ms": 1790401948759,
     "api_live": "https://polygm-api.vercel.app",
     "mini_app_live": "https://polygm-mini-app.vercel.app",
     "egress": {
@@ -73,31 +69,14 @@
     },
     "database": {
       "providers": {
-        "supabase": [
-          {
-            "id": "jyefbqxnxxfoitstgdzi",
-            "name": "hashcats-mining",
-            "region": "ap-south-1"
-          }
-        ],
-        "supabase_cidrs": {
-          "jyefbqxnxxfoitstgdzi": {
-            "v4": [
-              "0.0.0.0/0"
-            ],
-            "v6": [
-              "::/0"
-            ],
-            "status": 200
-          }
-        }
+        "supabase": []
       }
     },
     "restore": {
-      "backup_ms": 17,
-      "restore_ms": 8,
-      "tables": 123,
-      "rows": 3273,
+      "backup_ms": 16,
+      "restore_ms": 7,
+      "tables": 124,
+      "rows": 3274,
       "mismatches": {},
       "money_answers_identical": true
     },
@@ -146,7 +125,7 @@
       },
       "anonymous_order": {
         "status": 401,
-        "body": "{\"error\":{\"code\":\"UNAUTHENTICATED\",\"message\":\"a session is required\",\"retryable\":false,\"requestId\":\"b9324cbc492a4f2a\"}}"
+        "body": "{\"error\":{\"code\":\"UNAUTHENTICATED\",\"message\":\"a session is required\",\"retryable\":false,\"requestId\":\"eba7f6bc580c442d\"}}"
       },
       "mini_app": {
         "status": 200,
@@ -205,28 +184,18 @@
       "why": "run the kit's own probes on the built image: `docker run \u2026 id` (expect uid 10001, not 0), `touch /srv/app/x` (expect permission denied), `nc -l` (absent), `getent passwd polygm` (expect nologin), then record the output"
     },
     {
-      "status": "PASS",
-      "name": "the Supabase account was queried and lists 1 project(s)",
-      "why": ""
-    },
-    {
       "status": "FAIL",
-      "name": "database hashcats-mining (jyefbqxnxxfoitstgdzi) is not open to the internet (v4=['0.0.0.0/0'] v6=['::/0'])",
-      "why": "0.0.0.0/0 means every host on the internet can reach the Postgres port; the password is then the only control and the log fills with credential-stuffing attempts"
-    },
-    {
-      "status": "OPEN",
-      "name": "NO PRODUCTION DATABASE FOR THIS PRODUCT EXISTS YET: the deployed API runs the SQLite demo engine in /tmp (`api/index.py`), so there is nothing to be public or private",
-      "why": "when the real Postgres lands: create it with network restrictions set to the app's egress IPs (never 0.0.0.0/0), enable PITR, and re-run this section \u2014 the check above then applies to it"
+      "name": "the Supabase account was queried and lists 0 project(s)",
+      "why": "status 401: the token in ~/.secrets/tokens.env is rejected by the provider: rotate it and re-run. The check cannot see the database this product will use until it does, so the D4 verdict stays FAIL"
     },
     {
       "status": "PASS",
-      "name": "a consistent backup of the migrated database was taken (17 ms, 1761280 bytes)",
+      "name": "a consistent backup of the migrated database was taken (16 ms, 1765376 bytes)",
       "why": ""
     },
     {
       "status": "PASS",
-      "name": "the restored copy holds every table and every row (123 tables, 3273 rows, 8 ms)",
+      "name": "the restored copy holds every table and every row (124 tables, 3274 rows, 7 ms)",
       "why": ""
     },
     {

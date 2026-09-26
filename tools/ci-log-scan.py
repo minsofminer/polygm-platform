@@ -42,7 +42,13 @@ EXTRA = (
     ("slack_token", re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{10,}\b")),
     ("private_key_pem", re.compile(r"BEGIN [A-Z ]*PRIVATE KEY")),
     ("keystone_style_key", re.compile(r"\bsk-(live|test|ant)[A-Za-z0-9_-]{12,}\b")),
-    ("postgres_uri_with_password", re.compile(r"://[^\s/]+:[^\s@]{3,}@")),
+    # A DSN with a password in it, and *only* that: a scheme we actually use, a user with no separator in it, a
+    # password, and a host. The first version was `://[^\s/]+:[^\s@]{3,}@`, which matched
+    # `https?://|fetch\(…|@import\s+url\(` — a URL-shaped regex in `tools/p15-2am-drill.py` whose `@import` supplied
+    # the `@`. A rule that fires on the CSS at-rule is a rule people allowlist, so it is narrowed here instead.
+    ("postgres_uri_with_password", re.compile(
+        r"\b(?:postgres|postgresql|mysql|mariadb|mongodb|redis|rediss|amqp|amqps|clickhouse)"
+        r"(?:\+[a-z0-9]+)?://[^\s:@/]{1,64}:[^\s@/]{3,}@")),
     ("jwt_like", re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}")),
     ("telegram_initdata_hash", re.compile(r"initData[^&\n]{0,20}[?&]hash=[0-9a-f]{32,}", re.I)),
 )

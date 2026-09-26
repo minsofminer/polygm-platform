@@ -1,7 +1,7 @@
 P14 D3 — AppSec: SAST, DAST, history secrets, log redaction, dependencies, IaC, containers
 ====================================================================================================
 
-  sast rule S608   62 finding(s), triaged in tools/sast-triage.json
+  sast rule S608   64 finding(s), triaged in tools/sast-triage.json
   sast rule S110   7 finding(s), triaged in tools/sast-triage.json
   sast rule S105   4 finding(s), triaged in tools/sast-triage.json
   sast rule S101   1 finding(s), triaged in tools/sast-triage.json
@@ -10,14 +10,16 @@ P14 D3 — AppSec: SAST, DAST, history secrets, log redaction, dependencies, IaC
   sast rule S107   1 finding(s), triaged in tools/sast-triage.json
   sast rule S311   1 finding(s), triaged in tools/sast-triage.json
 
-PASS SAST ran and produced a rule set to triage (not an empty run: 82 findings across 8 rules)
+PASS SAST ran and produced a rule set to triage (not an empty run: 84 findings across 8 rules)
 PASS canary: the planted violations are caught (S105, S310, S311, S324, S602, S608)
 PASS every SAST finding is either fixed or triaged with a written reason (20 triaged, 0 untriaged)
 PASS no triage entry is stale — a suppressed finding that no longer exists is deleted, not left behind (0 stale)
 PASS every triage entry carries a reason and a reviewer
 PASS the triage covers a minority of the rules in play (not a wholesale suppression)
-PASS the history scan read every commit git knows about (91 commits, 168670 added lines)
-PASS no secret shape in any commit's added lines (0 findings; 6 lines carry a written `lint-allow` exemption: …` / `// lint-allow: …`). Matching the bare string x1, shape only, never a real token x5)
+PASS every allowlist entry is one of the two shapes this scanner can honour (0 malformed)
+PASS every line-scoped exemption was used by the history it exempts (1 of 1 honoured)
+PASS the history scan read every commit git knows about (98 commits, 184013 added lines)
+PASS no secret shape in any commit's added lines (0 findings; 6 lines carry a written `lint-allow` exemption: …` / `// lint-allow: …`). Matching the bare string x1, shape only, never a real token x5; 1 line-scoped exemption(s) honoured)
 PASS canary: a token committed to a git history is found by this scanner (['github_pat'])
 PASS the CI log scanner passes its own self-test
 PASS no unexplained hard-coded secret shape in tracked source (2 documented exceptions)
@@ -49,7 +51,7 @@ PASS an unknown route answers the API's own envelope, not a framework default pa
 PASS unexpected HTTP methods are refused, not executed ({'TRACE': 405, 'PUT': 405, 'DELETE': 405})
 PASS a hostile query string neither 500s nor is echoed back (422)
 
-P14 APPSEC: CONDITIONAL — 36 checks passed, 0 failed, 1 OPEN
+P14 APPSEC: CONDITIONAL — 38 checks passed, 0 failed, 1 OPEN
 
 OPEN (not passes, not failures — measurements this environment cannot take):
   * CONTAINER IMAGE CONTENTS ARE UNSCANNED: no docker/scanner in this environment, so the Dockerfiles are read statically and no built image has been inspected for OS packages, layers or CVEs

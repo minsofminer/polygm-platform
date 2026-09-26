@@ -3,17 +3,17 @@ P14 D1 — authorisation matrix (production identity shape: PGM_REQUIRE_SECURITY
 
 PASS the harness's own TOTP implementation matches RFC 6238's vectors
 PASS the attack account holds a working second factor (enrolled)
-PASS every served operation has an authorisation decision (95 served, 109 declared)
+PASS every served operation has an authorisation decision (99 served, 112 declared)
 PASS every level in the registry is one of public, user, user-owns-resource, admin, service
 PASS registry canary: an admin operation declared public is caught
-PASS every declared-but-unserved operation is a written promise, and none is drift (13 stale, 13 planned)
-PASS every written promise is still unserved or has been collected (13)
+PASS every declared-but-unserved operation is a written promise, and none is drift (12 stale, 12 planned)
+PASS every written promise is still unserved or has been collected (12)
 PASS registry canary: a route renamed out from under the table is caught as drift
 PASS the production identity shape serves no interactive API surface (4 of 4 paths are 404)
 PASS docs canary: a served schema is caught (the check must be asking a real path)
-PASS no non-public operation answers an anonymous caller (62 refused)
+PASS no non-public operation answers an anonymous caller (66 refused)
 PASS public operations are reachable anonymously (33 of 33 answered below 400)
-PASS a user session cannot reach any of the 14 admin operations
+PASS a user session cannot reach any of the 18 admin operations
 PASS a wrong admin token is never accepted
 PASS with no admin token configured, admin operations answer 503 rather than looking like a refusal of an attack on a configured box
 PASS no operation leaks a stranger's identifiers to a signed-in user (19 conclusive probes, 29 inconclusive)
@@ -30,7 +30,7 @@ PASS a service token is not a user identity (3 probes, none accepted)
 PASS an order above the risk limits is refused for the limit reason (403 OVER_ORDER_CAP)
 PASS an order inside the limits is still accepted (202)
 PASS an admin credential does not step over the risk gate (401, and with no admin token configured on this box it is refused before the gate at all)
-PASS no admin operation is a route that places an order (14 admin operations)
+PASS no admin operation is a route that places an order (18 admin operations)
 PASS the shared service secret is enforced where it belongs, and is not an API credential (3 header probes refused)
 PASS hostile ids on the id-bearing routes are answered, never crashed (39 requests, {404: 27, 422: 12})
 PASS fuzz canary: a route that 500s on a hostile id is caught

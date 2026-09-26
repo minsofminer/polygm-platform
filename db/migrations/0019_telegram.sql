@@ -152,6 +152,15 @@ CREATE INDEX IF NOT EXISTS telegram_kill_ix ON telegram_kill_state (at_ms DESC, 
 CREATE TRIGGER append_only_telegram_broadcasts BEFORE UPDATE OR DELETE ON telegram_broadcasts
     FOR EACH ROW EXECUTE FUNCTION polygm_reject_mutation();
 
+-- Both tables in this migration are append-only, and the check that says so is `p11-gate-check.py`'s c27: it reads
+-- the declared set from the SQLite builder's list and then requires a Postgres trigger *and* a REVOKE for every
+-- name on it. The kill-state log was on that list and had the REVOKE (the `DO` block below names both tables) and
+-- no trigger — so on Postgres, the P11 gate's floor check failed while the SQLite side (whose triggers are
+-- generated from the list, not written by hand) was correct. Found while re-running the neighbouring gates in P16:
+-- a table born with one half of a promise is exactly what c27 exists to catch, and it caught this one.
+CREATE TRIGGER append_only_telegram_kill_state BEFORE UPDATE OR DELETE ON telegram_kill_state
+    FOR EACH ROW EXECUTE FUNCTION polygm_reject_mutation();
+
 DO $$
 DECLARE t TEXT;
 BEGIN
