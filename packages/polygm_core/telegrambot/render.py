@@ -35,7 +35,29 @@ MAX_CAPTION = 1_024
 #: payload crossing this boundary is supposed to carry one; the second is that a message quoted into a Telegram
 #: support chat is a message out of our control.
 ADDRESS_RE = re.compile(r"0x[0-9a-fA-F]{6,}")
-MARKDOWN_CONFETTI_RE = re.compile(r"[*_\[\]`]")
+#: Markdown that was *meant* as formatting, in a message Telegram will render literally (we send `parse_mode=HTML`).
+#:
+#: The first version of this scanner was `[*_\[\]`]` — any occurrence of the character — and P14's own probe suite
+#: caught what that costs: "a legitimate question containing `_`, `*`, `[`, `]` or a backtick trips the broadcast
+#: warning". It was worse than the finding said. The refusal card is the most-opened card in the product, and every
+#: refusal code is `UPPER_SNAKE` (`OFF_TICK`, `STALE_QUOTE`, `IDEM_CONFLICT`), so the scanner found "Markdown" in
+#: the card that says the order did not go through. Telegram renders those characters literally — nothing breaks —
+#: but an operator warning that fires on ordinary text is a warning operators learn to skip, which is how the real
+#: confetti gets through later. A scanner with false positives is a scanner with false negatives.
+#:
+#: Narrowed to the paired forms, with CommonMark's own two rules: a delimiter cannot be followed by whitespace
+#: inside the pair (`* 6 *` is arithmetic, not emphasis), and an intraword `_` is not emphasis at all
+#: (`above_100k_by` is a market question). The check itself is unchanged in intent: it fires when text *looks like*
+#: Markdown in a message that will not parse it.
+MARKDOWN_CONFETTI_RE = re.compile(
+    r"\*\*(?!\s)[^*\n]+\*\*"                                        # **bold**
+    r"|(?<![A-Za-z0-9])\*(?!\s)[^*\n]+\*(?![A-Za-z0-9])"             # *italic*, not a bare operator
+    r"|(?<![A-Za-z0-9])__(?!\s)[^_\n]+__(?![A-Za-z0-9])"              # __underline/bold__
+    r"|(?<![A-Za-z0-9])_(?!\s)[^_\n]+_(?![A-Za-z0-9])"                # _italic_, never intraword
+    r"|~~(?!\s)[^~\n]+~~"                                             # ~~strike~~
+    r"|`{1,3}(?!\s)[^`\n]+`{1,3}"                                     # `code`, ```pre```
+    r"|\[[^\]\n]{1,80}\]\([^)\s]{1,300}\)"                        # [label](url)
+)
 
 E = {"&": "&amp;", "<": "&lt;", ">": "&gt;"}
 

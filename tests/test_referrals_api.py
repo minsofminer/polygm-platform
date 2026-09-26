@@ -404,6 +404,70 @@ class TestTheThreeCollisionsOverTheApi(ReferralBase):
         self.assertEqual(queued["items"][0]["kind"], "self_referral")
         self.assertIn("revocation", queued["note"])
 
+    def test_the_revocation_ground_reports_the_codes_state_not_just_its_own_flip(self):
+        """P14's finding (a), closed here as well as in the probe.
+
+        The first version returned a bare boolean, so a *second* self-referral wrote `builder_code_revoked: false`
+        while the code stayed disabled — the one audit row an operator reads when asking "is the programme still
+        earning?" said nothing had happened. Both applications now write the state beside the flip."""
+        # `apply` returns the response rather than asserting a status: `expect=` would land in the request BODY and
+        # the route would answer 422 for an unknown field, which the helper accepts — a test that passes on the
+        # wrong refusal. The status is asserted here, by hand, twice.
+        first = self.apply(self.REF, self.link()["token"], "self-state-1")
+        second = self.apply(self.REF, self.link()["token"], "self-state-2")
+        for r in (first, second):
+            self.assertEqual(r.status_code, 409, r.text[:300])
+            self.assertEqual(r.json()["error"]["code"], "SELF_REFERRAL")
+        rows = [json.loads(r[0]) for r in self.db.execute(
+            "SELECT detail_json FROM audit_log WHERE action='referral.apply' ORDER BY id").fetchall()]
+        self.assertEqual(rows[0]["builder_code_state"], "disabled")
+        self.assertTrue(rows[0]["builder_code_revoked"])
+        self.assertEqual(rows[1]["builder_code_state"], "already-disabled")
+        self.assertFalse(rows[1]["builder_code_revoked"], "the flip is false; the state is what carries meaning")
+        for row in rows:
+            self.assertEqual(row["builder_code_revoked"], row["builder_code_state"] == "disabled")
+
+    def test_clearing_the_review_puts_the_code_back_and_says_who_did_it(self):
+        """P14's finding (b): the disable had no route back.
+
+        `clear` is the operator saying the accusation was wrong, so it is also the moment the code comes back —
+        one transaction, two audit rows, and no hand-written UPDATE."""
+        self.assertEqual(self.apply(self.REF, self.link()["token"], "self-clear").status_code, 409)
+        queued = self.call("get", "/v1/referrals/review", extra=self.admin())
+        review_id = queued["items"][0]["id"]
+        out = self.call("post", "/v1/referrals/review", key="rev-clear-builder-code", extra=self.admin(),
+                        body={"id": review_id, "decision": "clear", "reason": "the second wallet was a colleague",
+                              "actor": "operator-7"})
+        self.assertEqual(out["decision"], "clear")
+        row = self.db.execute("SELECT state, source, note FROM builder_code_status WHERE code='polygm-referral'"
+                              ).fetchone()
+        self.assertEqual((row[0], row[1]), ("active", "manual"), "state and source stay inside the table's CHECK")
+        self.assertIn("operator-7", row[2])
+        event = self.db.execute("SELECT actor_type, actor_id, detail_json FROM audit_log WHERE"
+                                " action='referral.builder_code.cleared' ORDER BY id DESC LIMIT 1").fetchone()
+        self.assertIsNotNone(event, "the code came back with no record of who brought it back")
+        self.assertEqual((event[0], event[1]), ("admin", "operator-7"))
+        self.assertEqual(json.loads(event[2])["state"], "active")
+
+    def test_a_cleared_review_does_not_touch_a_code_the_venue_disabled(self):
+        """The guard: `manual` is ours, `venue_rejection` is not. A review that clears our own flag must not
+        overrule the party whose programme this is."""
+        at = self.app._now_ms()
+        self.db.execute("INSERT OR REPLACE INTO builder_code_status (code, state, last_seen_ms, changed_ms,"
+                        " reject_count, source, note) VALUES ('polygm-referral','disabled',?,?,9,"
+                        "'venue_rejection','venue rejected the code')", (at, at))
+        self.db.commit()
+        self.assertEqual(self.apply(self.REF, self.link()["token"], "self-venue").status_code, 409)
+        queued = self.call("get", "/v1/referrals/review", extra=self.admin())
+        self.call("post", "/v1/referrals/review", key="rev-venue-left-alone", extra=self.admin(),
+                  body={"id": queued["items"][0]["id"], "decision": "clear", "reason": "clearing, as a test"})
+        row = self.db.execute("SELECT state, source FROM builder_code_status WHERE code='polygm-referral'").fetchone()
+        self.assertEqual((row[0], row[1]), ("disabled", "venue_rejection"),
+                         "our review re-enabled a code the programme's owner switched off")
+        self.assertIsNone(self.db.execute("SELECT id FROM audit_log WHERE"
+                                          " action='referral.builder_code.cleared'").fetchone(),
+                          "a restore that did not happen must not be audited as one")
+
     def test_two_accounts_linked_to_one_wallet_are_a_self_referral(self):
         import sqlite3
         at = self.app._now_ms()

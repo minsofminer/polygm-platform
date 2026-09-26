@@ -7357,24 +7357,65 @@ def _ref_open_review(rid: str, *, kind: str, subject: str, referee: str, finding
     return int(getattr(cur, "lastrowid", 0) or 0)
 
 
-def _ref_invalidate_builder_code(token_or_code: str, *, why: str, actor: str, at: int) -> bool:
-    """The revocation ground. Returns True when this call is what turned the code off.
+def _ref_invalidate_builder_code(token_or_code: str, *, why: str, actor: str, at: int) -> str:
+    """The revocation ground. Returns the code's state **after** the call, not just whether this call changed it.
 
     `builder_code_status` is the P06 table the venue's own rejections write to; a self-referral is a *manual*
     disable with a note, which is the same mechanism and therefore visible in the same place as every other
     reason a code stopped earning. That is the point: the kit calls self-referral a revocation ground, and a
     ground that lives in a support ticket is not a mechanism.
+
+    P14's probe caught the first version of this returning a bare `False` when the code was *already* disabled —
+    so a second self-referral wrote `builder_code_revoked: false` in the audit line while the code stayed off, and
+    an operator reading only the audit trail saw "nothing happened" on the one row that says whether the
+    programme is earning. The return value is now the state (`disabled` / `already-disabled` / `no-code`) and the
+    callers write both: the flip, for the record, and the state, for the person reading it.
     """
     if not str(token_or_code or ""):
-        return False
+        return "no-code"
     row = _db.execute("SELECT state FROM builder_code_status WHERE code=?", (str(token_or_code),)).fetchone()
     if row is not None and str(row[0]) == "disabled":
-        return False
+        return "already-disabled"
     _db.execute("INSERT INTO builder_code_status (code, state, last_seen_ms, changed_ms, reject_count, source, note)"
                 " VALUES (?,?,?,?,0,'manual',?) ON CONFLICT(code) DO UPDATE SET state='disabled',"
                 " changed_ms=excluded.changed_ms, source='manual', note=excluded.note",
                 (str(token_or_code), "disabled", int(at), int(at), str(why)[:1500]))
-    return True
+    return "disabled"
+
+
+def _ref_restore_builder_code(token_or_code: str, *, why: str, actor: str, at: int) -> str:
+    """Put a *manually* disabled code back, and only a manually disabled one. Returns the state after the call.
+
+    P14's other half of the same finding: the product had a way to disable the programme's builder code (a
+    self-referral) and no way to clear it, so the only route back was a hand-written UPDATE. Clearing is the
+    review's job now — `POST /v1/referrals/review` with `decision=clear` on the review that caused it — and this
+    is the mechanism it calls.
+
+    The guard in the WHERE clause is the important part: we restore a `source='manual'` disable, which is ours,
+    and never a `venue_rejection` or `api` one, which is not. A review that clears our own flag must not be able
+    to overrule a rejection from the party whose programme this is, and that distinction only exists because the
+    source column was already there.
+    """
+    if not str(token_or_code or ""):
+        return "no-code"
+    row = _db.execute("SELECT state, source FROM builder_code_status WHERE code=?",
+                      (str(token_or_code),)).fetchone()
+    if row is None:
+        return "no-row"
+    state, source = str(row[0]), str(row[1])
+    if state != "disabled":
+        return "already-active"
+    if source != "manual":
+        return "not-ours-to-clear"
+    # `state='active'`, not a new state: the table's CHECK allows four states and a review that clears a flag has
+    # not invented a fifth. `source` stays `manual` for the same reason (three allowed values, and a human did
+    # this), and the reason goes where it is readable — the note, plus the `referral.builder_code.cleared` audit
+    # row the caller writes. A schema that has to grow a value every time an operator does something is a schema
+    # that stops being a contract.
+    _db.execute("UPDATE builder_code_status SET state='active', changed_ms=?, note=?"
+                " WHERE code=? AND state='disabled' AND source='manual'",
+                (int(at), str(why)[:1500], str(token_or_code)))
+    return "active"
 
 
 @app.get("/v1/referrals/terms", responses=REFERRAL_TERMS_RESPONSES)
@@ -7629,16 +7670,20 @@ def _ref_apply_work(rid: str, uid: str, body: dict):
                             " state='open'", (referrer, uid, verdict["reason"])).fetchone()
         review_id = _tm._int(prior[0]) if prior else _ref_open_review(
             rid, kind=verdict["reason"], subject=referrer, referee=uid, findings=[verdict["sentence"]], at=at)
-    revoked = False
+    code_state = "not-checked"
     if verdict["builder_code_ground"]:
-        revoked = _ref_invalidate_builder_code(_REF_BUILDER_CODE or token_code,
-                                               why="self-referral detected on account %s" % uid, actor="system",
-                                               at=at)
+        code_state = _ref_invalidate_builder_code(_REF_BUILDER_CODE or token_code,
+                                                  why="self-referral detected on account %s" % uid,
+                                                  actor="system", at=at)
     _db.execute("INSERT INTO audit_log (at_ms, actor_type, actor_id, action, target_table, target_id,"
                 " request_id, detail_json) VALUES (?,?,?,?,?,?,?,?)",
                 (at, "user", uid, "referral.apply", "referral_attributions", uid, str(rid),
                  json.dumps({"referrer": referrer, "state": verdict["state"], "reason": verdict["reason"],
-                             "review": review_id, "builder_code_revoked": revoked}, sort_keys=True)))
+                             "review": review_id,
+                             # Two keys, on purpose: the flip is the record, the state is the answer to the
+                             # question an operator actually has ("is the programme earning?").
+                             "builder_code_revoked": code_state == "disabled",
+                             "builder_code_state": code_state}, sort_keys=True)))
     _db.commit()
     if refused:
         # A refusal is an error envelope in this API (one shape for every 4xx), and its sentence is written for
@@ -7844,11 +7889,26 @@ def _ref_review_work(rid: str, body: dict):
     actor = str(body.get("actor") or "operator")
     at = _now_ms()
     state = "cleared" if decision == "clear" else "actioned"
+    code_state = ""
     if decision == "clear":
         # A cleared review resumes accrual from the referee's qualifying order: what was earned while it waited
         # is not lost, it is simply not yet accrued.
         _db.execute("UPDATE referral_attributions SET state='qualified', decided_ms=? WHERE referee=?"
                     " AND state='review'", (at, referee))
+        if kind == "self_referral":
+            # The other half of P14's finding: a review that clears a self-referral accusation is the only honest
+            # moment to restore the code the accusation disabled, and doing it here means the decision and its
+            # consequence are one transaction and two audit rows rather than a hand-written UPDATE somebody
+            # remembers to run. It refuses to touch a disable the venue wrote (see _ref_restore_builder_code).
+            code_state = _ref_restore_builder_code(_REF_BUILDER_CODE, why="manual disable cleared by review %d"
+                                                   " (%s): %s" % (review_id, actor, reason), actor=actor, at=at)
+            if code_state == "active":
+                _db.execute("INSERT INTO audit_log (at_ms, actor_type, actor_id, action, target_table,"
+                            " target_id, request_id, detail_json) VALUES (?,?,?,?,?,?,?,?)",
+                            (at, "admin", actor, "referral.builder_code.cleared", "builder_code_status",
+                             _REF_BUILDER_CODE, str(rid),
+                             json.dumps({"review": review_id, "reason": reason, "state": code_state},
+                                        sort_keys=True)))
     elif decision == "exclude":
         _db.execute("UPDATE referral_attributions SET state='refused', decided_ms=? WHERE referee=?", (at, referee))
     else:
@@ -7883,7 +7943,8 @@ def _ref_review_work(rid: str, body: dict):
                 " request_id, detail_json) VALUES (?,?,?,?,?,?,?,?)",
                 (at, "admin", actor, "referral.review", "referral_reviews", str(review_id), str(rid),
                  json.dumps({"decision": decision, "kind": kind, "reason": reason,
-                             "subject": subject, "referee": referee}, sort_keys=True)))
+                             "subject": subject, "referee": referee,
+                             "builder_code_state": code_state or "untouched"}, sort_keys=True)))
     _db.commit()
     out = {"id": review_id, "decision": decision, "state": state, "kind": kind, "reason": reason,
            "note": {"clear": "the referral is live again and the accrual it missed is written on the next run",

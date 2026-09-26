@@ -698,6 +698,49 @@ class TestReadOnlyCommands(unittest.TestCase):
         self.assertIsNotNone(d.plan.beats[0].keyboard)
 
 
+class TestTheMarkdownScanner(unittest.TestCase):
+    """P14's cosmetic finding, closed with the re-test the phase's own rule demands.
+
+    The scanner exists because we send `parse_mode=HTML`: text that *looks* like Markdown renders literally, and the
+    operator should hear about it before a user does. The first version matched any `*`, `_`, `[`, `]` or backtick,
+    which fired on ordinary market questions — and on **every refusal card**, whose code is `UPPER_SNAKE`
+    (`OFF_TICK`, `STALE_QUOTE`). A warning that fires on the most-opened card in the product is a warning nobody
+    reads, which is how the real confetti gets through later. These tests are the two halves of that: the paired
+    forms still fire, and the legitimate text does not.
+    """
+
+    def test_real_markdown_in_an_html_message_still_fires(self):
+        for text in ("this is **bold**", "this is _italic_", "this is __underlined__", "~~struck~~",
+                     "run `make test`", "see [the docs](https://example.com/x)"):
+            findings = render.render_findings(render.Plan(beats=[render.Beat(text=text)]))
+            self.assertTrue(any("Markdown" in f for f in findings), "%r must still be reported" % text)
+
+    def test_ordinary_text_does_not_fire(self):
+        for text in ("Will BTC close above 100_000 by Friday?",      # intraword underscore, not emphasis
+                     "what does [open interest] mean here?",         # brackets without a link
+                     "is 5 * 6 the answer?",                         # arithmetic
+                     "the order was refused (OFF_TICK)",             # an UPPER_SNAKE refusal code
+                     "a_b_c and x*y*z and 50% of the way"):
+            findings = render.render_findings(render.Plan(beats=[render.Beat(text=text)]))
+            self.assertEqual([], findings, "%r is ordinary text and must not warn" % text)
+
+    def test_the_refusal_card_is_quiet(self):
+        """The regression that mattered: this card warned on every refusal, in every chat, before P14's re-test."""
+        hostile = "<script>alert(1)</script>"
+        plan = render.refusal_card(what=hostile, code="OFF_TICK", plain=hostile)
+        self.assertEqual([], render.render_findings(plan))
+        plan = render.refusal_card(what="market moved", code="STALE_QUOTE", plain="the book moved")
+        self.assertEqual([], render.render_findings(plan))
+
+    def test_the_scanner_can_still_be_fooled_by_nothing_it_should_catch(self):
+        """The other direction, stated as a limit rather than a claim: a single unmatched marker is *not* Markdown.
+        `_` alone, `[` alone and `*` alone are ordinary characters, and the scanner says so — which is the whole
+        point of narrowing it. If somebody wants the old behaviour back, they have to change these four lines."""
+        for text in ("_", "[", "]", "*", "`", "a * b [c] d"):
+            findings = render.render_findings(render.Plan(beats=[render.Beat(text=text)]))
+            self.assertEqual([], findings, "%r alone is not Markdown" % text)
+
+
 class TestAlertChannel(unittest.TestCase):
     """D5: the public channel is the acquisition engine, so its format is a product decision, not a string."""
 
