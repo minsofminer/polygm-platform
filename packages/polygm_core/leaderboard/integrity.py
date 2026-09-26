@@ -30,6 +30,9 @@ WASH_PRICE_TOLERANCE_BPS = 50
 FARM_WINDOW_MS = 120_000
 FARM_MIRROR_BPS = 8_000
 FARM_MIN_FILLS = 10
+#: How much of the candidate's own tape in the paired markets may be left unexplained before the pairing
+#: stops looking like following. Tight on purpose: a false farm label is an accusation about a person.
+FARM_UNPAIRED_TOLERANCE_BPS = 1_000
 
 #: The blown-up line: the wallet was up at some point and is now at or below zero.
 BLOWUP_EQUITY_MICRO = 0
@@ -100,12 +103,31 @@ def wash_volume(fills: list[dict]) -> dict:
 
 def copy_farm(*, wallet: str, own: list[dict], candidates: dict[str, list[dict]],
               window_ms: int = FARM_WINDOW_MS, mirror_bps: int = FARM_MIRROR_BPS,
-              min_fills: int = FARM_MIN_FILLS) -> dict | None:
+              min_fills: int = FARM_MIN_FILLS,
+              unpaired_tolerance_bps: int = FARM_UNPAIRED_TOLERANCE_BPS) -> dict | None:
     """Is this wallet's tape mechanically derived from another wallet's?
 
-    Mechanical means: a fill in the same market, on the same side, within `window_ms` of a fill the OTHER wallet
-    made FIRST, on at least `mirror_bps` of this wallet's fills. The candidate has to lead: copying is a
-    follower's behaviour, and a source that trails the farm is the farm by another name.
+    Mechanical means, after P16's re-test: **a one-to-one pairing** in the same market and on the same side,
+    inside `window_ms`, where the other wallet's fill came first — and where that pairing accounts for the other
+    wallet's tape in those markets, not just for ours.
+
+    Three things are load-bearing, and each was a bug first:
+
+    * **A candidate fill can explain at most one of ours.** The first version counted every fill of ours that had
+      *any* candidate fill inside the window, so one busy candidate explained an unbounded number of our fills.
+    * **The pairing is per market and side, nearest first.** "Nearest" is the pairing a copier's behaviour actually
+      produces: our fill follows the candidate's most recent one, not an arbitrary earlier one.
+    * **Coverage.** If, after pairing, the candidate still has fills left over in the markets where we paired, then
+      our fills were not *following* its fills — they were merely near some of them. This is the discriminator that
+      P14 measured but could not isolate: two wallets trading the same side on a similar cadence look identical to
+      a follower under any per-fill rule, because a 60-second cadence always has a fill inside a two-minute window.
+      Pairing alone fixes nothing there (10 of 12 still pair); coverage does (2 of its fills are left over).
+
+    `unpaired_tolerance_bps` is therefore the sensitivity dial, and it is deliberately tight. The row this rule
+    produces is a public suspicion about a person, so a missed farm costs nothing (the wallet simply ranks) while a
+    false one accuses somebody — the asymmetry is the reason the rule is conservative rather than eager. A farm
+    that copies a *subset* of a leader's fills is already below `mirror_bps` of our own tape, so the tolerance only
+    has to absorb a fill or two, not half a leader's history.
     """
     if len(own) < min_fills:
         return None
@@ -113,24 +135,51 @@ def copy_farm(*, wallet: str, own: list[dict], candidates: dict[str, list[dict]]
     for other, rows in (candidates or {}).items():
         if str(other) == str(wallet) or not rows:
             continue
-        index: list[tuple[str, str, int]] = sorted(
-            (str(r.get("conditionId")), str(r.get("side")), _int(r.get("tsMs"))) for r in rows)
-        mirrored = 0
-        for f in own:
-            key_c, key_s, t = str(f.get("conditionId")), str(f.get("side")), _int(f.get("tsMs"))
-            for (oc, os_, ot) in index:
-                if oc != key_c or os_ != key_s:
-                    continue
-                delta = t - ot
-                if 0 <= delta <= window_ms:
-                    mirrored += 1
+        pools: dict[tuple[str, str], list[int]] = {}
+        for r in rows:
+            pools.setdefault((str(r.get("conditionId")), str(r.get("side"))), []).append(_int(r.get("tsMs")))
+        for times in pools.values():
+            times.sort()
+        used: dict[tuple[str, str], set[int]] = {}
+        deltas: list[int] = []
+        for f in sorted(own, key=lambda r: _int(r.get("tsMs"))):
+            key = (str(f.get("conditionId")), str(f.get("side")))
+            t = _int(f.get("tsMs"))
+            pick, pick_delta = None, None
+            for ct in pools.get(key, ()):                    # ascending: the first non-negative delta is nearest
+                delta = t - ct
+                if delta < 0:
                     break
-        share = mirrored * 10_000 // max(1, len(own))
-        if share >= mirror_bps and (best is None or mirrored > best["mirroredFills"]):
-            best = {"derivedFrom": str(other), "mirroredFills": mirrored, "mirrorBps": share,
+                if delta > window_ms or ct in used.get(key, ()):
+                    continue
+                if pick_delta is None or delta < pick_delta:
+                    pick, pick_delta = ct, delta
+            if pick is not None:
+                used.setdefault(key, set()).add(pick)
+                deltas.append(int(pick_delta))
+        paired = len(deltas)
+        share = paired * 10_000 // max(1, len(own))
+        if share < mirror_bps:
+            continue
+        keys = list(used)
+        candidates_in_played_keys = sum(len(pools[k]) for k in keys)
+        leftover = candidates_in_played_keys - sum(len(used[k]) for k in keys)
+        leftover_bps = leftover * 10_000 // max(1, candidates_in_played_keys)
+        if leftover_bps > unpaired_tolerance_bps:
+            continue
+        deltas.sort()
+        lead_median = deltas[len(deltas) // 2] if deltas else 0
+        if best is None or paired > best["mirroredFills"]:
+            best = {"derivedFrom": str(other), "mirroredFills": paired, "mirrorBps": share,
                     "windowMs": window_ms, "fills": len(own),
-                    "rule": ("%d of %d fills mirror one wallet's market and side inside %d seconds, which is a "
-                             "copy, not a coincidence" % (mirrored, len(own), window_ms // 1_000))}
+                    "leadMedianMs": lead_median,
+                    "candidateFillsInPairedMarkets": candidates_in_played_keys,
+                    "candidateUnpairedBps": leftover_bps,
+                    "rule": ("%d of %d fills pair one-to-one with one wallet's fills in the same market and side, "
+                             "each of its fills used at most once and %d of its %d fills in those markets "
+                             "accounted for (median lead %.0fs): a copy, not a coincidence"
+                             % (paired, len(own), candidates_in_played_keys - leftover,
+                                candidates_in_played_keys, lead_median / 1000.0))}
     return best
 
 

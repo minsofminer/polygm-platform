@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import pathlib
 import re
 import sys
@@ -792,14 +793,29 @@ def section_logic(g: Gate, facts: dict, s: Surface) -> None:
             % json.dumps([other_market, other_side, long_ago])[:200])
     g.check("nine mirrored fills are below the floor and are not a farm (%s)" % (thin or "none"), not thin,
             "the detector has no minimum-fill floor: nine coincidences and twelve look the same to it")
-    g.open("THE COPY-FARM RULE CANNOT TELL A FOLLOWER FROM TWO ACTIVE TRADERS ON THE SAME CADENCE",
-           "measured, not argued: with the candidate's fills moved 200s earlier — so it is never the one being "
-           "followed in any pairing sense — 10 of 12 of our fills still matched, because any candidate fill "
-           "inside 120s counts and a 60s cadence always has one. The row this produces is a public suspicion "
-           "('derived from 0x…'), which is a claim about a person. Before the label ships to users: pair the "
-           "fills one-to-one (a matched candidate cannot match twice), require the pairing to be stable across "
-           "the window rather than per-fill, or compare each wallet's own inter-fill cadence — and add this tape "
-           "as the test, because it currently flags")
+    #    Closed in P16, by the tape that used to flag. The rule now pairs one-to-one (a candidate fill explains at
+    #    most one of ours, nearest first) and requires *coverage*: a candidate with fills left over in the markets
+    #    where we paired was not being followed, it was merely nearby. `interleaved` is computed above and the
+    #    check is that it is now None — the whole point of the fixture.
+    g.check("two traders on the same cadence are not called a copy farm (%s)" % (interleaved or "none"),
+            not interleaved,
+            "a public 'derived from 0x…' row is a claim about a person: the same-cadence tape still flags")
+    g.check("the same tape with the candidate leading IS still a farm (%s)" % json.dumps(caught)[:90],
+            bool(caught) and caught.get("mirroredFills") == 12,
+            "the fix overshot: a genuine twelve-of-twelve copy is no longer detected")
+    single = [{"wallet": "0xleadleader", "conditionId": mk, "side": "BUY", "priceMicro": 500_000,
+               "notionalMicro": 90_000_000, "tsMs": 1_000_000 - 1_000}]
+    many = integ.copy_farm(wallet="0xfarmfarmfarm", own=farm_own, candidates={leader: single})
+    busy = integ.copy_farm(wallet="0xfarmfarmfarm", own=farm_own,
+                           candidates={leader: [{"wallet": leader, "conditionId": mk, "side": "BUY",
+                                                 "priceMicro": 500_000, "notionalMicro": 1_000_000,
+                                                 "tsMs": 1_000_000 + i * 10_000} for i in range(80)]})
+    facts["logic"]["copy_farm_pairing"] = {"one_candidate_fill": many, "busy_candidate": busy,
+                                           "rule": (caught or {}).get("rule", "")}
+    g.check("one leader fill cannot explain twelve followers' fills (%s)" % (many or "none"), not many,
+            "a single fill inside the window was counted once per follower fill: that is the per-fill rule back")
+    g.check("a market maker's dense tape is not a leader's tape (%s)" % (busy or "none"), not busy,
+            "a candidate with eighty fills left unexplained in the same market counted as a leader")
 
     # ---------------------------------------------------------------- 5. free tier: the cap, and who sets it
     free = s.bench.user("freeloader")
@@ -878,15 +894,72 @@ def section_logic(g: Gate, facts: dict, s: Surface) -> None:
            "a 5-minute tolerance and store every event id to refuse replays; Telegram's is the secret header plus "
            "`successful_payment` arriving only in an update, never in a form post), and never read the amount, the "
            "user id or the plan from the body without cross-checking the record the provider keeps")
-    g.open("THE REVOCATION GROUND IS THE PROGRAMME-WIDE BUILDER CODE, AND NOTHING RE-ENABLES IT IN THE PRODUCT",
-           "one user's self-referral writes `state='disabled', source='manual'` on the single code the whole "
-           "referral programme earns under (correctly: the venue's affiliate terms are what is at risk, and the "
-           "row is where ops look). Two gaps to close before launch: (a) `_ref_invalidate_builder_code` returns "
-           "False when the code is already disabled, so a later self-referral records "
-           "`builder_code_revoked: false` while the code stays disabled — an operator reading only the audit line "
-           "sees 'nothing happened'; (b) there is no route or screen that clears a manual disable after a review "
-           "clears it, so the only way back is a hand-written UPDATE. Both are small, both are operational, and "
-           "the fix is a `manual_review_cleared` event plus an admin route rather than a new table")
+    #    The two gaps this OPEN item named are closed, and closed by re-test rather than by assertion: the same
+    #    account applies its own link a second time and the audit line must say what state the code is in (not
+    #    only whether this call flipped it), then the review that the first self-referral opened is *cleared*
+    #    through the product's own admin route and the code must come back — with the event recorded.
+    second = c.post("/v1/referrals/apply", headers={**hdr, "Idempotency-Key": "p14-ra-again-%s" % code},
+                    json={"code": token})
+    audit2 = con.execute("SELECT detail_json FROM audit_log WHERE action='referral.apply' AND actor_id=?"
+                         " ORDER BY id DESC LIMIT 1", (a["uid"],)).fetchone()
+    audit2_detail = json.loads(audit2[0]) if audit2 else {}
+    facts["logic"]["self_referral_second_apply"] = {"status": second.status_code, "audit": audit2_detail}
+    g.check("a repeat self-referral still records the code's *state*, not just that nothing changed (%s)"
+            % json.dumps(audit2_detail)[:140],
+            audit2_detail.get("builder_code_state") == "already-disabled"
+            and audit2_detail.get("builder_code_revoked") is False,
+            "the audit line does not distinguish 'already off' from 'nothing happened': %s"
+            % json.dumps(audit2_detail)[:200])
+
+    review_row = con.execute("SELECT id FROM referral_reviews WHERE kind='self_referral' AND state='open'"
+                             " ORDER BY id DESC LIMIT 1").fetchone()
+    admin_hdr = {"X-Admin-Token": os.environ["PGM_ADMIN_TOKEN"], "Content-Type": "application/json",
+                 "Idempotency-Key": "p14-clear-%s" % code}
+    cleared = c.post("/v1/referrals/review", headers=admin_hdr,
+                     json={"id": int(review_row[0]) if review_row else 0, "decision": "clear",
+                           "reason": "probe: the second wallet was a colleague's, reviewed and cleared",
+                           "actor": "p14-probe"})
+    after = con.execute("SELECT state, source, substr(note,1,90) FROM builder_code_status WHERE code=?",
+                        (prog_code,)).fetchone()
+    cleared_audit = con.execute("SELECT actor_id, detail_json FROM audit_log WHERE"
+                                " action='referral.builder_code.cleared' ORDER BY id DESC LIMIT 1").fetchone()
+    facts["logic"]["self_referral_cleared"] = {"status": cleared.status_code, "code_row": list(after) if after else None,
+                                               "audit": json.loads(cleared_audit[1]) if cleared_audit else None,
+                                               "actor": cleared_audit[0] if cleared_audit else None}
+    g.check("clearing the review puts the programme's builder code back (%s)"
+            % (list(after) if after else "NO ROW"),
+            cleared.status_code == 200 and after is not None and str(after[0]) == "active"
+            and str(after[1]) == "manual" and "review" in str(after[2] or ""),
+            "a cleared self-referral review left the code disabled: the only route back is a hand-written UPDATE")
+    g.check("the restore is an audit event naming who cleared it and why (%s)" % json.dumps(facts["logic"]
+            ["self_referral_cleared"]["audit"])[:120],
+            bool(cleared_audit) and cleared_audit[0] == "p14-probe",
+            "the code came back with no record of who brought it back")
+
+    #    And the guard the other way: a disable the VENUE wrote is not ours to clear. Plant one, clear a review,
+    #    require it to stay off.
+    con.execute("INSERT INTO builder_code_status (code, state, last_seen_ms, changed_ms, reject_count, source,"
+                " note) VALUES (?, 'disabled', ?, ?, 9, 'venue_rejection', 'venue rejected the code')"
+                " ON CONFLICT(code) DO UPDATE SET state='disabled', source='venue_rejection',"
+                " note='venue rejected the code'",
+                (prog_code, int(time.time() * 1000), int(time.time() * 1000)))
+    con.commit()
+    third = c.post("/v1/referrals/apply", headers={**hdr, "Idempotency-Key": "p14-ra-third-%s" % code},
+                   json={"code": token})
+    review2 = con.execute("SELECT id FROM referral_reviews WHERE kind='self_referral' AND state='open'"
+                          " ORDER BY id DESC LIMIT 1").fetchone()
+    cleared2 = c.post("/v1/referrals/review", headers={**admin_hdr, "Idempotency-Key": "p14-clear2-%s" % code},
+                      json={"id": int(review2[0]) if review2 else 0, "decision": "clear",
+                            "reason": "probe: clearing again to prove the venue's own disable survives",
+                            "actor": "p14-probe"})
+    venue_row = con.execute("SELECT state, source FROM builder_code_status WHERE code=?", (prog_code,)).fetchone()
+    facts["logic"]["venue_disable_survives"] = {"third_apply": third.status_code, "clear": cleared2.status_code,
+                                                "code_row": list(venue_row) if venue_row else None}
+    g.check("a review cannot clear a disable the venue wrote (%s)" % (list(venue_row) if venue_row else "NO ROW"),
+            venue_row is not None and str(venue_row[0]) == "disabled"
+            and str(venue_row[1]) == "venue_rejection",
+            "clearing our own flag overruled the venue's rejection: the product can re-enable a code the "
+            "programme's owner switched off")
     g.open("A `close_position` ACTION LARGER THAN THE PER-ORDER CAP IS STILL REFUSED AT FIRE TIME ONLY",
            "the F19 fix covers sized actions (limit/market). Closing a position is sized by the position itself, so "
            "a $25,000 position cannot be closed by a rule while the cap is $2,500 — the risk review has to decide "

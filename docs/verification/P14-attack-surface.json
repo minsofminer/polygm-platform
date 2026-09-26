@@ -6,10 +6,6 @@
       "why": "measure the wall-clock and the aggregate notional of a real 500-copier fanout in the P13 chaos suite (which already kills the executor mid-fill), and record both numbers against these caps \u2014 500 configs is a load shape, and the bound that matters is the one the queue enforces"
     },
     {
-      "check": "A LEGITIMATE QUESTION CONTAINING `_`, `*`, `[`, `]` OR A BACKTICK TRIPS THE BROADCAST MARKDOWN-CONFETTI WARNING (cosmetic: the text renders literally)",
-      "why": "narrow MARKDOWN_CONFETTI_RE to paired emphasis markers (`**x**`, `__x__`, `[x](y)`, `` `x` ``) rather than any occurrence of the character, and add the underscore-in-a-market-question case as a test beside the confetti one"
-    },
-    {
       "check": "NO OUTBOUND WEBHOOK TRANSPORT EXISTS YET, so the stored-URL SSRF path is latent rather than absent",
       "why": "the alert channel `webhook` is Pro's and its rows are held, not sent (P10 D9). When a transport lands it must (a) parse the URL, (b) refuse any scheme but https, (c) resolve the host and refuse loopback, link-local 169.254.0.0/16, RFC1918 and IPv6 ULA ranges, (d) re-check after every redirect or refuse redirects outright. The check belongs in this section, and it must be a refusal *before* the socket rather than a timeout after it"
     },
@@ -18,16 +14,8 @@
       "why": "when the tax export ships: write a row whose fields begin `=`, `+`, `-`, `@`, then assert the writer prefixes each with a quote and that the header row is unchanged; add a test next to the wallet's own, and keep this probe as the outside view"
     },
     {
-      "check": "THE COPY-FARM RULE CANNOT TELL A FOLLOWER FROM TWO ACTIVE TRADERS ON THE SAME CADENCE",
-      "why": "measured, not argued: with the candidate's fills moved 200s earlier \u2014 so it is never the one being followed in any pairing sense \u2014 10 of 12 of our fills still matched, because any candidate fill inside 120s counts and a 60s cadence always has one. The row this produces is a public suspicion ('derived from 0x\u2026'), which is a claim about a person. Before the label ships to users: pair the fills one-to-one (a matched candidate cannot match twice), require the pairing to be stable across the window rather than per-fill, or compare each wallet's own inter-fill cadence \u2014 and add this tape as the test, because it currently flags"
-    },
-    {
       "check": "NEITHER STRIPE NOR TELEGRAM-STARS FULFILMENT EXISTS YET, so payment-webhook forgery has no target",
       "why": "both arrive as attacker-reachable POSTs, so before either ships: verify the signature over the RAW bytes with a constant-time compare (Stripe's `Stripe-Signature` includes a timestamp \u2014 refuse outside a 5-minute tolerance and store every event id to refuse replays; Telegram's is the secret header plus `successful_payment` arriving only in an update, never in a form post), and never read the amount, the user id or the plan from the body without cross-checking the record the provider keeps"
-    },
-    {
-      "check": "THE REVOCATION GROUND IS THE PROGRAMME-WIDE BUILDER CODE, AND NOTHING RE-ENABLES IT IN THE PRODUCT",
-      "why": "one user's self-referral writes `state='disabled', source='manual'` on the single code the whole referral programme earns under (correctly: the venue's affiliate terms are what is at risk, and the row is where ops look). Two gaps to close before launch: (a) `_ref_invalidate_builder_code` returns False when the code is already disabled, so a later self-referral records `builder_code_revoked: false` while the code stays disabled \u2014 an operator reading only the audit line sees 'nothing happened'; (b) there is no route or screen that clears a manual disable after a review clears it, so the only way back is a hand-written UPDATE. Both are small, both are operational, and the fix is a `manual_review_cleared` event plus an admin route rather than a new table"
     },
     {
       "check": "A `close_position` ACTION LARGER THAN THE PER-ORDER CAP IS STILL REFUSED AT FIRE TIME ONLY",
@@ -35,12 +23,12 @@
     }
   ],
   "facts": {
-    "at_ms": 1790109811488,
+    "at_ms": 1790402056665,
     "bench": {
       "market": "0xM1",
       "token": "0xT10",
       "tick": "0.01",
-      "account": "u_attacker_3e8be9f8"
+      "account": "u_attacker_edc2dad5"
     },
     "trading": {
       "must_accept": {
@@ -52,7 +40,7 @@
         "tick": "0.01",
         "status": 422,
         "code": "OFF_TICK",
-        "detail": "{\"error\": {\"code\": \"OFF_TICK\", \"message\": \"price is not on a valid tick\", \"retryable\": false, \"requestId\": \"a65cf2a1964d4e80\"}}"
+        "detail": "{\"error\": {\"code\": \"OFF_TICK\", \"message\": \"price is not on a valid tick\", \"retryable\": false, \"requestId\": \"5cf0b945f14443d4\"}}"
       },
       "intents_after_off_tick": {
         "before": {
@@ -63,8 +51,8 @@
           "rejected": 1
         },
         "delta": {
-          "rejected": 1,
-          "queued": 0
+          "queued": 0,
+          "rejected": 1
         }
       },
       "sizes": {
@@ -157,9 +145,7 @@
         "refusal_card": {
           "has_raw_script": false,
           "has_raw_img": false,
-          "findings": [
-            "a beat looks like Markdown in an HTML message"
-          ]
+          "findings": []
         },
         "unknown_order_card": {
           "has_raw_script": false,
@@ -169,11 +155,7 @@
       },
       "scanner_findings": {
         "hard": {},
-        "cosmetic": {
-          "refusal_card": [
-            "a beat looks like Markdown in an HTML message"
-          ]
-        }
+        "cosmetic": {}
       },
       "render_canary": [
         "a beat has a tag Telegram will reject"
@@ -184,7 +166,7 @@
         "rendered_escaped": true
       },
       "ssrf": {
-        "declared_paths": 87,
+        "declared_paths": 90,
         "url_named_parameters": [],
         "endpoint_constants": [
           {
@@ -229,15 +211,15 @@
       "redos": {
         "/v1/markets?q": {
           "status": 422,
-          "ms": 5.3
+          "ms": 5.1
         },
         "/v1/markets?category": {
           "status": 422,
-          "ms": 5.3
+          "ms": 5.4
         },
         "/v1/leaderboard?q": {
           "status": 422,
-          "ms": 3.9
+          "ms": 4.3
         }
       }
     },
@@ -249,8 +231,9 @@
         "attribution_rows": 0,
         "audit": {
           "builder_code_revoked": true,
+          "builder_code_state": "disabled",
           "reason": "self_referral",
-          "referrer": "u_attacker_3e8be9f8",
+          "referrer": "u_attacker_edc2dad5",
           "review": 1,
           "state": "refused"
         },
@@ -259,13 +242,13 @@
           "polygm-referral",
           "disabled",
           "manual",
-          "self-referral detected on account u_attacker_3e8be9f8"
+          "self-referral detected on account u_attacker_edc2dad5"
         ],
-        "referral_token": "ref_bwpvwohl\u2026"
+        "referral_token": "ref_gmzqcwok\u2026"
       },
       "duplicate_funding": {
         "first": {
-          "uid": "u_sybil-a_3c839946",
+          "uid": "u_sybil-a_765e2b63",
           "status": 200,
           "body_state": "attributed",
           "code": "",
@@ -275,7 +258,7 @@
           "notional_micro": 0
         },
         "second": {
-          "uid": "u_sybil-b_5eb097c5",
+          "uid": "u_sybil-b_6c541302",
           "status": 409,
           "body_state": null,
           "code": "REFUSED",
@@ -287,7 +270,7 @@
       },
       "sybil_claims": [
         {
-          "uid": "u_sybil-0_31db4ab5",
+          "uid": "u_sybil-0_02da1d57",
           "status": 200,
           "body_state": "attributed",
           "code": "",
@@ -297,7 +280,7 @@
           "notional_micro": 0
         },
         {
-          "uid": "u_sybil-1_96878bfe",
+          "uid": "u_sybil-1_a236b910",
           "status": 200,
           "body_state": "attributed",
           "code": "",
@@ -307,7 +290,7 @@
           "notional_micro": 0
         },
         {
-          "uid": "u_sybil-2_4eaaa3a2",
+          "uid": "u_sybil-2_ed7c5b96",
           "status": 200,
           "body_state": "attributed",
           "code": "",
@@ -317,7 +300,7 @@
           "notional_micro": 0
         },
         {
-          "uid": "u_sybil-3_869f0efe",
+          "uid": "u_sybil-3_697efa90",
           "status": 200,
           "body_state": "review",
           "code": "",
@@ -327,7 +310,7 @@
           "notional_micro": 0
         },
         {
-          "uid": "u_sybil-4_3026fe0a",
+          "uid": "u_sybil-4_7d2b05bd",
           "status": 200,
           "body_state": "review",
           "code": "",
@@ -337,7 +320,7 @@
           "notional_micro": 0
         },
         {
-          "uid": "u_sybil-6_5fd02741",
+          "uid": "u_sybil-6_f5ead9f4",
           "status": 200,
           "body_state": "review",
           "code": "",
@@ -370,25 +353,26 @@
           "mirrorBps": 10000,
           "windowMs": 120000,
           "fills": 12,
-          "rule": "12 of 12 fills mirror one wallet's market and side inside 120 seconds, which is a copy, not a coincidence"
+          "leadMedianMs": 5000,
+          "candidateFillsInPairedMarkets": 12,
+          "candidateUnpairedBps": 0,
+          "rule": "12 of 12 fills pair one-to-one with one wallet's fills in the same market and side, each of its fills used at most once and 12 of its 12 fills in those markets accounted for (median lead 5s): a copy, not a coincidence"
         },
         "other_market": null,
         "other_side": null,
         "thirty_minutes_earlier": null,
-        "interleaved_same_cadence": {
-          "derivedFrom": "0xleaderleader",
-          "mirroredFills": 10,
-          "mirrorBps": 8333,
-          "windowMs": 120000,
-          "fills": 12,
-          "rule": "10 of 12 fills mirror one wallet's market and side inside 120 seconds, which is a copy, not a coincidence"
-        },
+        "interleaved_same_cadence": null,
         "below_the_fill_floor": null
+      },
+      "copy_farm_pairing": {
+        "one_candidate_fill": null,
+        "busy_candidate": null,
+        "rule": "12 of 12 fills pair one-to-one with one wallet's fills in the same market and side, each of its fills used at most once and 12 of its 12 fills in those markets accounted for (median lead 5s): a copy, not a coincidence"
       },
       "free_webhook": {
         "status": 402,
         "code": "PLAN_REQUIRED",
-        "detail": "{\"error\": {\"code\": \"PLAN_REQUIRED\", \"message\": \"the plan on this account does not include that (webhook needs the pro plan): webhook needs the pro plan\", \"retryable\": true, \"requestId\": \"ae82c6beeda04"
+        "detail": "{\"error\": {\"code\": \"PLAN_REQUIRED\", \"message\": \"the plan on this account does not include that (webhook needs the pro plan): webhook needs the pro plan\", \"retryable\": true, \"requestId\": \"c0ae79a6a9794"
       },
       "plan_injection": {
         "status": 422,
@@ -411,6 +395,39 @@
       "payment_surface": {
         "declared_paths": "/v1/telegram/webhook",
         "stars_handler": false
+      },
+      "self_referral_second_apply": {
+        "status": 409,
+        "audit": {
+          "builder_code_revoked": false,
+          "builder_code_state": "already-disabled",
+          "reason": "self_referral",
+          "referrer": "u_attacker_edc2dad5",
+          "review": 1,
+          "state": "refused"
+        }
+      },
+      "self_referral_cleared": {
+        "status": 200,
+        "code_row": [
+          "active",
+          "manual",
+          "manual disable cleared by review 1 (p14-probe): probe: the second wallet was a colleague's"
+        ],
+        "audit": {
+          "reason": "probe: the second wallet was a colleague's, reviewed and cleared",
+          "review": 1,
+          "state": "active"
+        },
+        "actor": "p14-probe"
+      },
+      "venue_disable_survives": {
+        "third_apply": 409,
+        "clear": 200,
+        "code_row": [
+          "disabled",
+          "venue_rejection"
+        ]
       }
     }
   },
@@ -552,13 +569,8 @@
     },
     {
       "status": "PASS",
-      "name": "the scanner finds no tag-level failure in the escaped cards (3 card(s); 1 cosmetic finding(s))",
+      "name": "the scanner finds no tag-level failure in the escaped cards (3 card(s); 0 cosmetic finding(s))",
       "why": ""
-    },
-    {
-      "status": "OPEN",
-      "name": "A LEGITIMATE QUESTION CONTAINING `_`, `*`, `[`, `]` OR A BACKTICK TRIPS THE BROADCAST MARKDOWN-CONFETTI WARNING (cosmetic: the text renders literally)",
-      "why": "narrow MARKDOWN_CONFETTI_RE to paired emphasis markers (`**x**`, `__x__`, `[x](y)`, `` `x` ``) rather than any occurrence of the character, and add the underscore-in-a-market-question case as a test beside the confetti one"
     },
     {
       "status": "PASS",
@@ -582,7 +594,7 @@
     },
     {
       "status": "PASS",
-      "name": "no request parameter or body field can name an address the server fetches (87 declared path(s), 0 URL-ish name(s) found)",
+      "name": "no request parameter or body field can name an address the server fetches (90 declared path(s), 0 URL-ish name(s) found)",
       "why": ""
     },
     {
@@ -602,7 +614,7 @@
     },
     {
       "status": "PASS",
-      "name": "a 10,000-character pathological parameter is refused or answered quickly (worst 5.3 ms)",
+      "name": "a 10,000-character pathological parameter is refused or answered quickly (worst 5.4 ms)",
       "why": ""
     },
     {
@@ -622,12 +634,12 @@
     },
     {
       "status": "PASS",
-      "name": "the refusal recorded the ground in the audit trail ({\"builder_code_revoked\": true, \"reason\": \"self_referral\", \"referrer\": \"u_attacker_3e8be9f8\", \"review\": 1, \"state\": \"refu)",
+      "name": "the refusal recorded the ground in the audit trail ({\"builder_code_revoked\": true, \"builder_code_state\": \"disabled\", \"reason\": \"self_referral\", \"referrer\": \"u_attacker_edc2)",
       "why": ""
     },
     {
       "status": "PASS",
-      "name": "the programme's builder code (polygm-referral) is marked disabled with the reason readable (['polygm-referral', 'disabled', 'manual', 'self-referral detected on account u_attacker_3e8be9f8'])",
+      "name": "the programme's builder code (polygm-referral) is marked disabled with the reason readable (['polygm-referral', 'disabled', 'manual', 'self-referral detected on account u_attacker_edc2dad5'])",
       "why": ""
     },
     {
@@ -682,7 +694,7 @@
     },
     {
       "status": "PASS",
-      "name": "twelve fills mirroring another wallet that traded 5s earlier on the same side are named as a copy farm ({\"derivedFrom\": \"0xleaderleader\", \"mirroredFills\": 12, \"mirrorBps\": 10000, \"windowMs\": 120000, \"fills\": 12, \"r)",
+      "name": "twelve fills mirroring another wallet that traded 5s earlier on the same side are named as a copy farm ({\"derivedFrom\": \"0xleaderleader\", \"mirroredFills\": 12, \"mirrorBps\": 10000, \"windowMs\": 120000, \"fills\": 12, \"l)",
       "why": ""
     },
     {
@@ -696,9 +708,24 @@
       "why": ""
     },
     {
-      "status": "OPEN",
-      "name": "THE COPY-FARM RULE CANNOT TELL A FOLLOWER FROM TWO ACTIVE TRADERS ON THE SAME CADENCE",
-      "why": "measured, not argued: with the candidate's fills moved 200s earlier \u2014 so it is never the one being followed in any pairing sense \u2014 10 of 12 of our fills still matched, because any candidate fill inside 120s counts and a 60s cadence always has one. The row this produces is a public suspicion ('derived from 0x\u2026'), which is a claim about a person. Before the label ships to users: pair the fills one-to-one (a matched candidate cannot match twice), require the pairing to be stable across the window rather than per-fill, or compare each wallet's own inter-fill cadence \u2014 and add this tape as the test, because it currently flags"
+      "status": "PASS",
+      "name": "two traders on the same cadence are not called a copy farm (none)",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "the same tape with the candidate leading IS still a farm ({\"derivedFrom\": \"0xleaderleader\", \"mirroredFills\": 12, \"mirrorBps\": 10000, \"windowMs\": 120)",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "one leader fill cannot explain twelve followers' fills (none)",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "a market maker's dense tape is not a leader's tape (none)",
+      "why": ""
     },
     {
       "status": "PASS",
@@ -726,9 +753,24 @@
       "why": "both arrive as attacker-reachable POSTs, so before either ships: verify the signature over the RAW bytes with a constant-time compare (Stripe's `Stripe-Signature` includes a timestamp \u2014 refuse outside a 5-minute tolerance and store every event id to refuse replays; Telegram's is the secret header plus `successful_payment` arriving only in an update, never in a form post), and never read the amount, the user id or the plan from the body without cross-checking the record the provider keeps"
     },
     {
-      "status": "OPEN",
-      "name": "THE REVOCATION GROUND IS THE PROGRAMME-WIDE BUILDER CODE, AND NOTHING RE-ENABLES IT IN THE PRODUCT",
-      "why": "one user's self-referral writes `state='disabled', source='manual'` on the single code the whole referral programme earns under (correctly: the venue's affiliate terms are what is at risk, and the row is where ops look). Two gaps to close before launch: (a) `_ref_invalidate_builder_code` returns False when the code is already disabled, so a later self-referral records `builder_code_revoked: false` while the code stays disabled \u2014 an operator reading only the audit line sees 'nothing happened'; (b) there is no route or screen that clears a manual disable after a review clears it, so the only way back is a hand-written UPDATE. Both are small, both are operational, and the fix is a `manual_review_cleared` event plus an admin route rather than a new table"
+      "status": "PASS",
+      "name": "a repeat self-referral still records the code's *state*, not just that nothing changed ({\"builder_code_revoked\": false, \"builder_code_state\": \"already-disabled\", \"reason\": \"self_referral\", \"referrer\": \"u_attacker_edc2dad5\", \"rev)",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "clearing the review puts the programme's builder code back (['active', 'manual', \"manual disable cleared by review 1 (p14-probe): probe: the second wallet was a colleague's\"])",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "the restore is an audit event naming who cleared it and why ({\"reason\": \"probe: the second wallet was a colleague's, reviewed and cleared\", \"review\": 1, \"state\": \"active\"})",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "a review cannot clear a disable the venue wrote (['disabled', 'venue_rejection'])",
+      "why": ""
     },
     {
       "status": "OPEN",

@@ -175,6 +175,45 @@ class TheIntegrityRulesTest(unittest.TestCase):
         self.assertEqual("w_source", ig.copy_farm(wallet="w_farm", own=farm_fills,
                                                   candidates={"w_source": own[:12]})["derivedFrom"])
 
+    def test_a_same_cadence_trader_is_not_a_farm(self):
+        """P14's finding, closed: the tape that flagged is now the tape that must not.
+
+        Twelve fills on a 60-second cadence, and a candidate whose fills are 200 seconds earlier on the *same*
+        cadence — so it never leads in any pairing sense, but it always has a fill inside the two-minute window.
+        The old per-fill rule called this a copy (10 of 12 matched); pairing plus coverage refuses it, because
+        after pairing the candidate still has fills left over in that market.
+        """
+        mk = "0xM_SPURIOUS"
+        own = [fill("w_me", mk, "BUY", 500_000, 100_000_000, AT + i * 60_000) for i in range(12)]
+        candidate = [fill("w_other", mk, "BUY", 500_000, 100_000_000, AT + i * 60_000 - 205_000)
+                     for i in range(12)]
+        self.assertIsNone(ig.copy_farm(wallet="w_me", own=own, candidates={"w_other": candidate}),
+                          "two traders on the same cadence are not a copy farm")
+        # …and the same tape with the candidate leading by five seconds IS one, so the check above can fail.
+        leading = [dict(r, tsMs=r["tsMs"] + 200_000) for r in candidate]
+        caught = ig.copy_farm(wallet="w_me", own=own, candidates={"w_other": leading})
+        self.assertIsNotNone(caught, "a genuine five-second copy must still be caught")
+        self.assertEqual(12, caught["mirroredFills"])
+        self.assertIn("one-to-one", caught["rule"])
+
+    def test_one_fill_of_the_leaders_cannot_explain_a_whole_tape(self):
+        """Pairing, isolated: a single candidate fill is inside the window of every one of our fills. Under the
+        per-fill rule that was 12 mirrors; under pairing it is one, which is below every floor there is."""
+        mk = "0xM_SINGLE"
+        own = [fill("w_me", mk, "BUY", 500_000, 100_000_000, AT + i * 5_000) for i in range(12)]
+        candidate = [fill("w_other", mk, "BUY", 500_000, 100_000_000, AT - 1_000)]
+        self.assertIsNone(ig.copy_farm(wallet="w_me", own=own, candidates={"w_other": candidate}))
+
+    def test_the_coverage_test_is_what_refuses_a_busy_candidate(self):
+        """The mechanism on its own: pairings exist (the candidate is dense enough to explain many of our fills),
+        and the rule still refuses, because the candidate's own tape in that market is left mostly unexplained."""
+        mk = "0xM_BUSY"
+        own = [fill("w_me", mk, "BUY", 500_000, 100_000_000, AT + i * 60_000) for i in range(12)]
+        # A candidate filling every ten seconds: every one of our fills pairs with one of its fills…
+        candidate = [fill("w_other", mk, "BUY", 500_000, 100_000_000, AT + i * 10_000) for i in range(80)]
+        self.assertIsNone(ig.copy_farm(wallet="w_me", own=own, candidates={"w_other": candidate}),
+                          "a market maker's tape is not a leader's tape")
+
     def test_a_disputed_market_is_withheld_as_unknown_and_counted(self):
         w = wallet("w_dispute", results=[800_000] * 21)
         w["blockedConditions"] = {"w_dispute-Politics-20"}
