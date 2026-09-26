@@ -636,6 +636,17 @@ class Store:
                               (user_id, at - 86_400_000)).fetchone()
         return int(r[0] or 0)
 
+    def position_shares_micro(self, user_id: str, token_id: str) -> int:
+        """What the executor believes is held, for the risk gate's close/open distinction.
+
+        The executor keeps its own copy of the lots (it is the process that writes them), and this is a read of
+        that copy: the same number the fill path would decrement, rather than a second opinion from the API's
+        database. Zero when there is no lot, which is the correct answer for a wallet that holds nothing.
+        """
+        row = self.conn.execute("SELECT COALESCE(SUM(shares_open_micro),0) FROM position_lots WHERE"
+                                " user_id=? AND token_id=?", (str(user_id), str(token_id))).fetchone()
+        return int(row[0]) if row and row[0] is not None else 0
+
     def open_order_count(self, user_id: str) -> int:
         r = self.conn.execute("SELECT COUNT(*) FROM orders WHERE user_id=? AND state IN ('live','partial')",
                               (user_id,)).fetchone()

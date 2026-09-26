@@ -301,6 +301,49 @@ class TestEnvelope(ApiBase):
         self.assertEqual(set(self.app.CODES) - enum, set(), "CODES has a code the contract does not define")
 
 
+class TestTheCloseCeilingOverTheApi(ApiBase):
+    """P14's last measurable item, over the real endpoint: an exit above the entry cap must go through.
+
+    The measurement that opened this was a `close_position` automation action on a $25,000 position refused
+    `OVER_ORDER_CAP`, because a close is sized by the position and the entry cap was $2,500 — an armed stop-loss
+    that could never fire. The decision: a *reduce-only* sell is capped by its own ceiling, and "reduce-only" is
+    proved from the lots rather than taken from the request. These three cases are what that means at the door.
+    """
+    app_name = "api-close-cap"
+
+    def seed(self, shares_micro: int):
+        self.con.execute("DELETE FROM position_lots WHERE user_id='u-demo' AND token_id='0xT10'")
+        if shares_micro:
+            self.con.execute("INSERT INTO position_lots (user_id,token_id,market_id,shares_open_micro,"
+                             "basis_micro,opened_ms,source) VALUES ('u-demo','0xT10','0xM1',?,?,?,?)",
+                             (shares_micro, shares_micro // 2, self.app._now_ms(), "fill"))
+        self.con.commit()
+
+    def test_an_exit_above_the_entry_cap_is_accepted_because_it_is_an_exit(self):
+        self.restore_book()
+        self.seed(40_000_000_000)                     # 40,000 shares held; $20,000 at $0.50
+        r = self.post_order(side="SELL", price="0.50", size="40000")
+        self.assertEqual(r.status_code, 202, r.text)
+        self.assertEqual(r.json()["notionalMicro"], 20_000 * 10**6)
+        self.assertGreater(r.json()["notionalMicro"],
+                           self.app.LIMITS.max_order_notional_micro,
+                           "the order is only interesting because it is above the entry cap")
+
+    def test_the_same_exit_with_nothing_held_is_still_refused(self):
+        self.restore_book()
+        self.seed(0)
+        r = self.post_order(side="SELL", price="0.50", size="40000")
+        self.assertEqual(r.status_code, 403, r.text)
+        self.assertEqual(r.json()["error"]["code"], "OVER_ORDER_CAP")
+
+    def test_selling_more_than_is_held_is_not_a_close(self):
+        self.restore_book()
+        self.seed(10_000_000_000)                     # 10,000 held, selling 40,000: the excess opens a short
+        r = self.post_order(side="SELL", price="0.50", size="40000")
+        self.assertEqual(r.status_code, 403, r.text)
+        self.assertEqual(r.json()["error"]["code"], "OVER_ORDER_CAP")
+
+
 class TestListAndTape(ApiBase):
     """The two list reads. Paging is the substance here: both exist so a client can walk a changing set
     without repeating or skipping rows, which is the failure mode P01 measured at the venue."""

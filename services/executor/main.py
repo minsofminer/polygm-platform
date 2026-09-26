@@ -181,7 +181,8 @@ class Executor:
                                             idempotency_key=it.idempotency_key, market_id=it.market_id),
                            st, limits=limits, open_orders=self.store.open_order_count(it.user_id),
                            spent_24h_micro=self.store.spent_24h_micro(it.user_id, at=at), kill_switch=kill,
-                           now_ms=at)
+                           now_ms=at,
+                           position_shares_micro=self.store.position_shares_micro(it.user_id, it.token_id))
         block = self.store.blocklisted(it.market_id, at=at)
         halt = self.store.loss_halt(it.user_id)
         q = self.store.market_quote(it.market_id, at=at)

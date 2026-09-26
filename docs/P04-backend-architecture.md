@@ -296,7 +296,10 @@ Contract rules that are enforced, not merely written down:
                       2**53-2), signs, POST /order
                       timeout 3 s connect / 5 s read; 0 retries by default at this hop (see 12)
 12 api/executor  codes OFF_TICK 422, UNKNOWN_TICK 503, STALE_QUOTE 503+Retry-After, BELOW_MIN_SIZE 422,
-                      BAD_AMOUNT 422, OVER_ORDER_CAP/DAILY_CAP 403, MARKET_NOT_ACCEPTING 409,
+                      BAD_AMOUNT 422, OVER_ORDER_CAP/OVER_CLOSE_CAP/DAILY_CAP 403, MARKET_NOT_ACCEPTING 409,
+                      (OVER_CLOSE_CAP is the reduce-only sell's OWN ceiling, decided after P14 measured that a
+                      close is sized by the position and so could never clear the entry cap — see
+                      docs/P14-security-testing.md; the entry cap is unchanged for everything that is not a close),
                       RISK_HALT 503, SIGNER_UNAVAILABLE 503, IDEM_* 409, IDEM_KEY_REQUIRED 400, INTERNAL 500
 13 reconciliation      WS fills are the fast path; the poll is the truth. On any uncertainty the order goes to
                       state='uncertain' and NEVER 'killed'

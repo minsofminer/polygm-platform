@@ -1132,11 +1132,47 @@ def section_logic(g: Gate, facts: dict, s: Surface) -> None:
             and str(venue_row[1]) == "venue_rejection",
             "clearing our own flag overruled the venue's rejection: the product can re-enable a code the "
             "programme's owner switched off")
-    g.open("A `close_position` ACTION LARGER THAN THE PER-ORDER CAP IS STILL REFUSED AT FIRE TIME ONLY",
-           "the F19 fix covers sized actions (limit/market). Closing a position is sized by the position itself, so "
-           "a $25,000 position cannot be closed by a rule while the cap is $2,500 — the risk review has to decide "
-           "whether closes are exempt from the entry cap or split into legs, and that decision belongs in the "
-           "gate's deny table rather than in this probe")
+    #    CLOSED after P16, as a risk-review decision that landed in the gate rather than in this probe: a
+    #    reduce-only sell — a sell for no more than the position actually held, read from the lots by the caller —
+    #    is capped by `max_close_notional_micro` instead of the entry cap, because the entry cap bounds NEW
+    #    exposure and refusing an exit is not risk reduction, it is risk. Everything else is unchanged: selling
+    #    more than is held opens a short (exposure), so it keeps the entry cap; a buy is never a close; and the
+    #    close has a ceiling of its own, with a code that says which ceiling refused it. Re-measured here against
+    #    the real gate with a real position, not asserted from the diff.
+    from polygm_core.risk import gate as risk_gate
+    held = 50_000_000_000                                  # 50,000 shares at $0.50 = $25,000 held
+    st = risk_gate.MarketState(accepting_orders=True, seconds_delay=0, enable_order_book=True,
+                               minimum_tick_size="0.01", minimum_order_size="5", fee_type="None",
+                               best_bid_micro=490_000, best_ask_micro=510_000, snap_age_ms=0)
+    lim = risk_gate.Limits()
+    close = risk_gate.Intent(user_id="u-p14", token_id="0xT", side="SELL", price_micro=500_000,
+                             size_shares_micro=held, idempotency_key="p14-close", market_id="0xM")
+    same_no_position = risk_gate.Intent(user_id="u-p14", token_id="0xT", side="SELL", price_micro=500_000,
+                                        size_shares_micro=held, idempotency_key="p14-naked", market_id="0xM")
+    excessive = risk_gate.Intent(user_id="u-p14", token_id="0xT", side="SELL", price_micro=500_000,
+                                 size_shares_micro=200_000_000_000, idempotency_key="p14-huge", market_id="0xM")
+    kw = dict(limits=lim, open_orders=0, spent_24h_micro=0, kill_switch=False)
+    d_close = risk_gate.evaluate(close, st, position_shares_micro=held, **kw)
+    d_naked = risk_gate.evaluate(same_no_position, st, position_shares_micro=0, **kw)
+    d_huge = risk_gate.evaluate(excessive, st, position_shares_micro=200_000_000_000, **kw)
+    facts["logic"]["close_ceiling"] = {
+        "held_micro": held, "entry_cap_micro": lim.max_order_notional_micro,
+        "close_cap_micro": lim.max_close_notional_micro,
+        "close": {"allowed": d_close.allowed, "code": d_close.code, "reduce_only": d_close.reduce_only,
+                  "notional_micro": d_close.notional_micro},
+        "nothing_held": {"allowed": d_naked.allowed, "code": d_naked.code},
+        "above_close_cap": {"allowed": d_huge.allowed, "code": d_huge.code, "reduce_only": d_huge.reduce_only}}
+    g.check("a $25,000 exit above the $2,500 entry cap is allowed, and says it was a close (%s, %s)"
+            % (d_close.code, d_close.notional_micro),
+            d_close.allowed and d_close.reduce_only and d_close.notional_micro > lim.max_order_notional_micro,
+            "an armed stop-loss on a position worth more than the entry cap still cannot fire")
+    g.check("the same exit with nothing held is still refused the entry cap (%s)" % d_naked.code,
+            (not d_naked.allowed) and d_naked.code == "OVER_ORDER_CAP",
+            "the close ceiling became a cap bypass for anybody who claims a position")
+    g.check("an absurd close is refused by the close ceiling, and the refusal says it was a close (%s)"
+            % d_huge.code,
+            (not d_huge.allowed) and d_huge.code == "OVER_CLOSE_CAP" and d_huge.reduce_only,
+            "the exemption is unlimited: a reduce-only sell answers to no ceiling at all")
 
 
 def main(argv: list[str] | None = None) -> int:

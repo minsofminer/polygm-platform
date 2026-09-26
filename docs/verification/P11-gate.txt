@@ -1,46 +1,62 @@
 # P11 gate — recorded by tools/p11-gate-check.py
 
-PASS    1853 ms  seven leaderboard paths: contracted, mapped, and auth-declared
-        12 paths; all mapped; contract 53 paths; check-openapi check-openapi: 498 passed, 0 failed
-PASS    1524 ms  no address (and no non-pseudonym) leaves any board payload
+PASS    2443 ms  seven leaderboard paths: contracted, mapped, and auth-declared
+        12 paths; all mapped; contract 53 paths; check-openapi check-openapi: 685 passed, 0 failed
+PASS    2049 ms  no address (and no non-pseudonym) leaves any board payload
         11 payloads scanned, 0 findings
-PASS      87 ms  a trader at rank 47 with FEWER resolved markets than the trader at rank 12, explained with both component sets
+PASS     100 ms  a trader at rank 47 with FEWER resolved markets than the trader at rank 12, explained with both component sets
         rank 47 w_a945dde868 (26 settled) vs rank 12 w_32371216f9 (48 settled); explanation: w_32371216f9 is rank 12 with scoreBps = 93333; w_a945dde868 is rank 47 with scoreBps = 5000. the sample size did not decide this: 323712 has 48 settle
-PASS     596 ms  no win rate on any board escapes the sample gate
+PASS     502 ms  no win rate on any board escapes the sample gate
         276 rows across 6 boards, 0 findings
-PASS     427 ms  every refusal carries the number that refused it, and the counts add up
+PASS     273 ms  every refusal carries the number that refused it, and the counts add up
         ranked 64 + unranked 7 = 71 wallets in the tape; refusal kinds: {'sample': 6, 'floor': 2, 'farm': 0}; 0 findings
-PASS      80 ms  blown-up accounts stay ranked and counted, washes are subtracted in public, disputes are withheld
+PASS     106 ms  blown-up accounts stay ranked and counted, washes are subtracted in public, disputes are withheld
         5 blown up (scores [-1875, -1924, -2728]), 3 rows with a wash note, 1 disputed withheld, 0 findings
-PASS     694 ms  the score is reproduced from the row's own components with integer arithmetic only
+PASS     577 ms  the score is reproduced from the row's own components with integer arithmetic only
         276 rows re-derived (trimmed*10000//scale), 0 findings
-PASS     873 ms  every board declares a cadence and computes staleness against it
+PASS     630 ms  every board declares a cadence and computes staleness against it
         6 boards checked; 0 findings
-PASS     806 ms  each board serves the plan it ranked from, and cannot be read at a window it does not have
-        6 plans checked (category 30d from 1787313949191; copied 30d from 1787313949243; rising 7d from 1788696349142); the 24h skill board is refused; volume reads 24h/7d/30d; 0 findings
-PASS    1003 ms  the recompute writes rank history, the sparkline reads it, and a repeated key replays
-        snapshots 0 -> 6, run rows 9, first history point {'tsMs': 1789905949819, 'rank': 2, 'scoreBps': 271011, 'settledMarkets': 48, 'maxDrawdownMicro': 400000000, 'maxDrawdown': '400'}, 0 findings
-PASS     193 ms  an exclusion removes a wallet from the board, the reasons stay operator-only, and include restores it
+PASS     971 ms  each board serves the plan it ranked from, and cannot be read at a window it does not have
+        6 plans checked (category 30d from 1787815466778; copied 30d from 1787815466829; rising 7d from 1789197866716); the 24h skill board is refused; volume reads 24h/7d/30d; 0 findings
+PASS    1326 ms  the recompute writes rank history, the sparkline reads it, and a repeated key replays
+        snapshots 0 -> 6, run rows 9, first history point {'tsMs': 1790407467692, 'rank': 2, 'scoreBps': 271011, 'settledMarkets': 48, 'maxDrawdownMicro': 400000000, 'maxDrawdown': '400'}, 0 findings
+PASS     353 ms  an exclusion removes a wallet from the board, the reasons stay operator-only, and include restores it
         0 findings
-PASS     470 ms  the population is large enough for a 47th place and contains every adversarial case
+PASS     324 ms  the population is large enough for a 47th place and contains every adversarial case
         ranked 64 / unranked 7, 4 lucky-gambler rows, 3 copied rows, median settled 30, 0 findings
 PASS       7 ms  the methodology page and the ranking engine are the same object
         6 rules published with both halves, 6 boards, 0 findings
-PASS     757 ms  each board's rows are in the order of the field its formula names
+PASS     838 ms  each board's rows are in the order of the field its formula names
         6 boards checked by copiers/improvementMicro/scoreBps/verifiedVolumeMicro/winRateBps; win-rate order differs from risk-adjusted order; 0 findings
-PASS     265 ms  a wallet's standing is the board's own row, with a re-derivable gap to the place above
+PASS     377 ms  a wallet's standing is the board's own row, with a re-derivable gap to the place above
         4 standings checked; rank 47's gap is 625 bps of scoreBps, toPass 5626
-PASS     294 ms  a comparison is one read of one board, and a follow is a watch that never trades
+PASS     339 ms  a comparison is one read of one board, and a follow is a watch that never trades
         3 pairwise sentences, all naming the sample; followed w_32371216f9 (ranked, rank 12)
-PASS    1437 ms  the self-rank answers every board, with the pin on the default one
+PASS    1423 ms  the self-rank answers every board, with the pin on the default one
         9 board answers; pin rank 12 of 64, offPage False
-PASS    5754 ms  private by default, listed on request, and the row survives either way
+PASS    5140 ms  private by default, listed on request, and the row survives either way
         handle published on 1 of 64 rows, then removed; 0 findings
-PASS      49 ms  a referral earns a share of the fee we were paid, and nothing for a signup
+PASS      54 ms  a referral earns a share of the fee we were paid, and nothing for a signup
         1 accrual row(s), 8.00 of fee observed; 0 findings
-PASS      56 ms  a second wallet funded by the first is refused, a shared device is held, and a self-referral is a revocation ground
+PASS      92 ms  a second wallet funded by the first is refused, a shared device is held, and a self-referral is a revocation ground
         4 attribution(s), 2 open review item(s); 0 findings
-PASS      26 ms  the dashboard's funnel is monotone, its totals are its rows, and its review count is the queue
+PASS      41 ms  the dashboard's funnel is monotone, its totals are its rows, and its review count is the queue
         signups 2, funded 2, trading 2, earned 2, accrued 2000000 micro; 0 findings
-PASS      57 ms  the payout reality is published, and a clawback cancels what was never paid
+PASS      67 ms  the payout reality is published, and a clawback cancels what was never paid
         minimum 20000000 micro, hold 30 days, 7 rule(s); 0 findings
+PASS    1369 ms  21 page/view files present, 5 wired, 4 public routes served, no client component, every card cached
+        
+PASS     526 ms  a 10-walk budget refuses with 429 and blocks the caller, by digest, across every public page
+        
+PASS     952 ms  4 public payloads clean of addresses, cards qualified
+        
+PASS     113 ms  5 public routes in the contract and the ledger, 145 sitemap URLs, one URL grammar
+        
+PASS       8 ms  29 declared append-only table(s) have a trigger and a REVOKE
+        
+PASS    5610 ms  3 pages rendered and 3 cards served by the running pair for a session-less client
+        
+PASS      85 ms  4 detectors fire on a planted farm and stay quiet on an honest tape, each serving its rule and the innocent reading through the API
+        
+PASS     258 ms  one click is one append-only row: flag asks, exclude removes from the public board, include restores, and a retried click replays
+        

@@ -8,19 +8,15 @@
     {
       "check": "NEITHER STRIPE NOR TELEGRAM-STARS FULFILMENT EXISTS YET, so payment-webhook forgery has no target",
       "why": "both arrive as attacker-reachable POSTs, so before either ships: verify the signature over the RAW bytes with a constant-time compare (Stripe's `Stripe-Signature` includes a timestamp \u2014 refuse outside a 5-minute tolerance and store every event id to refuse replays; Telegram's is the secret header plus `successful_payment` arriving only in an update, never in a form post), and never read the amount, the user id or the plan from the body without cross-checking the record the provider keeps"
-    },
-    {
-      "check": "A `close_position` ACTION LARGER THAN THE PER-ORDER CAP IS STILL REFUSED AT FIRE TIME ONLY",
-      "why": "the F19 fix covers sized actions (limit/market). Closing a position is sized by the position itself, so a $25,000 position cannot be closed by a rule while the cap is $2,500 \u2014 the risk review has to decide whether closes are exempt from the entry cap or split into legs, and that decision belongs in the gate's deny table rather than in this probe"
     }
   ],
   "facts": {
-    "at_ms": 1790403969871,
+    "at_ms": 1790406078266,
     "bench": {
       "market": "0xM1",
       "token": "0xT10",
       "tick": "0.01",
-      "account": "u_attacker_5c0edbac"
+      "account": "u_attacker_34c60913"
     },
     "trading": {
       "must_accept": {
@@ -32,7 +28,7 @@
         "tick": "0.01",
         "status": 422,
         "code": "OFF_TICK",
-        "detail": "{\"error\": {\"code\": \"OFF_TICK\", \"message\": \"price is not on a valid tick\", \"retryable\": false, \"requestId\": \"d9d7cc42eee6431b\"}}"
+        "detail": "{\"error\": {\"code\": \"OFF_TICK\", \"message\": \"price is not on a valid tick\", \"retryable\": false, \"requestId\": \"f85df9cc651f4040\"}}"
       },
       "intents_after_off_tick": {
         "before": {
@@ -43,8 +39,8 @@
           "rejected": 1
         },
         "delta": {
-          "queued": 0,
-          "rejected": 1
+          "rejected": 1,
+          "queued": 0
         }
       },
       "sizes": {
@@ -120,15 +116,15 @@
       },
       "cascade_end_to_end": {
         "exit": 0,
-        "fanout_ms": 110.0,
-        "per_copier_ms": 0.22,
+        "fanout_ms": 124.0,
+        "per_copier_ms": 0.25,
         "intents": 500,
         "aggregate_usd": 6375.0,
         "orders": 500,
         "largest_usd": 12.75,
         "venue_filled": 500,
         "passes": 2,
-        "book_ms": 131.0,
+        "book_ms": 269.0,
         "booked": 500,
         "verdict": "PASS"
       }
@@ -262,15 +258,15 @@
       "redos": {
         "/v1/markets?q": {
           "status": 422,
-          "ms": 4.4
+          "ms": 5.2
         },
         "/v1/markets?category": {
           "status": 422,
-          "ms": 4.8
+          "ms": 5.6
         },
         "/v1/leaderboard?q": {
           "status": 422,
-          "ms": 4.1
+          "ms": 4.4
         }
       }
     },
@@ -284,7 +280,7 @@
           "builder_code_revoked": true,
           "builder_code_state": "disabled",
           "reason": "self_referral",
-          "referrer": "u_attacker_5c0edbac",
+          "referrer": "u_attacker_34c60913",
           "review": 1,
           "state": "refused"
         },
@@ -293,13 +289,13 @@
           "polygm-referral",
           "disabled",
           "manual",
-          "self-referral detected on account u_attacker_5c0edbac"
+          "self-referral detected on account u_attacker_34c60913"
         ],
-        "referral_token": "ref_sc5is6tu\u2026"
+        "referral_token": "ref_ptzmn7qf\u2026"
       },
       "duplicate_funding": {
         "first": {
-          "uid": "u_sybil-a_0c82efa2",
+          "uid": "u_sybil-a_591c03f5",
           "status": 200,
           "body_state": "attributed",
           "code": "",
@@ -309,7 +305,7 @@
           "notional_micro": 0
         },
         "second": {
-          "uid": "u_sybil-b_271e5856",
+          "uid": "u_sybil-b_7de3a5cb",
           "status": 409,
           "body_state": null,
           "code": "REFUSED",
@@ -321,7 +317,7 @@
       },
       "sybil_claims": [
         {
-          "uid": "u_sybil-0_3854ae7a",
+          "uid": "u_sybil-0_88f42baa",
           "status": 200,
           "body_state": "attributed",
           "code": "",
@@ -331,7 +327,7 @@
           "notional_micro": 0
         },
         {
-          "uid": "u_sybil-1_618ae7c7",
+          "uid": "u_sybil-1_cfa47de4",
           "status": 200,
           "body_state": "attributed",
           "code": "",
@@ -341,7 +337,7 @@
           "notional_micro": 0
         },
         {
-          "uid": "u_sybil-2_9d1c112f",
+          "uid": "u_sybil-2_fc6d8dd5",
           "status": 200,
           "body_state": "attributed",
           "code": "",
@@ -351,7 +347,7 @@
           "notional_micro": 0
         },
         {
-          "uid": "u_sybil-3_95a9e3c4",
+          "uid": "u_sybil-3_9984e11f",
           "status": 200,
           "body_state": "review",
           "code": "",
@@ -361,7 +357,7 @@
           "notional_micro": 0
         },
         {
-          "uid": "u_sybil-4_bb3ff836",
+          "uid": "u_sybil-4_fc4521fc",
           "status": 200,
           "body_state": "review",
           "code": "",
@@ -371,7 +367,7 @@
           "notional_micro": 0
         },
         {
-          "uid": "u_sybil-6_94c0ab83",
+          "uid": "u_sybil-6_d5e1e85f",
           "status": 200,
           "body_state": "review",
           "code": "",
@@ -453,7 +449,7 @@
           "builder_code_revoked": false,
           "builder_code_state": "already-disabled",
           "reason": "self_referral",
-          "referrer": "u_attacker_5c0edbac",
+          "referrer": "u_attacker_34c60913",
           "review": 1,
           "state": "refused"
         }
@@ -479,6 +475,26 @@
           "disabled",
           "venue_rejection"
         ]
+      },
+      "close_ceiling": {
+        "held_micro": 50000000000,
+        "entry_cap_micro": 2500000000,
+        "close_cap_micro": 25000000000,
+        "close": {
+          "allowed": true,
+          "code": "OK",
+          "reduce_only": true,
+          "notional_micro": 25000000000
+        },
+        "nothing_held": {
+          "allowed": false,
+          "code": "OVER_ORDER_CAP"
+        },
+        "above_close_cap": {
+          "allowed": false,
+          "code": "OVER_CLOSE_CAP",
+          "reduce_only": true
+        }
       }
     }
   },
@@ -600,7 +616,7 @@
     },
     {
       "status": "PASS",
-      "name": "the fan-out is fast enough to be a copy (110.0 ms total for 500 copiers, 0.22 ms each)",
+      "name": "the fan-out is fast enough to be a copy (124.0 ms total for 500 copiers, 0.25 ms each)",
       "why": ""
     },
     {
@@ -700,7 +716,7 @@
     },
     {
       "status": "PASS",
-      "name": "a 10,000-character pathological parameter is refused or answered quickly (worst 4.8 ms)",
+      "name": "a 10,000-character pathological parameter is refused or answered quickly (worst 5.6 ms)",
       "why": ""
     },
     {
@@ -720,12 +736,12 @@
     },
     {
       "status": "PASS",
-      "name": "the refusal recorded the ground in the audit trail ({\"builder_code_revoked\": true, \"builder_code_state\": \"disabled\", \"reason\": \"self_referral\", \"referrer\": \"u_attacker_5c0e)",
+      "name": "the refusal recorded the ground in the audit trail ({\"builder_code_revoked\": true, \"builder_code_state\": \"disabled\", \"reason\": \"self_referral\", \"referrer\": \"u_attacker_34c6)",
       "why": ""
     },
     {
       "status": "PASS",
-      "name": "the programme's builder code (polygm-referral) is marked disabled with the reason readable (['polygm-referral', 'disabled', 'manual', 'self-referral detected on account u_attacker_5c0edbac'])",
+      "name": "the programme's builder code (polygm-referral) is marked disabled with the reason readable (['polygm-referral', 'disabled', 'manual', 'self-referral detected on account u_attacker_34c60913'])",
       "why": ""
     },
     {
@@ -840,7 +856,7 @@
     },
     {
       "status": "PASS",
-      "name": "a repeat self-referral still records the code's *state*, not just that nothing changed ({\"builder_code_revoked\": false, \"builder_code_state\": \"already-disabled\", \"reason\": \"self_referral\", \"referrer\": \"u_attacker_5c0edbac\", \"rev)",
+      "name": "a repeat self-referral still records the code's *state*, not just that nothing changed ({\"builder_code_revoked\": false, \"builder_code_state\": \"already-disabled\", \"reason\": \"self_referral\", \"referrer\": \"u_attacker_34c60913\", \"rev)",
       "why": ""
     },
     {
@@ -859,9 +875,19 @@
       "why": ""
     },
     {
-      "status": "OPEN",
-      "name": "A `close_position` ACTION LARGER THAN THE PER-ORDER CAP IS STILL REFUSED AT FIRE TIME ONLY",
-      "why": "the F19 fix covers sized actions (limit/market). Closing a position is sized by the position itself, so a $25,000 position cannot be closed by a rule while the cap is $2,500 \u2014 the risk review has to decide whether closes are exempt from the entry cap or split into legs, and that decision belongs in the gate's deny table rather than in this probe"
+      "status": "PASS",
+      "name": "a $25,000 exit above the $2,500 entry cap is allowed, and says it was a close (OK, 25000000000)",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "the same exit with nothing held is still refused the entry cap (OVER_ORDER_CAP)",
+      "why": ""
+    },
+    {
+      "status": "PASS",
+      "name": "an absurd close is refused by the close ceiling, and the refusal says it was a close (OVER_CLOSE_CAP)",
+      "why": ""
     }
   ]
 }

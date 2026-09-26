@@ -23,6 +23,7 @@ export const ERROR_CODES = [
   "ZERO_SIZE",
   "BAD_AMOUNT",
   "OVER_ORDER_CAP",
+  "OVER_CLOSE_CAP",
   "PRICE_FAR_FROM_MID",
   "TOO_MANY_OPEN",
   "DAILY_CAP",

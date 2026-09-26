@@ -95,6 +95,7 @@ CODES = {
     "ZERO_SIZE": ("size must be greater than zero", 422, False),
     "BAD_AMOUNT": ("amount is outside the supported scale", 422, False),
     "OVER_ORDER_CAP": ("order is above the per-order limit", 403, False),
+    "OVER_CLOSE_CAP": ("this close is above the close limit; split it", 403, False),
     "PRICE_FAR_FROM_MID": ("price is far from the market", 422, False),
     "TOO_MANY_OPEN": ("too many open orders", 429, True),
     "DAILY_CAP": ("24h limit reached", 403, False),
@@ -2513,7 +2514,8 @@ def _order_core(uid: str, body: dict, idempotency_key: str, rid: str):
                      min_order_size_shares_micro=f.min_order_size_shares_micro,
                      max_tick_sizes=LIMITS.max_tick_sizes, max_snap_age_ms=LIMITS.max_snap_age_ms)
     d = evaluate(intent, st, limits=limits, open_orders=open_n, spent_24h_micro=int(spent),
-                 kill_switch=bool(kill))
+                 kill_switch=bool(kill),
+                 position_shares_micro=_held_shares_micro(uid, intent.token_id))
     if not d.allowed:
         _upsert_intent(uid, idempotency_key, intent, price_micro, size_micro, d.notional_micro,
                        IntentState.REJECTED.value, risk_code=d.code)
@@ -9585,6 +9587,8 @@ def _tg_plain_refusal(code: str, detail: str = "") -> str:
         "INSUFFICIENT_BALANCE": "That is more than your available cash, so nothing was sent. Deposit first, or use "
                               "a smaller amount.",
         "RISK_HALT": "Trading is paused right now — the platform's kill switch is engaged. Nothing you did caused it.",
+        "OVER_CLOSE_CAP": ("That closes more than one order is allowed to move at once, even though it is your own "
+                           "position. Nothing was sent — sell it in two parts and both will go through."),
         "HALTED": ("Your account is stopped for the day: your own daily-loss limit was hit. It can be lifted from "
                    "the app once you have read what happened."),
         "RISK_UNAVAILABLE": ("The risk check could not run, so I will not send an order through it. Nothing was "
@@ -10047,6 +10051,19 @@ def _tg_booked_fill(intent_id: str) -> tuple[int, int, int]:
     size, notional, fee = (int(row[0]), int(row[1]), int(row[2])) if row else (0, 0, 0)
     price = (notional * 1_000_000) // size if size and notional else 0
     return size, price, fee
+
+
+def _held_shares_micro(user_id: str, token_id: str) -> int:
+    """Shares of one token actually held, summed from the lots — the book's own answer.
+
+    The risk gate needs this to tell a *close* from an open. It reads here rather than from the request body
+    because a client-supplied "I hold this much" would be a cap bypass with extra steps, and it sums the lots
+    rather than trusting a position counter because the lots are what the ledger reconciles and what `/wallet`
+    already shows: one answer, not two that can disagree.
+    """
+    row = _db.execute("SELECT COALESCE(SUM(shares_open_micro),0) FROM position_lots WHERE"
+                      " user_id=? AND token_id=?", (str(user_id), str(token_id))).fetchone()
+    return int(row[0]) if row and row[0] is not None else 0
 
 
 def _tg_position_text(user_id: str, token_id: str, *, fallback_micro: int, side: str) -> str:

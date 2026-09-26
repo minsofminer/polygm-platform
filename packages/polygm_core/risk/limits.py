@@ -57,6 +57,10 @@ DENY_CODES: dict[str, DenySpec] = dict([
     _d("BELOW_MIN_SIZE", 422, False, "info", "size is below the market minimum", "p04"),
     _d("BAD_AMOUNT", 422, False, "info", "amount is outside the supported scale", "p04"),
     _d("OVER_ORDER_CAP", 422, False, "warn", "order is above the per-order limit", "p04"),
+    # The close ceiling, decided after P14 measured the gap it left: a $25,000 position could not be closed by a
+    # rule while the entry cap was $2,500, because a close is sized by the position. A reduce-only sell is capped
+    # by `max_close_notional_micro` instead, so this code exists to say *which* ceiling refused it.
+    _d("OVER_CLOSE_CAP", 422, False, "warn", "this close is above the close limit; split it", "p06"),
     _d("PRICE_FAR_FROM_MID", 422, False, "warn", "price is far from the market; check the number", "p04"),
     _d("TOO_MANY_OPEN", 429, True, "warn", "too many open orders on this account", "p04"),
     _d("DAILY_CAP", 422, False, "warn", "this order would exceed your 24h limit", "p04"),

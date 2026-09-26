@@ -29,6 +29,12 @@ class Limits:
     """Every value here is a config key, never a literal in service code (D7)."""
     min_order_size_shares_micro: int = 5 * 10**SCALE          # minimum_order_size = 5 (measured, P01)
     max_order_notional_micro: int = 2_500 * 10**SCALE
+    #: A *reduce-only* sell gets its own ceiling instead of the entry cap. The entry cap bounds new exposure;
+    #: refusing a close does not reduce risk, it *is* risk — a stop-loss that cannot fire because the position
+    #: it protects is worth more than the cap is the failure mode this exists to prevent. It is not an
+    #: exemption: the order is still capped (at one position's worth), the size must not exceed what is
+    #: actually held, and the holding is read from the lots by the caller rather than asserted by the client.
+    max_close_notional_micro: int = 25_000 * 10**SCALE
     max_open_orders_per_user: int = 24
     max_24h_notional_micro: int = 25_000 * 10**SCALE
     max_book_depth_bars: int = 400                             # design-system ladder cap
@@ -69,6 +75,10 @@ class Decision:
     notional_micro: int = 0
     latency_ms: float = 0.0
     checks_run: tuple[str, ...] = field(default_factory=tuple)
+    #: True when the order was evaluated as a close (a sell for no more than the position held). It is on the
+    #: Decision because "which ceiling applied" is a question an operator asks after an incident, and a boolean
+    #: buried in the branch that chose it cannot answer it from a log line.
+    reduce_only: bool = False
 
 
 def norm_tick(value) -> str:
@@ -102,15 +112,26 @@ def _aligned(price_micro: int, tick: str) -> bool:
 
 def evaluate(intent: Intent, m: MarketState, *, limits: Limits,
              open_orders: int, spent_24h_micro: int, kill_switch: bool,
-             now_ms: int | None = None) -> Decision:
+             now_ms: int | None = None, position_shares_micro: int = 0) -> Decision:
     """Order matters: cheapest and most-certain checks first, so a rejected order costs microseconds and
     a rejected order never tells the user something is stale when it is actually disallowed."""
     t0 = time.perf_counter()
     run: list[str] = []
 
+    # A close is a sell for no more than what is held, and `position_shares_micro` is read from the lots by the
+    # caller (the API reads `position_lots`, the executor its own copy) — never from the request body, because a
+    # client-supplied "I hold this much" is a cap bypass with extra steps. Selling *more* than is held opens a
+    # short, which creates exposure, so it is not a close and keeps the entry cap.
+    #
+    # It is computed here, before the first check, so that a *refusal* can say whether it refused a close: that
+    # is the question an operator asks after an incident ("which ceiling stopped it, and was it an exit?"), and
+    # a boolean that only exists on the success path cannot answer it.
+    held = max(0, int(position_shares_micro or 0))
+    reduce_only = str(intent.side).upper() == "SELL" and 0 < int(intent.size_shares_micro) <= held
+
     def deny(code: str, msg: str, *, retryable: bool = False) -> Decision:
         return Decision(False, code, msg, latency_ms=(time.perf_counter() - t0) * 1000,
-                        checks_run=tuple(run))
+                        checks_run=tuple(run), reduce_only=reduce_only)
 
     run.append("kill_switch")
     if kill_switch:
@@ -162,7 +183,10 @@ def evaluate(intent: Intent, m: MarketState, *, limits: Limits,
         notional = notional_floor(intent.size_shares_micro, intent.price_micro)
     except MoneyError as e:
         return deny("BAD_AMOUNT", "amount is outside the supported scale")
-    if notional > limits.max_order_notional_micro:
+    cap = limits.max_close_notional_micro if reduce_only else limits.max_order_notional_micro
+    if notional > cap:
+        if reduce_only:
+            return deny("OVER_CLOSE_CAP", "this close is above the close limit; split it")
         return deny("OVER_ORDER_CAP", "order is above the per-order limit")
 
     run.append("price_band")
@@ -184,4 +208,5 @@ def evaluate(intent: Intent, m: MarketState, *, limits: Limits,
         run.append("delayed_market")   # not a denial: the venue opens the book on a timer, we just say so
 
     return Decision(True, "OK", "accepted", notional_micro=notional,
-                    latency_ms=(time.perf_counter() - t0) * 1000, checks_run=tuple(run))
+                    latency_ms=(time.perf_counter() - t0) * 1000, checks_run=tuple(run),
+                    reduce_only=reduce_only)

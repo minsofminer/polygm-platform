@@ -133,6 +133,41 @@ class TestCompleteness(unittest.TestCase):
         missing = sorted(codes - declared)
         self.assertEqual(missing, [], f"gate codes with no API message/status: {missing}")
 
+    def test_a_reduce_only_close_is_capped_by_its_own_ceiling(self):
+        """P14 measured the gap this closes: a close is sized by the position, so a $25,000 position could not be
+        closed by a rule while the entry cap was $2,500. A sell for no more than what is held is capped by
+        `max_close_notional_micro` instead — and the holding is a parameter, never a claim in the request body."""
+        held = 50_000_000_000                                # 50,000 shares (micro) held
+        # $25,000 at $0.50 = 50,000 shares: above the entry cap, inside the close ceiling.
+        big_close = intent(side="SELL", size_shares_micro=held, price_micro=500_000)
+        allowed = ev(big_close, position_shares_micro=held)
+        self.assertTrue(allowed.allowed, allowed.message)
+        self.assertTrue(allowed.reduce_only, "a sell for the whole position is a close")
+        self.assertGreater(allowed.notional_micro, LIM.max_order_notional_micro,
+                           "this order is only interesting because it is above the entry cap")
+        # …and the same order with nothing held is not a close at all: selling what you do not hold opens a
+        # short, which creates exposure, so it keeps the entry cap.
+        refused = ev(big_close, position_shares_micro=0)
+        self.assertFalse(refused.allowed)
+        self.assertEqual("OVER_ORDER_CAP", refused.code)
+        self.assertFalse(refused.reduce_only)
+        # Selling more than is held is the same refusal, not a close of what exists.
+        over = ev(intent(side="SELL", size_shares_micro=held + 1_000_000, price_micro=500_000),
+                  position_shares_micro=held)
+        self.assertEqual("OVER_ORDER_CAP", over.code)
+        # A BUY of the same notional is never a close.
+        buy = ev(intent(side="BUY", size_shares_micro=held, price_micro=500_000), position_shares_micro=held)
+        self.assertEqual("OVER_ORDER_CAP", buy.code)
+        self.assertFalse(buy.reduce_only)
+
+    def test_the_close_ceiling_still_refuses_an_absurd_close(self):
+        """The exemption is not a bypass: it has a ceiling of its own, and the code says which one refused."""
+        held = 200_000_000_000                               # $100,000 at $0.50 — far above the close ceiling
+        d = ev(intent(side="SELL", size_shares_micro=held, price_micro=500_000), position_shares_micro=held)
+        self.assertFalse(d.allowed)
+        self.assertEqual("OVER_CLOSE_CAP", d.code)
+        self.assertTrue(d.reduce_only, "the refusal is about a close, and it says so")
+
     def test_limits_defaults_match_measured_venue_facts(self):
         # 5 shares and the two tick sizes are MEASURED (P01). If a future edit "tidies" them, the tests
         # against the mock venue will start rejecting real-shaped orders, and someone will spend an evening

@@ -128,8 +128,11 @@ purpose**. Every probe in it is made by the rightful owner of a qualified accoun
 the kit names: a user attacking the venue's rules, the risk gate, or another user through the product's own
 surfaces.
 
-**56 checks, 0 failures, 8 OPEN** (`docs/verification/P14-attack-surface.{txt,json}`). The eight OPENs are decisions
-and absences, not soft passes: they are listed at the end of the record with the exact work each one needs.
+**76 checks, 0 failures, 2 OPEN** (`docs/verification/P14-attack-surface.{txt,json}`). Both remaining OPENs are *latent
+surfaces* rather than soft passes — a route that does not exist yet (the tax export) and a fulfilment path that does
+not exist yet (payments) — and each is listed at the end of the record with the exact work it needs on the day it
+ships. Every finding this phase made *about the product's own detectors* has since been closed, the last one as a
+risk-review decision recorded in the gate (see below).
 
 #### Trading: what a bad order does
 
@@ -207,9 +210,27 @@ moving the ceiling without a restart).
 
 #### What the probes found about the product's own detectors
 
-One limitation is recorded as OPEN rather than as a failure, because the alternative was to change a product
-decision that is not a probe's to make:
+The probe's second job is to attack the product's own detectors, and every finding in this section has since been
+closed — the last one as a *risk-review decision*, which is what it needed to be:
 
+* ~~**A `close_position` action larger than the per-order cap is refused at fire time only.**~~ **CLOSED after
+  P16**, as the decision the probe asked for rather than as a workaround. F19's fix covers *sized* actions; a close
+  is sized by the position itself, so a $25,000 position could not be closed by a rule while the entry cap was
+  $2,500 — the failure mode being an armed stop-loss that can never fire, which is the opposite of risk control.
+  The decision, in the gate rather than in a document nobody reads at 3am: **a reduce-only sell answers to its own
+  ceiling** (`max_close_notional_micro`, one position's worth) **instead of the entry cap**, because the entry cap
+  bounds *new* exposure and refusing an exit is not risk reduction, it *is* risk. It is not an exemption, and the
+  three edges are enforced rather than asserted: the size must not exceed what is actually held — read from
+  `position_lots` by the caller (the API's order path and the executor each read their own copy), **never** from
+  the request body, because a client-supplied "I hold this much" is a cap bypass with extra steps; selling *more*
+  than is held is not a close (the excess opens a short, which creates exposure) and keeps the entry cap; and an
+  absurd close is refused by the close ceiling itself, with `OVER_CLOSE_CAP` existing precisely so the refusal
+  says *which* ceiling stopped it. `Decision.reduce_only` is on the success *and* the refusal for the same reason:
+  "was it a close, and which ceiling refused it" is the question asked after an incident. Re-measured in the probe
+  against the real gate with a real $25,000 position (a close above the entry cap now allowed, the same sell with
+  nothing held still `OVER_ORDER_CAP`, an excessive close `OVER_CLOSE_CAP`), at the door by three API tests
+  (`tests/test_api.py::TestTheCloseCeilingOverTheApi`), and at the gate by two unit tests including the hoisted
+  `reduce_only` a first draft of this fix only reported on the success path — the refusal test caught it.
 * ~~**The copy-farm rule cannot tell a follower from two active traders on the same cadence.**~~ **CLOSED in
   P16**, and by the tape the finding itself used. `copy_farm()` now pairs fills **one-to-one** (within a market and
   side, a candidate fill explains at most one of ours, nearest first) and requires **coverage**: if the candidate

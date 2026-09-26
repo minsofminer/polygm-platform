@@ -219,6 +219,7 @@ export function plainRefusal(code: string, detail?: string): string {
     // refusal the venue really produces fell through to the fallback and the phase's "plain language" promise, in
     // the product, was one sentence about a code. The Python twin is keyed on the same list and asserts its own keys
     // are registered codes; the P12 gate compares the two tables by key.
+    OVER_CLOSE_CAP: "That closes more than one order may move at once, even though the position is yours. Nothing was sent — sell it in two parts.",
     RISK_HALT: "Trading is paused right now. Nothing you did caused it — try again shortly.",
     HALTED: "Your account is stopped for the day: your own daily-loss limit was hit. Read what happened and lift it.",
     RISK_UNAVAILABLE: "The risk check could not run, so nothing was placed. Try again in a moment.",
