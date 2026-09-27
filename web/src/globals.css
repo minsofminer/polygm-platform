@@ -50,6 +50,18 @@ body {
   outline-offset: var(--pgm-space-off-2);
 }
 
+/* `color-scheme` is what makes the browser paint its OWN furniture — scrollbars, the caret, the `<select>`
+   popup, autofill, the date picker — in the theme the page is in. Without it a dark-first product renders light
+   scrollbars inside dark cards. Declared on the attribute the server already writes (`app/layout.tsx`) so it
+   cannot disagree with the theme the first paint used. */
+[data-theme="dark"] {
+  color-scheme: dark;
+}
+
+[data-theme="light"] {
+  color-scheme: light;
+}
+
 /* Numbers: tabular figures so a live update does not shove its neighbours sideways. Tabular digits make a
    same-magnitude change shift-free; a change in digit count is a real width change and is not hidden. */
 .num {
@@ -146,6 +158,26 @@ body {
   inline-size: var(--pgm-space-8);
 }
 
+/* The skip link: first focusable element in the document, invisible until it is focused, and it lands the caret
+   inside `<main>`. Standard, and the guideline asks for it by name — before it, a keyboard user tabbed the whole
+   left rail on every navigation. Fixed, so appearing cannot shift layout. */
+.skip {
+  position: fixed;
+  inset-block-start: var(--pgm-space-2);
+  inset-inline-start: var(--pgm-space-2);
+  z-index: var(--pgm-z-toast);
+  padding: var(--pgm-space-1) var(--pgm-space-2);
+  background: var(--pgm-bg-elevated);
+  color: var(--pgm-text-primary);
+  border: var(--pgm-border-w-hair) solid var(--pgm-border-strong);
+  border-radius: var(--pgm-radius-md);
+  transform: translateY(calc(var(--pgm-space-16) * -1));
+}
+
+.skip:focus-visible {
+  transform: none;
+}
+
 .handle {
   inline-size: var(--pgm-space-2);
   block-size: 100%;
@@ -153,6 +185,10 @@ body {
   background: transparent;
   border: 0;
   padding: 0;
+  /* Without this, a finger drag is a SCROLL: the browser claims the gesture, sends `pointercancel`, and the rail
+     cannot be resized on a touch device at all. `none` (not `manipulation`) because the handle has exactly one
+     gesture and it is the drag; the Mini App's grabber already does this. */
+  touch-action: none;
 }
 
 .handle:hover {
@@ -353,6 +389,9 @@ body {
   place-items: start center;
   padding-block-start: var(--pgm-space-16);
   background: var(--pgm-bg-inset);
+  /* Scroll chaining: without this, reaching the end of a long dialog keeps scrolling the page UNDER it, and the
+     reader closes the dialog to find the market they were on has moved. */
+  overscroll-behavior: contain;
 }
 
 .overlay__panel {

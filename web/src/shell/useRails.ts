@@ -1,6 +1,6 @@
 "use client";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { clampFraction, loadRails, railsFit, saveRails, widthVars, type RailFractions } from "./rails";
+import { clampFraction, loadRails, nudgeFraction, railsFit, saveRails, widthVars, type RailFractions } from "./rails";
 import { useConnection } from "./connection";
 
 /**
@@ -56,11 +56,28 @@ export function useRails(frameRef: React.RefObject<HTMLElement | null>) {
     window.addEventListener("pointerup", up);
   };
 
+  /**
+   * The keyboard path, next to the pointer one. A focusable separator that only answers to a drag is a control a
+   * keyboard user can Tab to and then not use — and the shell's two handles were exactly that until
+   * `plans/design-review.md` found them. Same `railsFit` gate as the drag, so the keyboard cannot reach a layout
+   * the pointer would have been refused.
+   */
+  const applyRail = (side: "left" | "right", value: number) => {
+    const next = { ...fractions, [side]: clampFraction(value) };
+    if (!railsFit(next, collapsed)) return;
+    setFractions(next);
+    saveRails(next);
+  };
+
+  const nudge = (side: "left" | "right") => (delta: number, coarse = false) => {
+    applyRail(side, nudgeFraction(fractions[side], delta, coarse));
+  };
+
   const toggle = (side: "left" | "right") => () =>
     setCollapsed((c) => {
       const next = { ...c, [side]: !c[side] };
       return railsFit(fractions, next) ? next : c;
     });
 
-  return { fractions, collapsed, beginDrag, toggle };
+  return { fractions, collapsed, beginDrag, nudge, applyRail, toggle };
 }

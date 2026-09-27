@@ -17,6 +17,18 @@ export type RailFractions = { left: number; right: number };
 const KEY = "pgm.rails.v1";
 const DEFAULTS: RailFractions = { left: 0.18, right: 0.22 };
 
+/**
+ * The keyboard resize step, and the same number the terminal's own handles use (`TerminalLayout.tsx`'s `nudge`,
+ * which steps 0.005 of the fraction per press and x5 with Shift held). Two layouts that resize on the same
+ * website should not step by different amounts because they were written four phases apart.
+ */
+export const RAIL_STEP = 0.005;
+
+/** One keyboard press, clamped to the rail's own bounds. `coarse` is Shift: the same step, five times over. */
+export function nudgeFraction(value: number, delta: number, coarse = false): number {
+  return clampFraction(value + delta * (coarse ? 5 : 1));
+}
+
 export function clampFraction(value: number): number {
   if (!Number.isFinite(value)) return DEFAULTS.left;
   return Math.min(RAIL_MAX, Math.max(RAIL_MIN, value));

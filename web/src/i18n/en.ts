@@ -34,6 +34,8 @@ export const en = {
   "shell.shortcut.cancelAll": "Cancel every open order",
   "shell.shortcut.close": "Close this overlay",
   "shell.rail.collapse": "Collapse the rail",
+  "shell.rail.width": "Panel width {percent}% — arrow keys resize, Home and End go to the limits, Enter collapses",
+  "shell.skip.content": "Skip to content",
   "shell.rail.expand": "Expand the rail",
   "shell.rail.persisted": "Rail widths are saved for this browser; they follow the device, not the account.",
 

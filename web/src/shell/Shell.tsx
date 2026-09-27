@@ -7,6 +7,7 @@ import { CommandPalette } from "./CommandPalette";
 import { ShortcutsOverlay } from "./ShortcutsOverlay";
 import { dispatchFor, TAB_HREFS } from "./shortcuts";
 import { useRails } from "./useRails";
+import { RAIL_MAX, RAIL_MIN, RAIL_STEP } from "./rails";
 import { useLive } from "@/live/useLive";
 import { useConnection } from "./connection";
 import { Button } from "@/ui/Button";
@@ -23,7 +24,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
   const frame = useRef<HTMLDivElement | null>(null);
   const [palette, setPalette] = useState(false);
   const [help, setHelp] = useState(false);
-  const { beginDrag, collapsed, toggle } = useRails(frame);
+  const { fractions, collapsed, beginDrag, nudge, applyRail, toggle } = useRails(frame);
   // The shell owns the tape feed: every widget's freshness derives from the same stamp the dot shows, which
   // is the only way "trading is disabled while disconnected" and the indicator can be the same fact.
   const feed = useLive("tape");
@@ -96,8 +97,46 @@ export function Shell({ children }: { children: React.ReactNode }) {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
+  /**
+   * The keyboard half of a resize handle, and the ARIA half with it.
+   *
+   * `role="separator"` plus `tabIndex=0` makes this element a *window splitter*: a focusable separator is required
+   * to carry `aria-valuenow`/`aria-valuemin`/`aria-valuemax` and to answer the arrow keys. The shell's two handles
+   * were focusable, labelled, value-less and pointer-only — Tab landed on a control that did nothing, which
+   * `plans/design-review.md` recorded as the highest-severity finding of the review. The terminal's own handles
+   * have had this since P10; this is the same behaviour on the same step.
+   *
+   * The delta is inverted for the right rail: ArrowRight widens the LEFT rail and narrows the RIGHT one, because
+   * the arrow describes the direction the separator moves, and a separator that moves right takes width from the
+   * panel on its right.
+   */
+  const handleKeys = (side: "left" | "right") => (event: React.KeyboardEvent<HTMLSpanElement>) => {
+    const growing = side === "left" ? 1 : -1;
+    if (event.key === "Home" || event.key === "End") {
+      event.preventDefault();
+      applyRail(side, event.key === "Home" ? RAIL_MIN : RAIL_MAX);
+      return;
+    }
+    if (event.key === "Enter" || event.key === " ") {
+      // The same action the rail's own button performs, reachable from where the user already is.
+      event.preventDefault();
+      toggle(side)();
+      return;
+    }
+    const sign = { ArrowLeft: -1, ArrowRight: 1 }[event.key];
+    if (!sign) return;
+    event.preventDefault();
+    nudge(side)(sign * growing * RAIL_STEP, event.shiftKey);
+  };
+
   return (
     <>
+      {/* The rails and the topbar come before <main> in the document, so a keyboard user tabbed through the whole
+          rail on every navigation before reaching the page. A skip link is the standard answer and the guideline
+          asks for it by name; it is the first focusable element and it is visible when focused. */}
+      <a className="skip" href="#content">
+        {t("shell.skip.content")}
+      </a>
       <header className="topbar">
         <Link href="/markets" aria-label={t("shell.title.brand")}>
           <strong>{t("shell.title.brand")}</strong>
@@ -123,23 +162,33 @@ export function Shell({ children }: { children: React.ReactNode }) {
           </button>
           <nav>{children ? null : null}</nav>
         </aside>
-        <main style={{ minWidth: 0 }}>{children}</main>
+        <main id="content" tabIndex={-1} style={{ minWidth: 0 }}>{children}</main>
         <aside className={`rail${collapsed.right ? " rail--collapsed" : ""}`} aria-label={t("shell.nav.profile")} />
         <span
           role="separator"
           aria-orientation="vertical"
           aria-label={t("shell.rail.persisted")}
+          aria-valuenow={Math.round(fractions.left * 100)}
+          aria-valuemin={Math.round(RAIL_MIN * 100)}
+          aria-valuemax={Math.round(RAIL_MAX * 100)}
+          aria-valuetext={t("shell.rail.width").replace("{percent}", String(Math.round(fractions.left * 100)))}
           tabIndex={0}
           className="handle"
           onPointerDown={beginDrag("left") as unknown as never}
+          onKeyDown={handleKeys("left")}
         />
         <span
           role="separator"
           aria-orientation="vertical"
           aria-label={t("shell.rail.persisted")}
+          aria-valuenow={Math.round(fractions.right * 100)}
+          aria-valuemin={Math.round(RAIL_MIN * 100)}
+          aria-valuemax={Math.round(RAIL_MAX * 100)}
+          aria-valuetext={t("shell.rail.width").replace("{percent}", String(Math.round(fractions.right * 100)))}
           tabIndex={0}
           className="handle"
           onPointerDown={beginDrag("right") as unknown as never}
+          onKeyDown={handleKeys("right")}
         />
       </div>
       <nav className="tabs" aria-label={t("shell.nav.markets")}>
