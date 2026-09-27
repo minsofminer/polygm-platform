@@ -70,6 +70,13 @@ export function Shell({ children }: { children: React.ReactNode }) {
       const inField = !!target && (target.isContentEditable || /^(input|textarea|select)$/i.test(target.tagName));
       const hit = dispatchFor(event, inField);
       if (!hit) return;
+      // Escape belongs to the open dialog, not to this window listener. Both of them see the same keypress —
+      // this listener is on `window`, the dialog's is on `document`, and the event bubbles through both — and if
+      // this one also acted, React would unmount the dialog on the same tick it started playing its exit. The
+      // panel then vanished between two frames, which is precisely the bug the exit was added to remove. The
+      // browser suite caught it (`e2e/shell-fixes.spec.ts`: "closing plays the exit"); no unit test could, because
+      // the unit test mounts a Dialog with no Shell above it.
+      if (hit.action === "close" && (palette || help)) return;
       event.preventDefault();
       switch (hit.action) {
         case "palette":
@@ -95,7 +102,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, []);
+  }, [palette, help]);
 
   /**
    * The keyboard half of a resize handle, and the ARIA half with it.

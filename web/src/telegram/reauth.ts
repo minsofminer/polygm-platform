@@ -23,12 +23,19 @@ export async function silentReauth(state: object): Promise<ReauthResult> {
   attempted.add(state);
   const initData = tma()?.initData ?? "";
   if (!initData) return { attempted: true, ok: false, code: "NO_INIT_DATA" };
-  const response = await fetch("/api/session/telegram", {
-    method: "POST",
-    credentials: "same-origin",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ initData }),
-  });
+  let response: Response;
+  try {
+    response = await fetch("/api/session/telegram", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ initData }),
+    });
+  } catch {
+    // The gesture was made and the answer is "the WebApp could not reach the website" — a reason the caller can
+    // act on, where an escaping exception would have been an unhandled rejection with no result at all.
+    return { attempted: true, ok: false, code: "NETWORK" };
+  }
   if (!response.ok) {
     const body = (await response.json().catch(() => null)) as { error?: { code?: string } } | null;
     return { attempted: true, ok: false, code: body?.error?.code ?? `HTTP_${response.status}` };

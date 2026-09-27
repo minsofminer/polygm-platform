@@ -30,12 +30,22 @@ export function SignInForm() {
     setBusy(true);
     setError(null);
     useAuth.getState().beginProbe(null);
-    const response = await fetch("/api/session/login", {
-      method: "POST",
-      credentials: "same-origin",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ identifier, password }),
-    });
+    // A rejected `fetch` (offline, DNS, a dropped connection) used to escape this handler: `setBusy(false)` never
+    // ran, so the button stayed disabled and spinning with no message at all — the browser suite's sign-in case
+    // found it. A network failure is not a rejected password and is not worded like one.
+    let response: Response;
+    try {
+      response = await fetch("/api/session/login", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ identifier, password }),
+      });
+    } catch {
+      setBusy(false);
+      setError(t("auth.signin.unreachable"));
+      return;
+    }
     const body = (await response.json().catch(() => null)) as { state?: string; error?: { code?: string; message?: string; requestId?: string; retryAfterS?: number } } | null;
     setBusy(false);
     if (!response.ok) {
@@ -103,12 +113,19 @@ export function TmaSignIn() {
   const go = async () => {
     setBusy(true);
     const initData = tma()?.initData ?? "";
-    const response = await fetch("/api/session/telegram", {
-      method: "POST",
-      credentials: "same-origin",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ initData }),
-    });
+    let response: Response;
+    try {
+      response = await fetch("/api/session/telegram", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ initData }),
+      });
+    } catch {
+      setBusy(false);
+      setNote(t("auth.signin.unreachable"));
+      return;
+    }
     setBusy(false);
     if (!response.ok) {
       const body = (await response.json().catch(() => null)) as { error?: { message?: string; code?: string } } | null;

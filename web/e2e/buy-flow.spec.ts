@@ -12,6 +12,7 @@
  *     tick and asserts it did not move — a claim no unit test can make, because jsdom does not lay anything out.
  */
 import { expect, test } from "@playwright/test";
+import { signIn } from "./session";
 
 const BOOK = {
   market: "0xM1",
@@ -27,6 +28,9 @@ const BOOK = {
 };
 
 test("a ticket posts the route's own shape and the ladder does not move when a price ticks", async ({ page }) => {
+  // The screen is behind the (app) layout, whose session decision is made on the server from this cookie:
+  // without it every assertion below runs against the sign-in page (see ./session).
+  await signIn(page);
   let orderBody: Record<string, unknown> | null = null;
   await page.route("**/v1/markets/*/book*", (route) => route.fulfill({ json: BOOK }));
   await page.route("**/v1/orders", async (route) => {

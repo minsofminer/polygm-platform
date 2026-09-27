@@ -1,0 +1,107 @@
+# Page snapshot
+
+```yaml
+- generic [active] [ref=e1]:
+  - generic [ref=e2]:
+    - link "Skip to content" [ref=e3] [cursor=pointer]:
+      - /url: "#content"
+    - banner [ref=e4]:
+      - link "Openout" [ref=e5] [cursor=pointer]:
+        - /url: /markets
+        - strong [ref=e6] [cursor=pointer]: Openout
+      - button "Search markets, traders, wallets — or run an action" [ref=e7] [cursor=pointer]
+      - button "Keyboard" [ref=e8] [cursor=pointer]
+      - status [ref=e9]:
+        - generic [ref=e11]: Disconnected
+        - generic [ref=e12]: "Trading is off: disconnected (down) — orders are disabled until the feed returns; cancel-all stays available"
+      - status [ref=e13]: Cancel-all stays available while disconnected.
+    - generic [ref=e14]:
+      - complementary "Markets" [ref=e15]:
+        - button "Collapse the rail" [ref=e16] [cursor=pointer]
+        - navigation
+      - main [ref=e17]:
+        - generic [ref=e18]:
+          - heading "Balance" [level=1] [ref=e19]
+          - region "Balance" [ref=e20]:
+            - heading "Balance" [level=2] [ref=e21]
+            - generic [ref=e22]:
+              - term [ref=e23]: Pending deposits
+              - definition [ref=e24]:
+                - 'generic "Pending deposits: 0.00" [ref=e25]':
+                  - generic [ref=e26]: "0.00"
+                  - status [ref=e27]:
+                    - generic [ref=e28]: ~
+                    - text: no timestamp
+                - text: — from the last known snapshot only
+              - term [ref=e29]: Allowance
+              - definition [ref=e30]: "The allowance is exhausted: deposits arrive, orders do not fill."
+            - note [ref=e31]:
+              - strong [ref=e32]: GET /v1/wallet/balance is refusing
+              - generic [ref=e33]: Balances are not served by the API yet (launch item P08-L9). Launch item P12. The screen stays honest rather than showing you a placeholder it cannot back.
+          - region "Deposit" [ref=e34]:
+            - heading "Deposit" [level=2] [ref=e35]
+            - group "Network" [ref=e36]:
+              - generic [ref=e37]: Network
+              - generic [ref=e38]:
+                - radio "Polygon · USDC · 2 min" [checked] [ref=e39]
+                - text: Polygon · USDC ·
+                - generic "Expected confirmations" [ref=e40]: 2 min
+              - generic [ref=e41]:
+                - radio "Base · USDC · 1 min" [ref=e42]
+                - text: Base · USDC ·
+                - generic "Expected confirmations" [ref=e43]: 1 min
+              - paragraph [ref=e44]: Sending on a different network loses the funds. There is no recovery path.
+            - paragraph [ref=e45]:
+              - text: "Your deposit address:"
+              - code [ref=e46]: 0x…
+              - button "Copy address" [ref=e47] [cursor=pointer]
+            - paragraph [ref=e48]: "Minimum deposit: 1.00 · Expected confirmations: 12"
+            - status [ref=e49]: Waiting for your deposit
+            - note [ref=e50]:
+              - strong [ref=e51]: POST /v1/wallet/deposit/quote is refusing
+              - generic [ref=e52]: "Nothing here is watched: the address and the confirmation count are the plan, not a live monitor. Launch item P12. The screen stays honest rather than showing you a placeholder it cannot back."
+          - generic [ref=e53]:
+            - heading "Withdraw" [level=2] [ref=e54]
+            - generic [ref=e55]:
+              - generic [ref=e56]: Amount (USD)
+              - textbox "Amount (USD)" [ref=e57]: "25.00"
+            - generic [ref=e58]:
+              - generic [ref=e59]: Only allowlisted addresses can receive funds.
+              - textbox "Only allowlisted addresses can receive funds. Only allowlisted addresses can receive funds." [ref=e60]
+              - generic [ref=e61]: Only allowlisted addresses can receive funds.
+            - generic [ref=e62]:
+              - generic [ref=e63]: Type WITHDRAW to continue
+              - textbox "Type WITHDRAW to continue" [ref=e64]
+            - paragraph [ref=e65]: "Estimated fee: 1.00 · net 24.00"
+            - button "Withdraw" [disabled] [ref=e66]
+            - note [ref=e67]:
+              - strong [ref=e68]: POST /v1/wallet/withdraw is refusing
+              - generic [ref=e69]: Neither purchase surface is served yet (launch item P08-L8). This page will not pretend to sell you something. Launch item P12. The screen stays honest rather than showing you a placeholder it cannot back.
+          - region "Withdrawal addresses" [ref=e70]:
+            - heading "Withdrawal addresses" [level=2] [ref=e71]
+            - paragraph [ref=e72]: "The list shows a prefix and a label on purpose: a full address in the DOM is a full address on the clipboard, and clipboard substitution is on the threat list. The complete address appears once, in the response to adding it."
+            - alert [ref=e73]: "NETWORK: the API could not be reached from the server; this page's data is unavailable"
+            - list
+          - region "Export key" [ref=e74]:
+            - heading "Export key" [level=2] [ref=e75]
+            - alert [ref=e76]: Anyone with this key controls your funds. Not a copy of them — the funds.
+            - button "Continue" [ref=e77] [cursor=pointer]
+            - note [ref=e78]:
+              - strong [ref=e79]: POST /v1/wallet/keys/export is refusing
+              - generic [ref=e80]: Key export is not served by the API yet (launch item P08-L8). Launch item P12. The screen stays honest rather than showing you a placeholder it cannot back.
+      - complementary "Profile" [ref=e81]
+      - separator "Rail widths are saved for this browser; they follow the device, not the account."
+      - separator "Rail widths are saved for this browser; they follow the device, not the account."
+    - navigation "Markets" [ref=e82]:
+      - link "Markets" [ref=e83] [cursor=pointer]:
+        - /url: /markets
+      - link "Tape" [ref=e84] [cursor=pointer]:
+        - /url: /tape
+      - link "Trade" [ref=e85] [cursor=pointer]:
+        - /url: /terminal
+      - link "Portfolio" [ref=e86] [cursor=pointer]:
+        - /url: /portfolio
+      - link "Profile" [ref=e87] [cursor=pointer]:
+        - /url: /profile
+  - alert [ref=e88]
+```

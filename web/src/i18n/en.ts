@@ -50,6 +50,7 @@ export const en = {
   "auth.signin.busy": "Signing in",
   "auth.signin.locked": "Too many attempts. Try again in {seconds}s.",
   "auth.signin.failed": "That email-or-password combination did not work.",
+  "auth.signin.unreachable": "The sign-in request did not reach the server. Check the connection and try again.",
   "auth.signin.noAccount": "No account yet? Sign up.",
   "auth.signin.telegram": "Continue in Telegram",
   "auth.signup.title": "Create an account",

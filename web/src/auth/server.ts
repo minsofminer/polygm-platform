@@ -62,16 +62,43 @@ export async function jar(): Promise<CookieJar> {
 /* The access-cookie format (`"<expiry>:<token>"`) lives in ./refresh, beside the code that writes it: a
    writer and a reader in separate modules each kept their own green test while the pair was broken. */
 
+/** The client's own timeout, applied on the server hop for the same reason it is applied in the browser. */
+const UPSTREAM_TIMEOUT_MS = 8_000;
+
 async function callUpstream(path: string, init: { method: string; body?: unknown; token?: string | null; headers?: Record<string, string> }) {
   const h: Record<string, string> = { accept: "application/json", ...(init.headers ?? {}) };
   if (init.body !== undefined) h["content-type"] = "application/json";
   if (init.token) h.authorization = `Bearer ${init.token}`;
-  const response = await fetch(API_ORIGIN + path, {
-    method: init.method,
-    headers: h,
-    ...(init.body !== undefined ? { body: JSON.stringify(init.body) } : {}),
-    cache: "no-store",
-  });
+  let response: Response;
+  try {
+    response = await fetch(API_ORIGIN + path, {
+      method: init.method,
+      headers: h,
+      ...(init.body !== undefined ? { body: JSON.stringify(init.body) } : {}),
+      cache: "no-store",
+      signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
+    });
+  } catch (err) {
+    // A rejected fetch used to escape this function and take the whole render with it: with the API unreachable
+    // every authenticated page answered **500** — Next's error page, no shell, no explanation — instead of the
+    // app's own unavailable state. The browser suite found it by running the real build with no backend
+    // (`e2e/shell-fixes.spec.ts`); the client has always handled this case carefully, and the server hop was the
+    // half that did not. 503 rather than 0 because `serverRead` treats `status >= 400` as the error path, and a
+    // zero would have been read as *success* with an empty body.
+    const timedOut = err instanceof Error && /TimeoutError/i.test(err.name + err.message);
+    return {
+      status: 503,
+      body: envelope(
+        timedOut ? "TIMEOUT" : "NETWORK",
+        timedOut
+          ? "the API did not answer in time; this page's data is unavailable"
+          : "the API could not be reached from the server; this page's data is unavailable",
+        { retryable: true },
+      ),
+      contentType: "application/json",
+      retryAfter: undefined,
+    };
+  }
   const text = await response.text();
   return { status: response.status, body: text, contentType: response.headers.get("content-type") ?? "application/json", retryAfter: response.headers.get("retry-after") };
 }

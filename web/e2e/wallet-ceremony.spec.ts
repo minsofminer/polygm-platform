@@ -8,10 +8,14 @@
  * the point here is the *order* and the disabled states, and those are the client's.
  */
 import { expect, test } from "@playwright/test";
+import { signIn } from "./session";
 
 const ALLOWLISTED = "0x1111111111111111111111111111111111111111";
 
 test("the withdrawal ladder cannot be skipped and the typed values must match what was shown", async ({ page }) => {
+  // The screen is behind the (app) layout, whose session decision is made on the server from this cookie:
+  // without it every assertion below runs against the sign-in page (see ./session).
+  await signIn(page);
   await page.route("**/v1/wallet/bridge*", (route) => route.fulfill({ json: { requestId: "wr_1", state: "requested" } }));
   await page.route("**/v1/wallet**", (route) => {
     const url = route.request().url();

@@ -14,7 +14,12 @@ quietly deleted.
 
 ## Findings, by severity
 
-### F1 — the rail handles were keyboard-inaccessible (HIGH · **fixed**)
+### F1 — the rail handles were keyboard-inaccessible (HIGH · **fixed, and now browser-verified**)
+
+> Verified on 2026-09-27 by `e2e/shell-fixes.spec.ts` in a real chromium: one ArrowRight adds 0.005 to
+> `pgm.rails.v1` (the same store the pointer drag writes), Shift adds ×5, Home/End reach the bounds, the announced
+> `aria-valuenow` follows, and Enter collapses the rail. The run that earned this is
+> `plans/browser-verification.md`.
 
 `web/src/shell/Shell.tsx` rendered both resize handles as `role="separator"` with `tabIndex={0}` and a pointer
 handler. A focusable `separator` is a **window splitter**: WAI-ARIA requires `aria-valuenow` / `aria-valuemin` /
@@ -136,8 +141,9 @@ will check again, and the answer is "yes, already".
 Two things this review could not do on this machine, in line with how the rest of the platform records its
 unearned items:
 
-* **The touch fix is reasoned, not felt.** `touch-action: none` on the handle is correct by the spec and by the
-  Mini App's precedent, but no finger has dragged the rail on a real device from here.
+* **The touch fix is reasoned, not felt.** `touch-action: none` on the handle was verified in a browser as
+  computed style (`e2e/shell-fixes.spec.ts`, and in the touch-emulating webview project) — but no finger has
+  dragged the rail on a real device. See `plans/browser-verification.md`.
 * **Contrast of the hover/active states** was verified by the token pair (the ladder's own
   `--pgm-text-*`/`--pgm-bg-*` combinations are checked in P03's gate), **not** by rendering. The guideline's
   "interactive states increase contrast" holds by token construction; a human should still look.

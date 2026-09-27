@@ -2,12 +2,16 @@
  * P13 D4 — the browser suite: three flows a unit test cannot reach (a real navigation, real focus, a real
  * webview profile) plus the layout-shift measurement, which needs layout to exist at all.
  *
- * HONEST STATUS, and it belongs in the config rather than only in a doc: these specs do **not** run on the build
- * box. Playwright's chromium needs system libraries (`libxkbcommon0`, `libasound2t64`, `libnss3`, …) and this
- * sandbox runs as a non-root user with no way to install them, so the browser downloads and the specs execute on
- * the nightly runner instead (`npm run test:e2e:install` in `.github/workflows/nightly.yml`). What the phase gate
- * checks locally is that these files exist, that they cover the three flows the kit names, and that a workflow
- * runs them — a claim about the suite, not a claim that it passed here.
+ * HONEST STATUS, corrected on 2026-09-27 by running it: the paragraph that stood here said the browser could not
+ * run on this box at all — no system libraries and no way to install them. That was wrong for the current
+ * environment, and `plans/browser-verification.md` records the run that falsified it: `npx playwright install
+ * chromium` plus `sudo npx playwright install-deps chromium`, then the whole suite against `next start` on a
+ * local port. What it found on the first run was worth the correction — four real defects, three of them in
+ * product code, none reachable from a unit test (`plans/design-review.md`, `plans/browser-verification.md`).
+ *
+ * The nightly runner still runs this suite (`npm run test:e2e:install` in `.github/workflows/nightly.yml`), and
+ * the phase gates still only check that the files exist, that they cover the flows the kit names, and that a
+ * workflow runs them. The difference now is that "it passes" is a claim this repository can check locally.
  *
  * `PGM_E2E_BASE_URL` points the suite at a running deployment (the Mini App's Vercel URL, or `next start` in CI).
  * When it is unset the suite starts `next dev` itself, which is what a developer wants locally.
