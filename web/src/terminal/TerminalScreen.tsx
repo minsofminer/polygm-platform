@@ -22,10 +22,11 @@
  * rows already on screen, and a second endpoint for one grouping would be a second set of numbers that could
  * disagree with the first. Its label says "from this window's tape" for the same reason.
  */
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, useRef } from "react";
 import { t } from "@/i18n/terminal";
 import { freshnessOf, stampFrom, type Freshness } from "@/api/envelope";
 import { request } from "@/api/client";
+import { usePoll } from "@/live/usePoll";
 import { Number } from "@/num/Number";
 import { StaleIndicator } from "@/num/StaleIndicator";
 import { MarketRail, type Holder, type MarketDetail } from "@/screens/MarketRail";
@@ -399,33 +400,38 @@ function useMarket(marketId: string): MarketRead {
   const [candles, setCandles] = useState<Candle[]>([]);
   const [stamps, setStamps] = useState<number[]>([]);
 
+  // `cancelled` outlives the effect now: the poll below stops on unmount, but a request already in flight still
+  // resolves afterwards, and a resolved read must not write into an unmounted screen.
+  const cancelled = useRef(false);
   useEffect(() => {
-    if (!marketId) return;
-    let cancelled = false;
-    const load = async () => {
-      const [m, h, c] = await Promise.all([
-        request<MarketDetail>({ key: "market", params: { market_id: marketId } }),
-        request<{ holders: Holder[]; provenance: string; holderCount: number }>({ key: "holders", params: { market_id: marketId } }),
-        request<{ candles: Candle[] }>({ key: "history", params: { market_id: marketId, interval: "1h", limit: 200 } }),
-      ]);
-      if (cancelled) return;
-      const marks: number[] = [];
-      if (m.ok) {
-        setDetail(m.data);
-        const stamp = stampFrom(m.data as Record<string, unknown>);
-        if (stamp) marks.push(stamp.asOf);
-      }
-      if (h.ok) setHolders(h.data);
-      if (c.ok) setCandles(c.data.candles ?? []);
-      setStamps(marks);
-    };
-    void load();
-    const timer = window.setInterval(() => void load(), 10_000);
+    cancelled.current = false;
     return () => {
-      cancelled = true;
-      window.clearInterval(timer);
+      cancelled.current = true;
     };
+  }, []);
+
+  const load = useCallback(async () => {
+    if (!marketId) return;
+    const [m, h, c] = await Promise.all([
+      request<MarketDetail>({ key: "market", params: { market_id: marketId } }),
+      request<{ holders: Holder[]; provenance: string; holderCount: number }>({ key: "holders", params: { market_id: marketId } }),
+      request<{ candles: Candle[] }>({ key: "history", params: { market_id: marketId, interval: "1h", limit: 200 } }),
+    ]);
+    if (cancelled.current) return;
+    const marks: number[] = [];
+    if (m.ok) {
+      setDetail(m.data);
+      const stamp = stampFrom(m.data as Record<string, unknown>);
+      if (stamp) marks.push(stamp.asOf);
+    }
+    if (h.ok) setHolders(h.data);
+    if (c.ok) setCandles(c.data.candles ?? []);
+    setStamps(marks);
   }, [marketId]);
+
+  // 10s, and the next run is scheduled only once this one has answered: see `usePoll` for why an interval that
+  // fires over an open request is the wrong shape for a screen whose job is to show the *fresh* price.
+  usePoll(load, 10_000, Boolean(marketId));
 
   const oldest = stamps.length ? Math.min(...stamps) : 0;
   const stamp = oldest ? { asOf: oldest, staleAfter: oldest + 10_000 } : null;

@@ -1,6 +1,7 @@
 "use client";
 import { useCallback, useEffect, useState } from "react";
 import { request } from "@/api/client";
+import { usePoll } from "@/live/usePoll";
 import { freshnessOf, stampFrom, type Freshness } from "@/api/envelope";
 import { t } from "@/i18n/t";
 import { microOf } from "@/lib/depth";
@@ -57,11 +58,9 @@ export function MarketView({
     setBookStaleMs(bookStamp === null ? null : bookStamp.staleAfter - bookStamp.asOf);
   }, [market.id]);
 
-  useEffect(() => {
-    void loadBook();
-    const timer = window.setInterval(() => void loadBook(), POLL_MS);
-    return () => window.clearInterval(timer);
-  }, [loadBook]);
+  // A poll that waits for its own answer: the book is the screen's live surface, and an interval that fires
+  // while the previous read is still open stacks requests and lets an older book land after a newer one.
+  usePoll(loadBook, POLL_MS);
 
   useEffect(() => {
     void (async () => {
