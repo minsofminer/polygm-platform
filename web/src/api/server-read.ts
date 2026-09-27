@@ -6,6 +6,8 @@
  */
 import "server-only";
 
+import { cache } from "react";
+
 import { freshnessOf, stampFrom, type Freshness } from "@/api/envelope";
 import { proxy } from "@/auth/server";
 
@@ -20,7 +22,21 @@ export type ServerRead<T> =
   | { ok: false; code: string; message: string; status: number; stampLabel: string; freshness: Freshness;
       ageMs: number | null };
 
-export async function serverRead<T>(method: "GET", path: string): Promise<ServerRead<T>> {
+/**
+ * Same per-request memo as `publicRead`, for the same reason: a route whose `generateMetadata` and whose body
+ * both read the same path made that HTTP call twice. `proxy()` underneath is the session path, so the memo is
+ * strictly per-request and per-URL — two requests never share an entry, and a read is never answered from
+ * another account's render. See `public-read.ts` for why this is invisible to vitest and what stands in for it.
+ */
+const cachedServerRead = cache(
+  async (method: "GET", path: string): Promise<ServerRead<unknown>> => serverReadImpl(method, path),
+);
+
+export function serverRead<T>(method: "GET", path: string): Promise<ServerRead<T>> {
+  return cachedServerRead(method, path) as Promise<ServerRead<T>>;
+}
+
+async function serverReadImpl<T>(method: "GET", path: string): Promise<ServerRead<T>> {
   const out = await proxy(path, { method });
   const parsed = safeJson(out.body);
   const now = Date.now();

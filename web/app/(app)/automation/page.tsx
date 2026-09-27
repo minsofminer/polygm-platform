@@ -1,7 +1,7 @@
 import { t } from "@/i18n/terminal";
 import { serverRead } from "@/api/server-read";
+import { loadAutomation } from "@/terminal/automationData";
 import { AutomationView } from "@/terminal/AutomationView";
-import type { AutomationList, TemplateCatalog } from "@/terminal/wire";
 
 export const dynamic = "force-dynamic";
 
@@ -14,8 +14,8 @@ export const dynamic = "force-dynamic";
  * The mutations are client actions, because each one spends a dry run or arms a rule.
  */
 export default async function AutomationPage() {
-  const list = await serverRead<AutomationList>("GET", "/v1/automations");
-  const catalog = await serverRead<TemplateCatalog>("GET", "/v1/automations/templates");
+  // Independently useful, so they run at the same time rather than one after the other (see the loader).
+  const { list, catalog } = await loadAutomation(serverRead);
   return (
     <main className="pgm-page">
       {list.ok === false ? (

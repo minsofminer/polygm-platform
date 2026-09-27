@@ -18,6 +18,8 @@
  */
 import "server-only";
 
+import { cache } from "react";
+
 import { freshnessOf, stampFrom, type Freshness } from "@/api/envelope";
 // The declaration of which paths are public lives on the route ledger, and this read is one of the two
 // transports that honour it: the other is the client-side proxy (`src/auth/server.ts`), which had the same bug
@@ -27,7 +29,31 @@ import type { ServerRead } from "@/api/server-read";
 
 const API_ORIGIN = process.env.PGM_API_ORIGIN ?? "http://127.0.0.1:8000";
 
-export async function publicRead<T>(method: "GET", path: string): Promise<ServerRead<T>> {
+/**
+ * One read per (method, path) **per request**, and this exists because the same page asks twice.
+ *
+ * `app/market/[market]/page.tsx` and `app/trader/[who]/page.tsx` each call `publicRead` once in
+ * `generateMetadata` (for the title, the description and the OG tags) and again in the page body. Two calls,
+ * one URL, two HTTP round trips — and Next cannot collapse them, because this transport carries
+ * `cache: "no-store"` on purpose (the API's own cache headers are the ones that matter, and the fetch cache
+ * would answer from a copy that has forgotten them).
+ *
+ * `React.cache` is the per-request memo: two callers in the same render share one promise, and nothing is kept
+ * afterwards, so no user can ever be served another request's data. Outside a React request (a unit test, a
+ * script) it is a pass-through — it does not memoize globally, which is exactly why this is safe to add to a
+ * module a page might call from anywhere. The consequence for testing is worth stating plainly: the dedupe
+ * cannot be observed in vitest, only reasoned about and asserted at the source level
+ * (`src/api/read-dedupe.test.ts`), because `cache` has no scope to attach to without the server renderer.
+ */
+const cachedPublicRead = cache(
+  async (method: "GET", path: string): Promise<ServerRead<unknown>> => publicReadImpl(method, path),
+);
+
+export function publicRead<T>(method: "GET", path: string): Promise<ServerRead<T>> {
+  return cachedPublicRead(method, path) as Promise<ServerRead<T>>;
+}
+
+async function publicReadImpl<T>(method: "GET", path: string): Promise<ServerRead<T>> {
   // A public page reading a path the ledger does not declare anonymous would render a 401 as this file's "no data"
   // state — the exact failure it was written to end, one layer down. It throws instead, where the developer sees it,
   // because the alternative is a public page that looks fine to whoever wrote it and empty to a crawler.

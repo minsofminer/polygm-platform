@@ -80,9 +80,14 @@ export function AlertsView({ initial, history }: { initial: AlertsPayload | null
   }, [initial]);
 
   const refresh = async () => {
-    const res = await request<AlertsPayload>({ key: "alerts" });
+    // The same waterfall as the page had, one layer down: the rule list and the delivery history do not depend
+    // on each other, so they are fetched together. Each still lands on its own `ok` — a failed history must not
+    // stop the rules from refreshing.
+    const [res, hist] = await Promise.all([
+      request<AlertsPayload>({ key: "alerts" }),
+      request<{ rows: AlertDeliveryRow[] }>({ key: "alertDeliveries", query: { limit: 50 } }),
+    ]);
     if (res.ok) setPayload(res.data);
-    const hist = await request<{ rows: AlertDeliveryRow[] }>({ key: "alertDeliveries", query: { limit: 50 } });
     if (hist.ok) setRows(hist.data.rows);
   };
 
