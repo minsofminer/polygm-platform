@@ -1083,3 +1083,55 @@ caught, **P08 16/16** on a rebuilt bundle (`sources-sha256 d1d6df72a9507672`, /t
 rail on a real device from here; and the hover/active contrast holds by token construction (P03's gate) rather than
 by rendered measurement. Both are recorded in `plans/design-review.md` as the owner's to earn.
 
+---
+
+## The React pass: two reads where one would do, and the poll that outran its own answer · 2026-09-27
+
+**Method.** `plans/react-review.md` is Vercel's `react-best-practices` (70 rules, eight categories, ordered by
+impact) applied to this app. The dependency list is four packages, so there was no library to swap for a better
+one and every finding is about this code's behaviour. The highest-impact category — waterfalls — is where the cost
+actually was, in three places, and all three are invisible to a test suite because they are about *what the page
+does over the network* rather than what it renders.
+
+**The same read, twice per request.** `app/market/[market]` and `app/trader/[who]` call `publicRead` once in
+`generateMetadata` and again in the page body: two identical URLs, two HTTP round trips, and Next cannot collapse
+them because this transport carries `cache: "no-store"` deliberately. `React.cache` now wraps both server readers
+behind a generic façade, scope = one request, nothing retained afterwards — so it cannot serve one render another
+one's data. It is worth stating what stands in for a test here: `React.cache` is a **pass-through outside a React
+request** (measured in this very environment), so the suite asserts the mechanism at source level, asserts that
+the *reason* still holds — those pages still read twice, and if that stops being true the memo stops paying for
+itself — and asserts the pass-through property that makes putting a cache in that module safe.
+
+**Independent reads awaited in turn.** `alerts` awaited rules then history; `automation` awaited rules then
+catalog. Neither pair had a dependency, so both pages paid the sum of two round trips where they owed the slower
+one. Both now go through a loader that uses `Promise.all`, and the loaders take the reader **as a parameter** —
+not ceremony, but the thing that makes the fix testable at all, since `serverRead` imports `server-only` and a
+page that imported it could only be verified by reading its source. With the reader injected, the test records
+start and finish order and asserts the second read begins while the first is still open. The client's own
+`AlertsView.refresh` had the same waterfall one layer down and got the same fix.
+
+**A poll that fires over its own request.** `setInterval(() => void load(), ms)` is not "every 2 seconds"; it is
+"start a request every 2 seconds whether or not the last one answered". The client retries with backoff, so a
+slow API turns the book poll into a stack of in-flight reads, and unordered responses mean an older book can land
+after a newer one — the screen freezes on stale data exactly when the API is unwell. `src/live/usePoll.ts`
+schedules the next run after the previous one settles (the interval becomes a floor, at most one request in
+flight), keeps the task in a ref so a market-id-dependent loader does not re-arm the timer each render, survives a
+failing task without an unhandled rejection, and stops on unmount. Tested on the timeline, because a call-count
+test would pass against the old code too.
+
+**Also verified.** Twelve rules checked and already right, listed in the review so nobody re-litigates them (no
+barrel files, `next/dynamic` already at the TMA boundary, drag writes CSS variables instead of re-rendering,
+`TerminalScreen` already parallel, no `&&`-with-a-number anywhere). Two deferrals with reasons — hidden-tab
+pausing, and `useTransition` on the tape — and one refusal: SWR. This client carries idempotency keys, per-attempt
+timeouts, a retry policy that will not retry a timed-out mutation, and envelope stamping; SWR would replace those
+semantics with a cache and leave them to be rebuilt around it. The deduplication half is taken where it pays (R1);
+the cache half is a redesign, not a fix.
+
+**Gates.** Web **70 files / 627 tests**, `tsc` clean, `i18n-check` ok (998 keys), **P03 62/62** (all mutations
+caught), **P08 16/16** on a rebuilt bundle (`sources-sha256 d9e6bbab958015d6`), **P09 7/7**, **P10 15/15**,
+**P12 41/0**.
+
+**`[UNVERIFIED]`.** The dedupe has no unit-observable test (stated in the review, with what stands in for it); and
+the 2s book poll has not been watched in a browser against a genuinely slow API from here. Both are the owner's to
+take with the pair running.
+
