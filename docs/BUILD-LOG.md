@@ -1029,3 +1029,57 @@ been eyeballed on a device** — this box has no browser session, and the honest
 proven and the feel is a judgement the owner can now make against a real screen. That is the one line in this
 change a test cannot carry.
 
+---
+
+## The design review, and the three things the guidelines found in the shell · 2026-09-27
+
+**Method.** `plans/design-review.md` is the `web-design-guidelines` pass: Vercel's Web Interface Guidelines fetched
+from source, the whole app reviewed against every rule, one finding per line. The file records what was fixed,
+what was **already correct** (so nobody re-litigates it), what was **refused with a reason**, and what stays
+`[UNVERIFIED]` — the same shape as the animation audit, because a review that only lists fixes gets re-run forever.
+
+**The headline finding was not a design opinion.** Both rail handles render `role="separator"` with `tabIndex={0}`
+— which makes them *window splitters*, and a focusable separator owes `aria-valuenow`/`min`/`max` and the arrow
+keys. They had a label, a drag handler, and nothing else: a keyboard user could Tab to a control that did nothing
+and could not resize a rail at all, on a product whose entire layout is three resizable columns. Meanwhile the
+**terminal's** handles have answered arrows, Home and Shift-coarse steps since P10. The same product disagreed with
+itself about what a control is, and only the newer of the two had forgotten.
+
+That is now one implementation: `RAIL_STEP`/`nudgeFraction` beside `clampFraction` (the terminal's own numbers,
+exported so the two layouts cannot drift again), `applyRail` behind the same `railsFit` gate the pointer uses, the
+four keys, Enter/Space for collapse, and the values a splitter owes — including an `aria-valuetext` that names the
+keys, because a percentage announced alone is a number with no affordance attached. The test that guards it also
+asserts the ARIA values, because the first draft of this fix added the handler and forgot the values.
+
+**Five more, each one line of cause.** `color-scheme` was never declared, so a dark-first product painted light
+scrollbars and a light `<select>` popup inside dark cards — now per theme, on the attribute the server already
+writes. The handle had no `touch-action`, and on a touch device a finger drag is a *scroll*: the browser claims the
+gesture, sends `pointercancel`, and the rail is unresizable by touch — `none`, because the handle has exactly one
+gesture. `.overlay` did not contain scroll chaining, so a reader closing a long dialog found the page underneath had
+moved; the ladder's own container already knew this rule and the newest layer did not. There was **no skip link**,
+so every navigation tabbed an entire rail before the content. And four loading strings ended in `...` while three
+in the same file ended in `…`.
+
+**What was refused, with the reason.** Rail widths stay in `localStorage`, not the URL (a device property, not an
+account one). The ladder is not virtualized (bounded scroll, and `content-visibility` would change layout timing on
+rows that re-ladder 20×/sec). The palette keeps `autoFocus` (it opens *because* the user asked for it, by
+keyboard). Sentence case stays (one style guide owns the copy — `web/DESIGN.md §8`).
+
+**Also repaired this block, and worth recording because it nearly cost the repository.** A workspace reset restored
+a *stale* `.git` while the files on disk had advanced, so a commit built in good faith landed on `3921df6` — six
+commits behind `origin/main` — and would have **reverted the close-ceiling, CSV, skills, brand and motion work** in
+one push. GitHub refused it as a non-fast-forward; the diff stat is what confirmed why. The tree was rebuilt on
+`origin/main` and the pass re-applied there. Two lessons, both now in the tooling: `tools/git-push.sh` re-derives
+the `origin` remote and its credential from `.secrets/tokens.env` on every push (both live outside the snapshot),
+and **a push that is rejected is information, not an obstacle** — `git log --oneline` before believing a commit is
+where you think it is.
+
+**Verified.** Web **68 files / 613 tests** (601 + `rails.test.ts` ×12), `tsc --noEmit` clean, `i18n-check` ok (998
+keys), and the gates a shell/CSS/i18n change touches, re-run rather than assumed: **P03 62/62** with all mutations
+caught, **P08 16/16** on a rebuilt bundle (`sources-sha256 d1d6df72a9507672`, /tma 196.7 KB of 200 KB), **P09 7/7**,
+**P10 15/15**, **P12 41/0**.
+
+**`[UNVERIFIED]`.** The touch fix is correct by spec and by the Mini App's precedent, but no finger has dragged the
+rail on a real device from here; and the hover/active contrast holds by token construction (P03's gate) rather than
+by rendered measurement. Both are recorded in `plans/design-review.md` as the owner's to earn.
+
