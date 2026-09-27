@@ -1135,3 +1135,34 @@ caught), **P08 16/16** on a rebuilt bundle (`sources-sha256 d9e6bbab958015d6`), 
 the 2s book poll has not been watched in a browser against a genuinely slow API from here. Both are the owner's to
 take with the pair running.
 
+---
+
+## The Vercel audit, and the credential that stopped it · 2026-09-27
+
+**The skill ran and stopped at step one, and that is the finding.** `vercel-optimize` is metrics-first by doctrine —
+"recommendations start from Vercel production signals, not repo-wide grep" — so the audit's first act is to collect
+production signals. It could not: the Vercel credential authenticates as the user `minsofminer` and no longer has
+access to the team its own default points at (`miners4` / `team_CXIJ9RpnYma4N3nDVMzE8DiV`). `GET /v9/projects/<id>
+?teamId=…` answers **403**, and `GET /v2/teams` returns an empty list. The blocker is `forbidden`, which the skill
+says to fix rather than work around.
+
+**Why that is a launch item and not just an audit delay.** This is the token the Mini App deploys with.
+`polygm-mini-app` is live and serving — but **a redeploy from this workspace cannot authenticate right now**. It is
+the second credential in this environment to lose access without anyone rotating it, the Supabase token's 401 being
+the first, and both now sit in the owner's list together.
+
+**What the run produced anyway.** The skill's scanner needs no credentials: 192 files, 36 routes, 15 scanners, 18
+findings, preserved verbatim with a provenance header at `docs/verification/vercel-scan.json`. Seventeen are
+`force-dynamic` — five of them on the only routes whose audience is strangers (`/market/[market]`, `/trader/[who]`,
+`/markets`, `/whales`, the leaderboard) — and one is `app/layout.tsx`'s cookie read, which is what makes the tree
+dynamic. Every finding carries `trafficIndependent: false`, and the skill's rule for that is to drop route-local
+patterns without route-level traffic evidence. So **none of them was promoted to a recommendation**, and
+`plans/vercel-review.md` records them as a watch-list instead: the five public routes *may* deserve a named cache
+policy once there is traffic data to justify one, and the root-layout cookie is a **trade** P08 already made on
+purpose (dark-first with no first-paint flash) rather than a defect to remove.
+
+**No code changed.** The deliverable of a blocked audit is the blocker, its evidence, the artifact that did come
+out of it, and the owner action — the same treatment the Supabase 401 has had since it appeared. When the token is
+re-authorized, `collect-signals.mjs` → `gate-investigations.mjs` → `deep-dive.mjs` → verify → render runs end to end
+from the vendored skill.
+

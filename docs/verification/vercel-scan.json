@@ -1,0 +1,464 @@
+{
+  "schemaVersion": "1.0",
+  "scannedAt": "2026-09-27T15:17:41.334Z",
+  "rootDir": "web",
+  "monorepoRoot": null,
+  "workspacePackages": [],
+  "stack": {
+    "framework": "next",
+    "frameworkVersion": "16.3.5",
+    "hasAppRouter": true,
+    "hasPagesRouter": false,
+    "cacheComponents": null,
+    "typescript": true,
+    "orm": "none",
+    "isMonorepo": false,
+    "rootDirectory": null,
+    "hasVercelFlagsPackage": false,
+    "vercelFlagsPackages": [],
+    "hasWorkflowPackage": false,
+    "workflowPackages": []
+  },
+  "routes": [
+    {
+      "routePath": "/",
+      "file": "app/page.tsx",
+      "type": "page"
+    },
+    {
+      "routePath": "/",
+      "file": "app/(app)/layout.tsx",
+      "type": "layout"
+    },
+    {
+      "routePath": "/",
+      "file": "app/(auth)/layout.tsx",
+      "type": "layout"
+    },
+    {
+      "routePath": "/",
+      "file": "app/layout.tsx",
+      "type": "layout"
+    },
+    {
+      "routePath": "/admin/gaming",
+      "file": "app/(app)/admin/gaming/page.tsx",
+      "type": "page"
+    },
+    {
+      "routePath": "/alerts",
+      "file": "app/(app)/alerts/page.tsx",
+      "type": "page"
+    },
+    {
+      "routePath": "/api/[...path]",
+      "file": "app/api/[...path]/route.ts",
+      "type": "route"
+    },
+    {
+      "routePath": "/api/session/login",
+      "file": "app/api/session/login/route.ts",
+      "type": "route"
+    },
+    {
+      "routePath": "/api/session/logout",
+      "file": "app/api/session/logout/route.ts",
+      "type": "route"
+    },
+    {
+      "routePath": "/api/session/telegram",
+      "file": "app/api/session/telegram/route.ts",
+      "type": "route"
+    },
+    {
+      "routePath": "/automation",
+      "file": "app/(app)/automation/page.tsx",
+      "type": "page"
+    },
+    {
+      "routePath": "/billing",
+      "file": "app/(app)/billing/page.tsx",
+      "type": "page"
+    },
+    {
+      "routePath": "/copy",
+      "file": "app/(app)/copy/page.tsx",
+      "type": "page"
+    },
+    {
+      "routePath": "/event/[event_id]",
+      "file": "app/event/[event_id]/page.tsx",
+      "type": "page"
+    },
+    {
+      "routePath": "/leaderboard",
+      "file": "app/(app)/leaderboard/page.tsx",
+      "type": "page"
+    },
+    {
+      "routePath": "/leaderboard/[board]",
+      "file": "app/leaderboard/[board]/page.tsx",
+      "type": "page"
+    },
+    {
+      "routePath": "/leaderboard/[board]/c/[category]",
+      "file": "app/leaderboard/[board]/c/[category]/page.tsx",
+      "type": "page"
+    },
+    {
+      "routePath": "/leaderboard/[board]/w/[window]",
+      "file": "app/leaderboard/[board]/w/[window]/page.tsx",
+      "type": "page"
+    },
+    {
+      "routePath": "/link-wallet",
+      "file": "app/(auth)/link-wallet/page.tsx",
+      "type": "page"
+    },
+    {
+      "routePath": "/market/[market]",
+      "file": "app/market/[market]/page.tsx",
+      "type": "page"
+    },
+    {
+      "routePath": "/markets",
+      "file": "app/markets/page.tsx",
+      "type": "page"
+    },
+    {
+      "routePath": "/portfolio",
+      "file": "app/(app)/portfolio/page.tsx",
+      "type": "page"
+    },
+    {
+      "routePath": "/profile",
+      "file": "app/(app)/profile/page.tsx",
+      "type": "page"
+    },
+    {
+      "routePath": "/radar",
+      "file": "app/(app)/radar/page.tsx",
+      "type": "page"
+    },
+    {
+      "routePath": "/referrals",
+      "file": "app/(app)/referrals/page.tsx",
+      "type": "page"
+    },
+    {
+      "routePath": "/reset-password",
+      "file": "app/(auth)/reset-password/page.tsx",
+      "type": "page"
+    },
+    {
+      "routePath": "/sign-in",
+      "file": "app/(auth)/sign-in/page.tsx",
+      "type": "page"
+    },
+    {
+      "routePath": "/sign-up",
+      "file": "app/(auth)/sign-up/page.tsx",
+      "type": "page"
+    },
+    {
+      "routePath": "/tape",
+      "file": "app/(app)/tape/page.tsx",
+      "type": "page"
+    },
+    {
+      "routePath": "/terminal",
+      "file": "app/(app)/terminal/page.tsx",
+      "type": "page"
+    },
+    {
+      "routePath": "/tma",
+      "file": "app/tma/page.tsx",
+      "type": "page"
+    },
+    {
+      "routePath": "/tma",
+      "file": "app/tma/layout.tsx",
+      "type": "layout"
+    },
+    {
+      "routePath": "/trader/[who]",
+      "file": "app/trader/[who]/page.tsx",
+      "type": "page"
+    },
+    {
+      "routePath": "/two-factor",
+      "file": "app/(auth)/two-factor/page.tsx",
+      "type": "page"
+    },
+    {
+      "routePath": "/wallet",
+      "file": "app/(app)/wallet/page.tsx",
+      "type": "page"
+    },
+    {
+      "routePath": "/whales",
+      "file": "app/whales/page.tsx",
+      "type": "page"
+    }
+  ],
+  "findings": [
+    {
+      "pattern": "force-dynamic",
+      "file": "app/(app)/admin/gaming/page.tsx",
+      "line": 4,
+      "evidence": "export const dynamic = \"force-dynamic\"",
+      "trafficIndependent": false,
+      "route": "/admin/gaming"
+    },
+    {
+      "pattern": "force-dynamic",
+      "file": "app/(app)/alerts/page.tsx",
+      "line": 6,
+      "evidence": "export const dynamic = \"force-dynamic\"",
+      "trafficIndependent": false,
+      "route": "/alerts"
+    },
+    {
+      "pattern": "force-dynamic",
+      "file": "app/(app)/automation/page.tsx",
+      "line": 6,
+      "evidence": "export const dynamic = \"force-dynamic\"",
+      "trafficIndependent": false,
+      "route": "/automation"
+    },
+    {
+      "pattern": "force-dynamic",
+      "file": "app/(app)/copy/page.tsx",
+      "line": 4,
+      "evidence": "export const dynamic = \"force-dynamic\"",
+      "trafficIndependent": false,
+      "route": "/copy"
+    },
+    {
+      "pattern": "force-dynamic",
+      "file": "app/(app)/leaderboard/page.tsx",
+      "line": 4,
+      "evidence": "export const dynamic = \"force-dynamic\"",
+      "trafficIndependent": false,
+      "route": "/leaderboard"
+    },
+    {
+      "pattern": "force-dynamic",
+      "file": "app/(app)/portfolio/page.tsx",
+      "line": 6,
+      "evidence": "export const dynamic = \"force-dynamic\"",
+      "trafficIndependent": false,
+      "route": "/portfolio"
+    },
+    {
+      "pattern": "force-dynamic",
+      "file": "app/(app)/radar/page.tsx",
+      "line": 6,
+      "evidence": "export const dynamic = \"force-dynamic\"",
+      "trafficIndependent": false,
+      "route": "/radar"
+    },
+    {
+      "pattern": "force-dynamic",
+      "file": "app/(app)/referrals/page.tsx",
+      "line": 4,
+      "evidence": "export const dynamic = \"force-dynamic\"",
+      "trafficIndependent": false,
+      "route": "/referrals"
+    },
+    {
+      "pattern": "force-dynamic",
+      "file": "app/(app)/terminal/page.tsx",
+      "line": 6,
+      "evidence": "export const dynamic = \"force-dynamic\"",
+      "trafficIndependent": false,
+      "route": "/terminal"
+    },
+    {
+      "pattern": "force-dynamic",
+      "file": "app/event/[event_id]/page.tsx",
+      "line": 8,
+      "evidence": "export const dynamic = \"force-dynamic\"",
+      "trafficIndependent": false,
+      "route": "/event/[event_id]"
+    },
+    {
+      "pattern": "headers-in-page",
+      "file": "app/layout.tsx",
+      "line": 39,
+      "evidence": "cookies()",
+      "trafficIndependent": false,
+      "route": "/"
+    },
+    {
+      "pattern": "force-dynamic",
+      "file": "app/leaderboard/[board]/c/[category]/page.tsx",
+      "line": 13,
+      "evidence": "export const dynamic = \"force-dynamic\"",
+      "trafficIndependent": false,
+      "route": "/leaderboard/[board]/c/[category]"
+    },
+    {
+      "pattern": "force-dynamic",
+      "file": "app/leaderboard/[board]/page.tsx",
+      "line": 9,
+      "evidence": "export const dynamic = \"force-dynamic\"",
+      "trafficIndependent": false,
+      "route": "/leaderboard/[board]"
+    },
+    {
+      "pattern": "force-dynamic",
+      "file": "app/leaderboard/[board]/w/[window]/page.tsx",
+      "line": 14,
+      "evidence": "export const dynamic = \"force-dynamic\"",
+      "trafficIndependent": false,
+      "route": "/leaderboard/[board]/w/[window]"
+    },
+    {
+      "pattern": "force-dynamic",
+      "file": "app/market/[market]/page.tsx",
+      "line": 12,
+      "evidence": "export const dynamic = \"force-dynamic\"",
+      "trafficIndependent": false,
+      "route": "/market/[market]"
+    },
+    {
+      "pattern": "force-dynamic",
+      "file": "app/markets/page.tsx",
+      "line": 6,
+      "evidence": "export const dynamic = \"force-dynamic\"",
+      "trafficIndependent": false,
+      "route": "/markets"
+    },
+    {
+      "pattern": "force-dynamic",
+      "file": "app/trader/[who]/page.tsx",
+      "line": 12,
+      "evidence": "export const dynamic = \"force-dynamic\"",
+      "trafficIndependent": false,
+      "route": "/trader/[who]"
+    },
+    {
+      "pattern": "force-dynamic",
+      "file": "app/whales/page.tsx",
+      "line": 6,
+      "evidence": "export const dynamic = \"force-dynamic\"",
+      "trafficIndependent": false,
+      "route": "/whales"
+    }
+  ],
+  "scannerMetadata": [
+    {
+      "id": "unoptimized-image",
+      "title": "Image optimization gap (raw <img>, global flag, missing sizes, or SVG mis-routed)",
+      "severity": "high",
+      "billingDimension": "image-optimization",
+      "trafficIndependent": false
+    },
+    {
+      "id": "force-dynamic",
+      "title": "export const dynamic = 'force-dynamic'",
+      "severity": "medium",
+      "billingDimension": "function-duration",
+      "trafficIndependent": false
+    },
+    {
+      "id": "middleware-broad-matcher",
+      "title": "Middleware matcher missing or too broad",
+      "severity": "high",
+      "billingDimension": "edge-requests",
+      "trafficIndependent": true
+    },
+    {
+      "id": "missing-cache-headers",
+      "title": "Cacheable route or fetch with no caching (Cache-Control absent or no-store)",
+      "severity": "medium",
+      "billingDimension": "edge-requests",
+      "trafficIndependent": false
+    },
+    {
+      "id": "max-age-without-s-maxage",
+      "title": "Cache-Control: max-age without s-maxage",
+      "severity": "medium",
+      "billingDimension": "edge-requests",
+      "trafficIndependent": false
+    },
+    {
+      "id": "headers-in-page",
+      "title": "Dynamic API call forcing dynamic rendering",
+      "severity": "medium",
+      "billingDimension": "function-duration",
+      "trafficIndependent": false
+    },
+    {
+      "id": "source-maps-production",
+      "title": "Source maps enabled in production",
+      "severity": "low",
+      "billingDimension": "edge-requests",
+      "trafficIndependent": true
+    },
+    {
+      "id": "prisma-include-tree-bloat",
+      "title": "Deep Prisma include tree (3+ levels)",
+      "severity": "high",
+      "billingDimension": "function-duration",
+      "trafficIndependent": false
+    },
+    {
+      "id": "sveltekit-prerender-missing",
+      "title": "SvelteKit page without explicit prerender / ISR config",
+      "severity": "low",
+      "billingDimension": "function-duration",
+      "trafficIndependent": false
+    },
+    {
+      "id": "large-static-asset",
+      "title": "Large file in public/",
+      "severity": "medium",
+      "billingDimension": "bandwidth",
+      "trafficIndependent": true
+    },
+    {
+      "id": "edge-heavy-import",
+      "title": "Heavy / node-only import inside edge-runtime file",
+      "severity": "high",
+      "billingDimension": "function-duration",
+      "trafficIndependent": true
+    },
+    {
+      "id": "use-cache-date-stamp",
+      "title": "new Date() / Date.now() / Math.random() inside a 'use cache' file",
+      "severity": "high",
+      "billingDimension": "isr",
+      "trafficIndependent": false
+    },
+    {
+      "id": "cache-components-suspense-dedupe",
+      "title": "'use cache' with multiple Suspense boundaries on the same data",
+      "severity": "medium",
+      "billingDimension": "function-duration",
+      "trafficIndependent": false
+    },
+    {
+      "id": "turbo-force-bypass",
+      "title": "Turborepo cache bypass on a monorepo",
+      "severity": "high",
+      "billingDimension": "build",
+      "trafficIndependent": true
+    },
+    {
+      "id": "region-pin-in-config",
+      "title": "Function region pinned in config",
+      "severity": "low",
+      "billingDimension": "function-duration",
+      "trafficIndependent": true
+    }
+  ],
+  "_provenance": {
+    "tool": "skills/vercel-agent-skills/skills/vercel-optimize/scripts/scan-codebase.mjs",
+    "scanned": "web",
+    "when": "2026-09-27",
+    "metrics": "NOT COLLECTED - Vercel credential returned 403 for team scope (see plans/vercel-review.md)",
+    "findingRule": "every finding carries trafficIndependent=false, so the skill's gate drops them pending route-level traffic evidence"
+  }
+}
