@@ -26,6 +26,7 @@ import json
 import os
 import pathlib
 import re
+import sqlite3
 import subprocess
 import sys
 import time
@@ -34,6 +35,22 @@ from importlib.util import module_from_spec, spec_from_file_location
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 VERIF = ROOT / "docs" / "verification"
+
+
+def _append_only_probe(con, table: str) -> bool:
+    """True when the generated triggers refuse an UPDATE and a DELETE on `table`.
+
+    Reads the shipped DDL (the sqlite subset, whose triggers are generated from the builder's APPEND_ONLY list)
+    rather than asserting the promise: a table that could be emptied is a replay ledger that can be re-armed.
+    """
+    refused = 0
+    for statement in ("UPDATE %s SET event_type='x' WHERE event_id='evt_probe_1'" % table,
+                      "DELETE FROM %s WHERE event_id='evt_probe_1'" % table):
+        try:
+            con.execute(statement)
+        except Exception:  # noqa: BLE001 — any refusal is the pass; the class differs per driver
+            refused += 1
+    return refused == 2
 
 
 def _load(name: str, path: pathlib.Path):
@@ -1084,12 +1101,95 @@ def section_logic(g: Gate, facts: dict, s: Surface) -> None:
                          if any(k in pth for k in ("stripe", "billing", "webhook", "payment", "checkout"))))
     stars = "successful_payment" in (ROOT / "services" / "api" / "app.py").read_text()
     facts["logic"]["payment_surface"] = {"declared_paths": declared or "none", "stars_handler": stars}
-    g.open("NEITHER STRIPE NOR TELEGRAM-STARS FULFILMENT EXISTS YET, so payment-webhook forgery has no target",
-           "both arrive as attacker-reachable POSTs, so before either ships: verify the signature over the RAW "
-           "bytes with a constant-time compare (Stripe's `Stripe-Signature` includes a timestamp — refuse outside "
-           "a 5-minute tolerance and store every event id to refuse replays; Telegram's is the secret header plus "
-           "`successful_payment` arriving only in an update, never in a form post), and never read the amount, the "
-           "user id or the plan from the body without cross-checking the record the provider keeps")
+    #    This was an OPEN item for the whole of P14-P16: "neither Stripe nor Stars fulfilment exists yet, so
+    #    payment-webhook forgery has no target". The target is what the OPEN named, so the close is the target's
+    #    *absence being enforced* rather than asserted — `packages/polygm_core/payments/` now carries both
+    #    verifiers, and the checks below run them rather than reading them. Each one is one of the requirements
+    #    the OPEN listed, as an attack that has to fail.
+    #
+    #    The lesson that made this the right close is the CSV writer's: a control is closed when something can
+    #    exercise it, not when a document promises it. There is still no payment product, and the probe says so
+    #    in the facts — what changed is that the day one is added, the way in is already the way that refuses.
+    from polygm_core.payments import replay as _replay
+    from polygm_core.payments import webhooks as _pay
+
+    _secret = "whsec_p14_probe"
+    _body = json.dumps({"id": "evt_probe_1", "type": "checkout.session.completed",
+                        "data": {"object": {"amount_total": 2500, "currency": "usd"}}},
+                       separators=(",", ":")).encode()
+    _at_s = int(time.time())
+    _now_ms = _at_s * 1000
+    _good = _pay.sign_stripe(_body, _secret, _at_s)
+
+    #    A ledger on the probe's own connection, so the replay checks exercise the shipped DDL and the generated
+    #    append-only triggers rather than a mock of them.
+    #    The shipped DDL, not a copy of it: the transpiled migration is idempotent (`IF NOT EXISTS`), and the
+    #    append-only triggers are the generated ones for this table — the probe's connection already carries the
+    #    rest of the schema, so replaying every migration would fail on the first table that exists.
+    _lite_dir = ROOT / "db" / "migrations-sqlite"
+    con.executescript((_lite_dir / "0022_payment_events.sql").read_text())
+    for _stmt in [s for s in (_lite_dir / "_append_only.sql").read_text().splitlines() if "payment_events" in s]:
+        try:
+            con.execute(_stmt)
+        except sqlite3.OperationalError:
+            pass  # already triggered on this connection
+    _claim = lambda e, pr, at: _replay.claim_event(con, e, pr, at)  # noqa: E731 — the callable verify_stripe takes
+
+    _valid = _pay.verify_stripe(_body, _good, _secret, at_ms=_now_ms, claim=_claim)
+    _forged = _pay.verify_stripe(_body.replace(b"2500", b"250000"),
+                                 _pay.sign_stripe(_body, _secret, _at_s), _secret, at_ms=_now_ms)
+    _wrong_secret = _pay.verify_stripe(_body, _good, "whsec_somebody_elses_endpoint", at_ms=_now_ms)
+    _raw_bytes = _pay.verify_stripe(json.dumps(json.loads(_body), indent=2).encode(), _good, _secret, at_ms=_now_ms)
+    _stale = _pay.verify_stripe(_body, _good, _secret, at_ms=(_at_s + _pay.TOLERANCE_S + 1) * 1000)
+    _future = _pay.verify_stripe(_body, _pay.sign_stripe(_body, _secret, _at_s + 3600), _secret, at_ms=_now_ms)
+    _replay_out = _pay.verify_stripe(_body, _good, _secret, at_ms=_now_ms + 1000, claim=_claim)
+    _charged = con.execute("SELECT COUNT(*) FROM payment_events WHERE event_id='evt_probe_1'").fetchone()[0]
+    facts["logic"]["payment_webhooks"] = {
+        "valid": _valid.as_dict(), "forged": _forged.reason, "wrong_secret": _wrong_secret.reason,
+        "reencoded": _raw_bytes.reason, "stale": _stale.reason, "future": _future.reason,
+        "replay": _replay_out.reason, "ledger_rows": int(_charged),
+    }
+    g.check("a correctly signed Stripe event verifies, and the same secret used by a different endpoint "
+            "does not (%s vs %s)" % (_valid.reason, _wrong_secret.reason),
+            _valid.ok and _wrong_secret.reason == "bad_signature")
+    g.check("a tampered body, and a body re-encoded after parsing, are both refused (%s / %s)"
+            % (_forged.reason, _raw_bytes.reason),
+            _forged.reason == "bad_signature" and _raw_bytes.reason == "bad_signature")
+    g.check("the 5-minute window is enforced in both directions (%s / %s)" % (_stale.reason, _future.reason),
+            _stale.reason == "timestamp_outside_tolerance" and _future.reason == "timestamp_in_the_future")
+    g.check("a replayed delivery is refused by the ledger and wrote exactly one row (%s, %d row(s))"
+            % (_replay_out.reason, _charged),
+            _replay_out.reason == "replay" and int(_charged) == 1)
+    g.check("the ledger is append-only, so a replay cannot be re-armed by deleting its row",
+            _append_only_probe(con, "payment_events"))
+    _stars_ok = _pay.stars_payment({"update_id": 1, "message": {
+        "from": {"id": 7}, "successful_payment": {"telegram_payment_charge_id": "tg_1", "total_amount": 250}}})
+    _stars_post = _pay.stars_payment({"successful_payment": {"telegram_payment_charge_id": "tg_1",
+                                                             "total_amount": 250}})
+    _secret_hdr = (_pay.verify_update_secret("s3cret", "s3cret"), _pay.verify_update_secret("s3cre", "s3cret"),
+                   _pay.verify_update_secret("anything", ""))
+    facts["logic"]["stars_payment"] = {"in_update": _stars_ok.reason, "as_form_post": _stars_post.reason,
+                                       "secret_header": list(_secret_hdr)}
+    g.check("a Stars payment is read only from inside a verified update, never from its own POST body (%s / %s)"
+            % (_stars_ok.reason, _stars_post.reason),
+            _stars_ok.ok and _stars_post.reason == "payment_outside_a_message")
+    g.check("the bot webhook's secret header is compared constant-time and an unconfigured secret refuses "
+            "everything (%s)" % (_secret_hdr,),
+            _secret_hdr == (True, False, False))
+    _record = {"user_id": "u_probe", "plan": "pro", "currency": "usd"}
+    _match = _pay.fulfilment(provider_amount_micro=2500, provider_currency="usd", recorded=_record,
+                             recorded_amount_micro=2500)
+    _mismatch = _pay.fulfilment(provider_amount_micro=9900, provider_currency="usd", recorded=_record,
+                                recorded_amount_micro=2500)
+    _unknown = _pay.fulfilment(provider_amount_micro=2500, provider_currency="usd", recorded=None,
+                               recorded_amount_micro=2500)
+    facts["logic"]["fulfilment"] = {"match": _match.as_dict(), "mismatch": _mismatch.reason,
+                                    "unknown_intent": _unknown.reason}
+    g.check("fulfilment cross-checks the amount against our own record, takes the user and plan from that "
+            "record, and refuses an event for something we never wrote down (%s / %s / user=%s)"
+            % (_mismatch.reason, _unknown.reason, _match.user_id),
+            _match.ok and _mismatch.reason == "amount_mismatch" and _unknown.reason == "no_recorded_intent"
+            and _match.user_id == "u_probe")
     #    The two gaps this OPEN item named are closed, and closed by re-test rather than by assertion: the same
     #    account applies its own link a second time and the audit line must say what state the code is in (not
     #    only whether this call flipped it), then the review that the first self-referral opened is *cleared*

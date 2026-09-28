@@ -50,7 +50,11 @@ APPEND_ONLY = ["cash_ledger", "fills", "tape_trades", "builder_attribution", "po
                # `referral_events` (P04's sketch) is GONE as of 0016 and is deliberately absent from this list:
                # an append-only promise about a dropped table is a promise about nothing.
                "referral_accruals",
-               "telegram_broadcasts", "telegram_kill_state"]
+               "telegram_broadcasts", "telegram_kill_state",
+               # P16/P14: the payment-webhook replay ledger (0022). A row a delete can remove is a replay that
+               # will be accepted a second time, so the table is append-only for the same reason the evidence
+               # tables are — and this is the one where the consequence is money rather than an audit trail.
+               "payment_events"]
 API_TABLES = {"markets", "events", "tokens", "book_levels", "tape_trades", "users", "idempotency_keys",
               "kill_switch_state", "order_intents", "orders", "fills", "cash_ledger", "position_lots",
               "position_snapshots", "builder_attribution", "feature_flags", "flag_audit", "audit_log",

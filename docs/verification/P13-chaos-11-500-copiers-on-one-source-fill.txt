@@ -7,14 +7,14 @@ verdict: PASS
 elapsed: 1.2 s
 
 500 configured copiers, 500 outcomes, 500 copied
-fan-out: 115 ms total (0.23 ms per copier), 500 intents queued
+fan-out: 137 ms total (0.27 ms per copier), 500 intents queued
 aggregate notional: $6375.00 across 500 orders, largest $12.75 (per-trade ceiling $25.00)
 replay of the same source fill: 0 new intents
-drained in 400 claim cycle(s), 628 ms wall clock (1.3 ms per order); max 5 per cycle (batch_size=5)
-venue filled 500 live order(s); booked in 2 reconciler pass(es), 179 ms — 500 of 500 fills in the ledger
+drained in 400 claim cycle(s), 606 ms wall clock (1.2 ms per order); max 5 per cycle (batch_size=5)
+venue filled 500 live order(s); booked in 2 reconciler pass(es), 172 ms — 500 of 500 fills in the ledger
 states: {"submitted": 500}; venue fills: 500 worth $6375.00
   lifecycle: 10 checks, est fees 0.1275
   lifecycle: on the book
-  lifecycle: payload 00766e93d5d7
-  lifecycle: payload 019f3c701122
+  lifecycle: payload 001134e0c9cc
+  lifecycle: payload 006f4881e79b
 

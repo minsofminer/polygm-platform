@@ -28,7 +28,8 @@
     "leaderboard_exclusions",
     "referral_accruals",
     "telegram_broadcasts",
-    "telegram_kill_state"
+    "telegram_kill_state",
+    "payment_events"
   ],
   "tables": [
     "address_allowlist",
@@ -98,6 +99,7 @@
     "order_notifications",
     "orders",
     "password_credentials",
+    "payment_events",
     "position_lots",
     "position_snapshots",
     "public_page_blocks",
@@ -335,6 +337,7 @@
         "partial/expression index: CREATE INDEX IF NOT EXISTS telegram_outbox_claim_ix ON telegram_outbox",
         "partial/expression index: CREATE UNIQUE INDEX IF NOT EXISTS telegram_outbox_dedupe_ix ON telegra",
         "PG-only statement: CREATE TRIGGER append_only_telegram_broadcasts BEFORE UPDATE OR DELETE ON tele",
+        "PG-only statement: CREATE TRIGGER append_only_telegram_kill_state BEFORE UPDATE OR DELETE ON tele",
         "PG-only statement: DO $$"
       ],
       "check_clauses_reordered": []
@@ -348,6 +351,13 @@
     },
     "0021_executor_state.sql": {
       "dropped": [],
+      "check_clauses_reordered": []
+    },
+    "0022_payment_events.sql": {
+      "dropped": [
+        "PG-only statement: CREATE TRIGGER append_only_payment_events BEFORE UPDATE OR DELETE ON payment_e",
+        "PG-only statement: DO $$"
+      ],
       "check_clauses_reordered": []
     }
   }

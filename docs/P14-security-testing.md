@@ -128,11 +128,35 @@ purpose**. Every probe in it is made by the rightful owner of a qualified accoun
 the kit names: a user attacking the venue's rules, the risk gate, or another user through the product's own
 surfaces.
 
-**77 checks, 0 failures, 1 OPEN** (`docs/verification/P14-attack-surface.{txt,json}`). The one remaining OPEN is a
-*latent surface* rather than a soft pass — a payment-fulfilment path that does not exist yet — and it is listed at the
-end of the record with the exact work it needs on the day it ships. Every finding this phase made *about the
-product's own detectors* has since been closed, the last two as changes to the product rather than to the probe: the
-close ceiling (a risk-review decision, in the gate) and the tax export's writer (below).
+**85 checks, 0 failures, 0 OPEN** (`docs/verification/P14-attack-surface.{txt,json}`).
+
+#### The last OPEN, and how it closed
+
+For the whole of P14–P16 this record carried one OPEN: *"neither Stripe nor Telegram-Stars fulfilment exists yet, so
+payment-webhook forgery has no target"* — with the requirements for the day either shipped attached to it. It closed
+the same way the CSV writer did, by **making the target exercise-able rather than waiting for it**:
+`packages/polygm_core/payments/` now carries both verifiers, `db/migrations/0022_payment_events.sql` carries the
+replay ledger, and the probe runs nine checks against them instead of recording an absence.
+
+| Requirement the OPEN named | The check that enforces it |
+| --- | --- |
+| verify over the **raw bytes** | a body re-encoded after parsing is refused (`bad_signature`) while the original bytes verify |
+| **constant-time** compare | every `v1=` candidate is compared, accumulating rather than returning on the first match, so timing says nothing about which matched (asserted over the function body) |
+| refuse outside a **5-minute** tolerance | five minutes minus a second verifies; five minutes plus a second is `timestamp_outside_tolerance`; an hour in the future is `timestamp_in_the_future` |
+| **store every event id** to refuse replays | the same delivery twice: one `ok`, one `replay`, exactly one row in `payment_events` |
+| the ledger cannot be re-armed | the generated append-only triggers refuse an UPDATE and a DELETE, so a replayed event cannot be un-claimed |
+| Stars arrives **inside an update** | `successful_payment` at the top level of a body is `payment_outside_a_message`; only `message.successful_payment` with a charge id is read |
+| the bot secret header is authenticated | constant-time compare; an unconfigured secret refuses everything |
+| **never read** the amount, user or plan from the body | fulfilment requires the provider's figure to equal *our* recorded amount and currency, returns the user and plan from that record, and refuses an event for something we never wrote down |
+
+Nothing in that list is hypothetical any more, and nothing in it is trusted to a document: `tests/test_payment_webhooks.py`
+carries 31 cases and the probe runs the same controls end to end against the shipped DDL. There is still **no payment
+product** — no route, no checkout, no Stars price — and that is the honest state: what exists is the gate every
+future payment route has to come through, built while the cost of building it was zero.
+
+Every finding this phase made *about the product's own detectors* has now been closed, the last three as changes to
+the product rather than to the probe: the close ceiling (a risk-review decision, in the gate), the tax export's
+writer, and the payment-webhook gate above.
 
 #### Trading: what a bad order does
 

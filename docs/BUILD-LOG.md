@@ -1207,3 +1207,59 @@ short-circuit, and "the API is down" rendering the shell instead of a 500.
 **Verified:** web **70 files / 627 tests**, `tsc` clean, `i18n-check` ok (999 keys), e2e **13/13** for the new spec
 and 18/26 overall with the remainder marked.
 
+---
+
+## The last P14 OPEN closes, and it closes by being an attack that fails · 2026-09-28
+
+**The item.** For the whole of P14–P16 the attack-surface record carried one OPEN: *"neither Stripe nor
+Telegram-Stars fulfilment exists yet, so payment-webhook forgery has no target"* — with the requirements for the day
+either ships attached to it (raw-bytes signature, constant-time compare, a five-minute window, every event id
+stored against replays, Stars only ever inside a verified update, and never reading the amount, the user or the plan
+from the body).
+
+**Why waiting was the wrong call.** The OPEN named its own target: the day a payment route ships, the way in is
+whatever the first version of that handler does. Building the gate while there is no product means there is no
+temptation to bend it, no deadline to ship under, and no cost — and the CSV writer's closure had already taught the
+lesson this one follows: **a control is closed when something can exercise it, not when a document promises it.**
+So the close is the opposite of a promise: nine checks in the probe that run the control and require each attack to
+fail.
+
+**What now exists.** `packages/polygm_core/payments/` carries the two verifiers, written against the requirements
+rather than from memory:
+
+* **`verify_stripe`** hashes `"<timestamp>.<raw body>"` — the bytes that arrived, with no JSON parse anywhere on the
+  verification path, because the tempting refactor (parse first so the handler can read `type`) is exactly what
+  breaks the MAC for every honest request and invites "fixing" it by verifying a reconstruction of the request.
+  It compares **every** `v1=` candidate with `hmac.compare_digest` and accumulates instead of returning early, so
+  the response time says nothing about *which* signature matched during a secret rotation. The five-minute window
+  is enforced in both directions, and a `str` body is refused outright rather than re-encoded and hoped over.
+* **The replay ledger** is `db/migrations/0022_payment_events.sql`, keyed on the provider's own event id, claimed by
+  **INSERT** rather than by a prior SELECT — a read-then-write lets two concurrent deliveries both see "not seen" and
+  both fulfil. It is append-only, registered in the builder's `APPEND_ONLY` list, so a replayed event cannot be
+  un-claimed by deleting its row; the P11 gate's c27 checks both halves.
+* **`stars_payment`** reads `successful_payment` only from inside a message of a verified update, and refuses the
+  shape somebody invents when they build a payment endpoint and want the same field to arrive as its own POST.
+* **`fulfilment`** is the only function that can say yes, and it says yes by cross-checking the provider's amount
+  against the record we already hold, returning the **user and plan from that record**. The event's payload is not
+  an input to the decision.
+
+**The probe result.** `P14 ATTACK SURFACE: PASS — 85 checks passed, 0 failed, 0 OPEN` (was 77/0/1), recorded in
+`docs/verification/P14-attack-surface.{txt,json}`. The gate's D1 row is now **PASS — 85 passed, 0 failed, 0 open**.
+Thirty-one unit cases live in `tests/test_payment_webhooks.py`, including two that read the implementation: that the
+candidate loop does not return early, and that the raw bytes are hashed before anything parses them — because those
+are the two places a later "simplification" would quietly remove the control.
+
+**One honest note about the surface.** There is still no payment product: no route, no checkout, no Stars price. A
+test asserts the *absence* of a provider route in `services/api/app.py`, so the day one is added it has to come
+through this package. The gate is real; the thing it guards does not exist yet, and the record says both.
+
+**Also this block.** `p11` 30/30 and `p08` 16/16 needed `.next` and `node_modules` reinstalled first — the workspace
+reset strips both, and the resulting "server exited during boot" reads like a code regression until you check. P04's
+secret scan caught my own test constant (`SECRET = "whsec_test_do_not_use"`) because `whsec_` is Stripe's real
+endpoint-secret prefix and it looked like a key; the placeholder is now short and obviously not one, rather than an
+allowlist entry — an exemption that exists because a test constant resembles a credential is how a scanner stops
+being a scanner.
+
+**Verified.** unittest **1574 OK**, pytest **1594 passed** (+31 each), lint-rules 192 files / 0 findings, P04 56/56,
+P05 14/14, P11 30/30, `build-sqlite-migrations --check` clean, gate document regenerated and `--check` matching.
+

@@ -116,3 +116,7 @@ CREATE TRIGGER append_only_telegram_broadcasts_delete BEFORE DELETE ON telegram_
 CREATE TRIGGER append_only_telegram_kill_state_update BEFORE UPDATE ON telegram_kill_state BEGIN SELECT RAISE(ABORT,'append-only table: telegram_kill_state is not updatable'); END;
 
 CREATE TRIGGER append_only_telegram_kill_state_delete BEFORE DELETE ON telegram_kill_state BEGIN SELECT RAISE(ABORT,'append-only table: telegram_kill_state is not deletable'); END;
+
+CREATE TRIGGER append_only_payment_events_update BEFORE UPDATE ON payment_events BEGIN SELECT RAISE(ABORT,'append-only table: payment_events is not updatable'); END;
+
+CREATE TRIGGER append_only_payment_events_delete BEFORE DELETE ON payment_events BEGIN SELECT RAISE(ABORT,'append-only table: payment_events is not deletable'); END;
