@@ -43,7 +43,8 @@ export function EventView({
     setLoading(true);
     const out = await request<BookPayload & Record<string, unknown>>({
       key: "book",
-      params: { market_id: marketId, depth: 400 },
+      params: { market_id: marketId },
+      query: { depth: 400 },
     });
     setBook(out.ok ? out.data : null);
     setLoading(false);

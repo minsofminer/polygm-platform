@@ -243,6 +243,15 @@ body {
     grid-template-columns: minmax(0, 1fr);
     padding-block-end: var(--pgm-space-16);
   }
+
+  /* The tab bar is fixed over the bottom of the page, so anything the browser scrolls into view — a focused
+     field, an anchor, a control the test or the user reached for — can land underneath it. `padding-block-end`
+     on the frame reserves room at the *end of the document*; `scroll-padding` reserves it at the end of every
+     scroll, which is the half that was missing. Found by the mobile browser suite, where the withdrawal
+     ladder's second "Continue" was clickable and covered at the same time. */
+  html {
+    scroll-padding-block-end: calc(var(--pgm-space-16) + env(safe-area-inset-bottom, 0px));
+  }
 }
 
 .tab {

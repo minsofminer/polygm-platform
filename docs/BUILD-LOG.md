@@ -1403,3 +1403,61 @@ exactly the two parked specs (`buy-flow`, `wallet-ceremony`) and are the next wo
 `/home/user/shots/` now show a real terminal — market titles, watchlist, trending, a trade ticket — instead of a
 blank page, and `/portfolio` renders its honest refusal panel, which is the correct product behaviour when the
 session cookie is synthetic.
+
+---
+
+## 2026-09-29 (second block) — the two parked specs, and the three defects that were holding them
+
+The web's remaining work was two specs that had been skipped since P13: `buy-flow` (the ticket posts the route's
+own shape; the ladder does not move when a price ticks) and `wallet-ceremony` (the withdrawal ladder cannot be
+skipped). Both were skipped because the browser "could not run here"; when it could, both failed, and the reasons
+turned out to be three real defects rather than three stale tests.
+
+**Defect 1 — the order-book ladder never rendered on any market page.** `depth: 400` was passed as a *path*
+parameter to a route whose path is `/v1/markets/{market_id}/book`, and `urlFor` throws on a param the path has no
+`{token}` for. The throw was swallowed by the poll that called it, so the screen kept its initial `null` and drew
+"no order book" — while the API was answering 200 to the same route with a 12-level ladder. The same mistake was
+in three more places (history on the market page, the event page's book, the terminal's history read). Fixed by
+sending query parameters as `query`, and pinned by `src/api/params.test.ts`, which walks the source for
+`key: …, params: {…}` pairs and fails on any key that is not a `{token}` of that route — with a planted misuse in
+the file so a regex that stopped matching fails there rather than passing everywhere.
+
+**Defect 2 — every id this database has 404'd on the app's own detail route.** `/market/<segment>` dispatches to
+two pages: the app's detail page for a `0x…` condition id, the public odds page for a slug. The predicate was
+`^0x[0-9a-fA-F]+$`, and the seed's markets are `0xM1`…`0xM159` — `M` is not hexadecimal, so **all 159** took the
+slug branch and 404'd. Every deep link the product makes (the dossier's positions table, the terminal, the
+buy-flow spec) pointed at a 404. The predicate now lives in `src/public/market-dispatch.ts` with its own test:
+the property that distinguishes the two pages is the `0x` prefix, not the hex-ness of what follows.
+
+**Defect 3 — the withdrawal ceremony did not exist.** `Withdraw.tsx` was a disabled form with a note saying the
+route was missing (launch item P08-L6), while the contract has described the whole route for four phases:
+`POST /v1/wallet/withdraw` takes `{amountUsdc, addressId, typedAmount, typedAddress, password, code}` and answers
+202 with a recorded request whose *signing* is the custody plane's job. The screen is now the ladder the contract
+describes and the spec asserts: an amount bounded by the ledger's own available figure, a destination that must
+come from the allowlist and must have finished its hold, the amount typed back, the address typed back
+character-exact, then the two locks — password and authenticator — in order, with the primary control unreachable
+until the step above it is satisfied. The arithmetic is in `src/screens/withdraw-logic.ts` (13 unit tests): micro
+to cents, `12.5` and `12.50` as the same amount, `12.51` as a different one, a near-miss address as a different
+destination, and the request body built from the integer the parser accepted rather than from the field's text.
+The wallet page now puts deposit/withdraw/addresses/keys behind a tablist, with the balance card above it — which
+is also what the spec's `getByRole("tab")` was asking for. And the success line says what is true: *recorded, not
+sent — the signing belongs to the custody plane and is not live yet. No money has moved.*
+
+**A fourth thing, found by the mobile project.** The phone layout has a fixed tab bar over the bottom edge, and a
+control scrolled into view lands under it. `scroll-padding-block-end` on the document now reserves that strip for
+every scroll, focus and anchor — the half that `padding-block-end` on the frame was not covering.
+
+**Where the two specs stand.** `wallet-ceremony` passes in both projects. `buy-flow` passes in both projects on
+two claims — the ticket refuses in words with **nothing on the wire** while the feed is down (the send control is
+`aria-disabled` with the reason as its title), and a real ask tick moves the row's digits without moving the row's
+box — and its third claim, the wire shape `{slug, side, amountUsdc}` to `/v1/orders/amount`, is **parked with its
+blocker named**: the gate is opened by the live feed, the feed needs `NEXT_PUBLIC_WS_ORIGIN` and there is no
+`/v1/live/tape` server, so no environment in this repository can reach a posting ticket. `test.fixme`, not a
+deleted test: the moment a transport exists it is the assertion that proves the client half of the order path.
+The spec's fixture is also now the payload's real shape — a truncated book is not a smaller book, it is a payload
+the client refuses to parse, and the first version of this fix rendered *no ladder at all* because of it.
+
+**Verified.** `npx tsc --noEmit` clean. `vitest run` **651 passed / 74 files** (from 629/71). `make web-build`
+passes with `sources-sha256: d81f2c7813d55e33`, no route over budget. The browser suite is **24 passed /
+10 skipped / 0 failed** — the four red tests that opened this block are gone, and the suite runs in 17 seconds
+instead of 2.6 minutes now that nothing is retrying against a timeout.

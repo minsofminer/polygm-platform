@@ -7,6 +7,7 @@ import { MarketView } from "@/screens/MarketView";
 import type { MarketDetail } from "@/screens/MarketRail";
 import { MarketPublicView } from "@/public/MarketView";
 import { PublicState } from "@/public/Chrome";
+import { isMarketId } from "@/public/market-dispatch";
 import type { PublicMarketPage } from "@/public/wire";
 
 export const dynamic = "force-dynamic";
@@ -14,20 +15,19 @@ export const dynamic = "force-dynamic";
 /**
  * `/market/<0x id>` (the app's detail page, P09) and `/market/<slug>` (the public odds page, D6).
  *
- * Two pages, one URL space, one segment: the id is a `0x…` string and a slug cannot start with `0x` without
- * being valid, so the dispatch is a property of the addresses rather than a preference. It exists as one file
- * because Next forbids two dynamic names at the same level — and because splitting them would let the two
- * pages drift apart about what "this market" is.
+ * Two pages, one URL space, one segment: the dispatch is a property of the address, not a preference. It exists
+ * as one file because Next forbids two dynamic names at the same level — and because splitting them would let
+ * the two pages drift apart about what "this market" is. The rule itself lives in `@/public/market-dispatch`
+ * with its own test, after the version that shipped here matched none of this database's ids.
  *
  * The public page is what a news story links to; the detail page is what the app links to. Both read the same
  * rows, and only the public one is written to be read without JavaScript.
  */
-const MARKET_ID = /^0x[0-9a-fA-F]+$/;
 
 export async function generateMetadata({ params }: { params: Promise<{ market: string }> }): Promise<Metadata> {
   const { market } = await params;
   const seg = decodeURIComponent(market);
-  if (MARKET_ID.test(seg)) return { title: seg };
+  if (isMarketId(seg)) return { title: seg };
   const read = await publicRead<PublicMarketPage>("GET", `/v1/public/market/${encodeURIComponent(seg)}`);
   if (read.ok === false) return { title: t("public.state.notFound"), robots: { index: false, follow: false } };
   const page = read.data;
@@ -44,7 +44,7 @@ export async function generateMetadata({ params }: { params: Promise<{ market: s
 export default async function MarketPage({ params }: { params: Promise<{ market: string }> }) {
   const { market } = await params;
   const seg = decodeURIComponent(market);
-  if (MARKET_ID.test(seg)) {
+  if (isMarketId(seg)) {
     const read = await serverRead<{ market: MarketDetail }>("GET", `/v1/markets/${encodeURIComponent(seg)}`);
     if (read.ok === false) {
       if (read.status === 404) notFound();

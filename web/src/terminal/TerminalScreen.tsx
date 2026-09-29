@@ -417,7 +417,7 @@ function useMarket(marketId: string): MarketRead {
     const [m, h, c] = await Promise.all([
       request<MarketDetail>({ key: "market", params: { market_id: marketId } }),
       request<{ holders: Holder[]; provenance: string; holderCount: number }>({ key: "holders", params: { market_id: marketId } }),
-      request<{ candles: Candle[] }>({ key: "history", params: { market_id: marketId, interval: "1h", limit: 200 } }),
+      request<{ candles: Candle[] }>({ key: "history", params: { market_id: marketId }, query: { interval: "1h", limit: 200 } }),
     ]);
     if (cancelled.current) return;
     const marks: number[] = [];

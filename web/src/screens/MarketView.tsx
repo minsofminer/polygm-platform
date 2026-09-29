@@ -44,7 +44,11 @@ export function MarketView({
   const loadBook = useCallback(async () => {
     const out = await request<BookPayload & Record<string, unknown>>({
       key: "book",
-      params: { market_id: market.id, depth: 400 },
+      // `depth` is a QUERY parameter, not a path segment: `urlFor` throws on a param the route has no
+      // `{token}` for, and `usePoll` swallows the throw — so the ladder rendered "no order book" on every
+      // market page while the API was answering 200. See `src/api/params.test.ts`.
+      params: { market_id: market.id },
+      query: { depth: 400 },
     });
     if (!out.ok) {
       setBook(null);
@@ -66,7 +70,8 @@ export function MarketView({
     void (async () => {
       const out = await request<{ candles: Candle[] }>({
         key: "history",
-        params: { market_id: market.id, interval, limit: HISTORY_LIMIT },
+        params: { market_id: market.id },
+        query: { interval, limit: HISTORY_LIMIT },
       });
       if (out.ok) setCandles(out.data.candles);
     })();
