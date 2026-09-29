@@ -8,6 +8,7 @@ import type { TraderDossier } from "@/terminal/wire";
 import { TraderView } from "@/public/TraderView";
 import { PublicState } from "@/public/Chrome";
 import type { PublicTraderPage } from "@/public/wire";
+import { siteUrl } from "@/public/site-origin";
 
 export const dynamic = "force-dynamic";
 
@@ -41,13 +42,13 @@ export async function generateMetadata({ params }: { params: Promise<{ who: stri
   return {
     title: `@${page.handle}`,
     description: `${page.headline.board}: rank ${page.headline.rank} of ${page.headline.rankedTotal}. ${page.notes.join(" ")}`,
-    alternates: { canonical: page.url },
+    alternates: { canonical: siteUrl(page.url) },
     // The API's own `robots` string, split into the object Next wants: the server decides indexability, and
     // this route does not get a second opinion about it.
     robots: page.robots.startsWith("index")
       ? { index: true, follow: true }
       : { index: false, follow: true },
-    openGraph: { type: "profile", url: page.url, siteName: page.card.brand },
+    openGraph: { type: "profile", url: siteUrl(page.url), siteName: page.card.brand },
   };
 }
 

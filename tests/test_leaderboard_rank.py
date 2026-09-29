@@ -247,6 +247,25 @@ class TheBoardsAndTheMethodologyTest(unittest.TestCase):
         held = [u for u in out["unranked"] if u["wallet"] == "w_mix"]
         self.assertIn("44% of this wallet's resolved markets are in Politics", " ".join(held[0]["reasons"]))
 
+    def test_the_category_board_reads_its_own_canonical_url_back(self):
+        """The published URL is lower-cased, so the query parameter arrives lower-cased.
+
+        `page_url` normalises a path segment, and the site reads that segment back into `category=` — so the
+        board's own canonical (`/leaderboard/category/c/politics`) asked the API for a category spelled
+        `politics` while this check demanded `Politics`. The result was a page published to crawlers that answered
+        422 to anyone who fetched it, and four dead URLs in the sitemap. The casing of a URL is not a fact about
+        the ranking; the stored spelling still is, because that is what rows are matched on.
+        """
+        specialist = wallet("w_pol", results=[500_000] * 20, category="Politics", categories=["Politics"] * 20)
+        out = lr.rank_board(board_id="category", wallets=[specialist], at_ms=AT, category="politics")
+        self.assertEqual(["w_pol"], [r["wallet"] for r in out["rows"]])
+        self.assertEqual("Politics", out["rows"][0]["category"])          # the vocabulary's own spelling comes back
+        for spelling in ("POLITICS", " politics ", "Politics"):
+            same = lr.rank_board(board_id="category", wallets=[specialist], at_ms=AT, category=spelling)
+            self.assertEqual(["w_pol"], [r["wallet"] for r in same["rows"]], spelling)
+        with self.assertRaises(ValueError):
+            lr.rank_board(board_id="category", wallets=[specialist], at_ms=AT, category="weather")
+
     def test_the_rising_board_measures_improvement_between_two_weeks(self):
         improving = wallet("w_up", results=[100_000] * 10 + [900_000] * 10)
         fading = wallet("w_down", results=[900_000] * 10 + [100_000] * 10)

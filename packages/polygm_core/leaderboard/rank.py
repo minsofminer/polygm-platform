@@ -294,9 +294,18 @@ def rank_board(*, board_id: str, wallets: list[dict], at_ms: int, limit: int = 1
         board["window"] = str(window)
     board["volumeWindow"] = board["window"] if board_id == "volume" else "lifetime"
     if board_id == "category":
-        if category not in bd.CATEGORIES:
+        # Matched case-insensitively, stored in the vocabulary's own spelling. The canonical URL this board
+        # publishes lower-cases its category (`page_url` normalises a path segment the way the site's route reads
+        # it back), so an exact-case check refused the board's own canonical: `/leaderboard/category/c/politics`
+        # was published to crawlers and answered 422 to whoever fetched it — the site's category page 404'd for
+        # everybody, and the sitemap advertised four URLs that could not be read. The casing of a query parameter
+        # is not a fact about the ranking, and the stored `category` must keep the seeded spelling because that is
+        # what the rows are matched on (`_category_rows`).
+        wanted = str(category or "").strip().lower()
+        match = next((c for c in bd.CATEGORIES if c.lower() == wanted), None)
+        if match is None:
             raise ValueError("category board needs one of %s" % (", ".join(bd.CATEGORIES),))
-        board["category"] = category
+        board["category"] = match
     # Copy farms need the whole population, not one wallet at a time: "derived from whom" is a question about the
     # other wallets' tapes.
     tapes = {str(w.get("wallet")): list(w.get("fills") or []) for w in wallets}

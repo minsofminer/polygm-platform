@@ -57,14 +57,20 @@ export const ROUTES = {
   },
   totpEnroll: { method: "POST", path: "/v1/auth/totp/enroll", built: true, whileMissing: "refuses", owner: "P07" },
   totpVerify: { method: "POST", path: "/v1/auth/totp/verify", built: true, whileMissing: "refuses", owner: "P07" },
-  markets: { method: "GET", path: "/v1/markets", built: true, whileMissing: "refuses", owner: "P05" },
-  market: { method: "GET", path: "/v1/markets/{market_id}", built: true, whileMissing: "refuses", owner: "P05" },
+  // The contract says `x-auth: none` for every route below, and the ledger had declared that for exactly one
+  // of them (`book`). The others were reached only through the session path, so a signed-out visitor got a 401
+  // from this hop for a read the API serves to anybody — `/markets` was the visible one: the site's own market
+  // list rendered "Something failed" for every stranger who clicked it. `anonymous` is the declaration that
+  // makes the proxy pass the read through, and `src/api/public-reads.test.ts` now cross-checks the whole
+  // ledger against the contract so the next public route cannot be added without it.
+  markets: { method: "GET", path: "/v1/markets", built: true, whileMissing: "refuses", owner: "P05", anonymous: true },
+  market: { method: "GET", path: "/v1/markets/{market_id}", built: true, whileMissing: "refuses", owner: "P05", anonymous: true },
   // `anonymous` on the book: the contract says `x-auth: none` for it, and the Mini App's read-only card cannot
   // price a market without it. The terminal screens that also read it live under `app/(app)/`, whose layout
   // redirects a signed-out visitor to /sign-in — the page gate, not this hop, is what protects them.
   book: { method: "GET", path: "/v1/markets/{market_id}/book", built: true, whileMissing: "refuses", owner: "P05", anonymous: true },
-  fills: { method: "GET", path: "/v1/markets/{market_id}/fills", built: true, whileMissing: "refuses", owner: "P05" },
-  tape: { method: "GET", path: "/v1/tape", built: true, whileMissing: "refuses", owner: "P05" },
+  fills: { method: "GET", path: "/v1/markets/{market_id}/fills", built: true, whileMissing: "refuses", owner: "P05", anonymous: true },
+  tape: { method: "GET", path: "/v1/tape", built: true, whileMissing: "refuses", owner: "P05", anonymous: true },
   // ---- P09's three read surfaces. Each is `built: true` because the gate's c1 asserts a built route is in
   // contracts/openapi.yaml, and each is declared HERE rather than called by path so a screen cannot reach a
   // route the ledger does not know about.
@@ -74,6 +80,9 @@ export const ROUTES = {
     built: true,
     whileMissing: "refuses",
     owner: "P09",
+    // `x-auth: none` in the contract (see the note above the market routes): this read is served to
+    // nobody in particular, and a public page reads it.
+    anonymous: true,
   },
   holders: {
     method: "GET",
@@ -81,6 +90,9 @@ export const ROUTES = {
     built: true,
     whileMissing: "refuses",
     owner: "P09",
+    // `x-auth: none` in the contract (see the note above the market routes): this read is served to
+    // nobody in particular, and a public page reads it.
+    anonymous: true,
   },
   // ---- P10's terminal surfaces. Each is `built: true` because the gate's c1 asserts a built route is in
   // contracts/openapi.yaml, and each is named here rather than called by path so a screen cannot reach a route
@@ -92,6 +104,9 @@ export const ROUTES = {
     built: true,
     whileMissing: "refuses",
     owner: "P10",
+    // `x-auth: none` in the contract (see the note above the market routes): this read is served to
+    // nobody in particular, and a public page reads it.
+    anonymous: true,
   },
   tapeFacets: {
     method: "GET",
@@ -99,6 +114,9 @@ export const ROUTES = {
     built: true,
     whileMissing: "refuses",
     owner: "P10",
+    // `x-auth: none` in the contract (see the note above the market routes): this read is served to
+    // nobody in particular, and a public page reads it.
+    anonymous: true,
   },
   whales: {
     method: "GET",
@@ -106,6 +124,9 @@ export const ROUTES = {
     built: true,
     whileMissing: "refuses",
     owner: "P10",
+    // `x-auth: none` in the contract (see the note above the market routes): this read is served to
+    // nobody in particular, and a public page reads it.
+    anonymous: true,
   },
   trader: {
     method: "GET",
@@ -113,6 +134,9 @@ export const ROUTES = {
     built: true,
     whileMissing: "refuses",
     owner: "P10",
+    // `x-auth: none` in the contract (see the note above the market routes): this read is served to
+    // nobody in particular, and a public page reads it.
+    anonymous: true,
   },
   copyConfigs: {
     method: "GET",
@@ -138,8 +162,8 @@ export const ROUTES = {
   // ---- P11 D3: the rating surfaces. `built: true` because the gate's c1 asserts a built route is in
   // contracts/openapi.yaml, and the contract has all four (checked by `tools/p11-gate-check.py` c1). Notes are
   // deliberately one line each: this ledger is loaded by EVERY route, so its copy is on every route's budget.
-  leaderboardRank: { method: "GET", path: "/v1/leaderboard/rank", built: true, whileMissing: "refuses", owner: "P11" },
-  leaderboardCompare: { method: "GET", path: "/v1/leaderboard/compare", built: true, whileMissing: "refuses", owner: "P11" },
+  leaderboardRank: { method: "GET", path: "/v1/leaderboard/rank", built: true, whileMissing: "refuses", owner: "P11", anonymous: true },
+  leaderboardCompare: { method: "GET", path: "/v1/leaderboard/compare", built: true, whileMissing: "refuses", owner: "P11", anonymous: true },
   // D4: the account's own standing on every board, and the identity its rows are published under. All three
   // USER-scoped, and all three one line for the same reason the D3 rows are: this ledger is on every route.
   leaderboardMe: { method: "GET", path: "/v1/leaderboard/me", built: true, whileMissing: "refuses", owner: "P11" },
@@ -378,6 +402,9 @@ export const ROUTES = {
     built: true,
     whileMissing: "refuses",
     owner: "P09",
+    // `x-auth: none` in the contract (see the note above the market routes): this read is served to
+    // nobody in particular, and a public page reads it.
+    anonymous: true,
   },
   createOrder: { method: "POST", path: "/v1/orders", built: true, whileMissing: "refuses", owner: "P06" },
   // P12 · the ticket's route: a slug, a side and a budget. The server resolves the outcome token, re-reads the best

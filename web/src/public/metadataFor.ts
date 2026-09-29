@@ -12,6 +12,7 @@
  * not a second opinion assembled in the route — and lets page files export only page things.
  */
 import type { Metadata } from "next";
+import { siteUrl } from "@/public/site-origin";
 
 export type PageMeta = {
   label?: string;
@@ -27,8 +28,9 @@ export function metadataFor(page: PageMeta): Metadata {
   return {
     title: `${page.label || page.board} leaderboard`,
     description: `${page.formula} Eligibility: ${page.gate}`,
-    alternates: { canonical: page.url },
+    // Re-based onto this site: the payload's URL names the API (see src/public/site-origin.ts).
+    alternates: { canonical: siteUrl(page.url) },
     robots: page.robots.startsWith("index") ? { index: true, follow: true } : { index: false, follow: true },
-    openGraph: { type: "website", url: page.url, siteName: page.card.brand },
+    openGraph: { type: "website", url: siteUrl(page.url), siteName: page.card.brand },
   };
 }

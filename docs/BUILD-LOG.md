@@ -1461,3 +1461,57 @@ the client refuses to parse, and the first version of this fix rendered *no ladd
 passes with `sources-sha256: d81f2c7813d55e33`, no route over budget. The browser suite is **24 passed /
 10 skipped / 0 failed** — the four red tests that opened this block are gone, and the suite runs in 17 seconds
 instead of 2.6 minutes now that nothing is retrying against a timeout.
+
+---
+
+## The block that makes a deployment worth looking at — signed-out reads, one site origin, and two crawl artefacts
+
+Written for a deployment request ("Deploy it on Vercel, I want to see it carefully") that is still blocked on an
+owner re-auth, this block is what a careful look would have found first. Three defects, all of them invisible to
+every test in the repository, all of them visible to a stranger with no cookies — which is exactly the visitor a
+deployment creates.
+
+**1. The site's own market list failed for every stranger.** `/markets` and `/market/*` rendered an error surface
+("Something failed", "we cannot load this page") for anybody without a `pgm_at` cookie, on both the local and the
+production-API configuration. The cause was one word missing from thirteen rows of the route ledger: the contract
+serves 23 operations with `x-auth: none`/`public`, the ledger had declared `anonymous: true` for six of them, and
+the web's own session hop answers **401 `UNAUTHENTICATED` ("this device has no session to refresh")** for any read
+it does not consider public. `pgm_at` was the workaround, never the fix. The thirteen are now flagged, derived
+directly from the contract rather than from memory, and `src/api/public-reads.test.ts` cross-checks the ledger
+against `contracts/openapi.yaml` **in both directions** so the next public route cannot be added without it.
+`src/auth/anonymous-read.test.ts` — which used to pin a hand-written list of six, the artefact that let this
+happen — now derives its expectation from the same reader (`src/api/contract-public.ts`).
+
+**2. Every public URL named the API.** `page.url`, the OG url, the share link and the four URLs inside the JSON-LD
+graph are built by the API from `PGM_PUBLIC_BASE`, which is unset on the deployment: so the canonical of
+`/market/mayor-2027` was `https://polygm-api.vercel.app/market/mayor-2027`, a JSON endpoint. A crawler would have
+been told the site's pages are duplicates of the API, and nothing would have errored. `src/public/site-origin.ts`
+re-bases all of them onto `NEXT_PUBLIC_SITE_ORIGIN` (the same variable that feeds `metadataBase`, so the two
+cannot drift), including a deep rebase for the JSON-LD graph that rewrites only URLs belonging to the payload's
+own origin — a partner link is copied through untouched.
+
+**3. The site published no sitemap and no robots.txt.** The API has served a 143-URL sitemap since P11 and nothing
+read it; `/sitemap.xml` and `/robots.txt` both 404'd on the site. Both now exist, built by
+`app/sitemap.xml/route.ts` and `app/robots.txt/route.ts` over the pure serialisers in `src/public/crawl.ts`. The
+first version of the sitemap shipped `http://0.0.0.0:3200` as the origin of all 143 URLs — Next fills
+`request.url` from the address the server bound — so `src/public/request-origin.ts` reads `x-forwarded-host` first
+and refuses a wildcard bind, which is the one origin that is never a site.
+
+**4. A defect found by reading the sitemap the site now serves: the category board's own canonical URL could not be
+fetched.** `page_url` lower-cases a path segment and the site reads that segment back as `category=`, but
+`rank_board` demanded the seeded spelling (`Politics`): `/leaderboard/category/c/politics` was published to
+crawlers and answered **422** to whoever fetched it, so four sitemap URLs were dead and the category pages 404'd
+for everybody. `rank.py` now matches a category case-insensitively and stores the vocabulary's own spelling —
+which it must, because that spelling is what `_category_rows` matches rows on. Unknown categories still refuse.
+
+**Verified.** `npx tsc --noEmit` clean. `vitest run` **682 passed / 78 files** (from 651/74: 31 new tests across
+four new files). `make web-build` passes with `sources-sha256: 82d24f82af463af9`. Playwright **24 passed /
+10 skipped / 0 failed**. The Python suite: **1575 tests, 0 failing** (run one process per file — the whole-suite
+single process is OOM-killed at ~681 tests in this 1.9 GB sandbox, which is a limit of the sandbox and not of the
+suite). Two suites that had appeared red were a **restored-sandbox** artifact, not a regression:
+`argon2-cffi`/`cryptography` were missing, so every security-plane path answered the correct 503
+`SECURITY_ENV_MISSING`; reinstalling them turned `test_security_plane.py` 59/59 and `test_wallet_api.py` 51/51
+green. Live checks: on a build started with `PGM_API_ORIGIN=https://polygm-api.vercel.app`, all ten public
+addresses (`/`, `/markets`, `/market/0xM1`, `/market/mayor-2027`, `/whales`, `/leaderboard/risk_adjusted`,
+`/sign-in`, `/sitemap.xml`, `/robots.txt`) answer 200 and render for a cookie-less visitor, and the sitemap's 143
+`<loc>`s name the site that served it.

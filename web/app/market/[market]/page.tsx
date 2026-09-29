@@ -9,6 +9,7 @@ import { MarketPublicView } from "@/public/MarketView";
 import { PublicState } from "@/public/Chrome";
 import { isMarketId } from "@/public/market-dispatch";
 import type { PublicMarketPage } from "@/public/wire";
+import { siteUrl } from "@/public/site-origin";
 
 export const dynamic = "force-dynamic";
 
@@ -34,10 +35,10 @@ export async function generateMetadata({ params }: { params: Promise<{ market: s
   return {
     title: page.question,
     description: `${page.odds.lastPrice ?? "no quote"} · ${page.quoteNote} · ${page.odds.ageText}`,
-    alternates: { canonical: page.url },
+    alternates: { canonical: siteUrl(page.url) },
     // A market page is always indexable (the odds are public data), and the API says so; this reads its answer.
     robots: page.robots.startsWith("index") ? { index: true, follow: true } : { index: false, follow: true },
-    openGraph: { type: "article", url: page.url, siteName: page.card.brand, title: page.question },
+    openGraph: { type: "article", url: siteUrl(page.url), siteName: page.card.brand, title: page.question },
   };
 }
 

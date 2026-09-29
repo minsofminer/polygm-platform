@@ -24,6 +24,7 @@ import { JsonLd, type Crumb } from "./JsonLd";
 import { PublicChrome } from "./Chrome";
 import { ShareCard } from "./ShareCard";
 import type { PublicTraderPage } from "./wire";
+import { originOf, rebaseDeep, siteUrl } from "@/public/site-origin";
 
 export function TraderView({ page, now }: { page: PublicTraderPage; now: number }) {
   const stamp = stampFrom(page as unknown as Record<string, unknown>);
@@ -134,8 +135,14 @@ export function TraderView({ page, now }: { page: PublicTraderPage; now: number 
         </ul>
       </section>
 
-      <ShareCard card={page.card} url={page.url} />
-      <JsonLd graph={page.structuredData} trail={trail} self={page.url} />
+      <ShareCard card={page.card} url={siteUrl(page.url)} />
+      {/* `self` and every URL inside the graph are re-based: JSON-LD requires absolute URLs, and the ones the
+          payload carries name the API. Both rewrites are no-ops once the API's own PGM_PUBLIC_BASE names this site. */}
+      <JsonLd
+        graph={rebaseDeep(page.structuredData, originOf(page.url))}
+        trail={trail}
+        self={siteUrl(page.url)}
+      />
     </PublicChrome>
   );
 }
