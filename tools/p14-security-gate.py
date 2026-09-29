@@ -35,6 +35,8 @@ ARTIFACTS = (
     ("D3 containers", "P14-image-scan.json",
      "both images built and scanned; every finding either fixed or recorded with a reason"),
     ("D4 infrastructure", "P14-infra-verify.json", "egress, runtime, the database, a tested restore, IAM, headers"),
+    ("D4 postgres restore", "P14-postgres-restore.json",
+     "a logical dump, a restore into a fresh database, identical money answers, controls intact"),
     ("D4 containers", "P14-container-verify.json",
      "the images built, probed and booted; the Postgres schema created and protected by the database itself"),
     ("D5 rate-limit abuse", "P14-abuse-probe.json", "per-IP, per-user, 100 aggressive users, victim lockout"),
@@ -72,8 +74,11 @@ CHECKLIST = (
      "OPEN — the executor has no deployed subnet yet; recorded with the exact probe to run when it lands",
      "docs/verification/P14-infra-verify.json"),
     ("Backup restore tested within the last 30 days",
-     "met for the environment this machine has (SQLite twin: 17 ms backup, 8 ms restore, identical money queries); "
-     "the managed-Postgres restore is OPEN", "docs/verification/P14-infra-verify.json"),
+     "met twice over, on two engines: the SQLite twin (17 ms backup, 8 ms restore, identical money queries) and a "
+     "real Postgres (pg_dump -Fc → a freshly created database → pg_restore, identical money answers, all 30 "
+     "append-only triggers intact, and the restored copy still refusing a mutation). The managed instance's own "
+     "PITR restore remains an owner action — it needs the account that holds production",
+     "docs/verification/P14-postgres-restore.json"),
     ("Incident response runbook written, and the on-call rotation staffed",
      "runbook written (D6). The rotation is a staffing decision and belongs to the owner — recorded, not assumed",
      "docs/P14-audit-bounty-legal.md"),

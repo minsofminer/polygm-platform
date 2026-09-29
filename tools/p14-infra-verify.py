@@ -340,10 +340,31 @@ def section_restore(g: Gate, facts: dict) -> None:
     for p in (backup, restored):
         with contextlib.suppress(OSError):
             p.unlink()
-    g.open("MANAGED-POSTGRES RESTORE UNPROVEN: the drill above is the SQLite twin, which is what this environment "
-           "runs; no restore has been performed against the managed Postgres that production will use",
+    # P14 D4: the drill above is the sqlite twin; `tools/p14-postgres-restore.py` runs the same shape against a
+    # real Postgres (pg_dump -Fc → a database that does not exist yet → pg_restore → the same money-path
+    # questions → the append-only controls still refusing a mutation on the restored copy). Its record is
+    # consumed here so the twin and the drilled engine are read together.
+    pg = VERIF / "P14-postgres-restore.json"
+    if pg.exists():
+        data = json.loads(pg.read_text())
+        checks = data.get("checks") or []
+        facts["restore"]["postgres"] = {
+            "artifact": "docs/verification/P14-postgres-restore.json",
+            "passed": sum(1 for c in checks if c.get("status") == "PASS"),
+            "failed": sum(1 for c in checks if c.get("status") == "FAIL"),
+            "open": len(data.get("open_conditions") or []),
+            "seed_note": (data.get("facts") or {}).get("seed_note"),
+        }
+        g.check("a real Postgres restore has been drilled: logical dump, restore into a fresh database, "
+                "identical money answers, and the append-only controls intact afterwards",
+                facts["restore"]["postgres"]["failed"] == 0 and facts["restore"]["postgres"]["open"] == 0
+                and facts["restore"]["postgres"]["passed"] >= 8,
+                json.dumps(facts["restore"]["postgres"])[:300])
+    g.open("MANAGED-INSTANCE RESTORE UNPROVEN: the drills cover the sqlite twin and a local Postgres "
+           "(pg_dump/pg_restore); neither is the managed instance, whose restore is PITR from its own console",
            "on the managed instance: take a PITR snapshot, restore to a scratch branch at a known timestamp, run "
-           "the same money-path queries, and record the wall-clock time and the recovery point")
+           "the same money-path queries, and record the wall-clock time and the recovery point — an owner action, "
+           "because it needs the account that holds production")
 
 
 # ------------------------------------------------------------------------------------------------ 5. IAM

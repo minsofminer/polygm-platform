@@ -1323,3 +1323,38 @@ two new rows (D3 containers, D4 containers) and `--check` matching.
 only things left dirty are this block's own changes. A `--hard` there would have thrown away the work; the check
 that makes it safe is `git merge-base --is-ancestor <local> <remote>`, which said "no divergence" first.
 
+---
+
+## A Postgres restore, drilled on Postgres · 2026-09-29
+
+The fourth OPEN to close today. `P14-infra-verify`'s restore section had said the whole time that it knew the
+difference — *"VACUUM INTO is a real logical backup… (For Postgres this is pg_dump/PITR; the drill shape is the
+same, the tool differs)"* — and its verdict row carried the matching admission: *no restore has been performed
+against the managed Postgres that production will use.* The tool that differs now exists and has run:
+`tools/p14-postgres-restore.py` starts the compose Postgres, applies `db/migrations/` (21 files, for real), writes a
+money-path fixture, takes a `pg_dump -Fc` logical backup, creates a database **that does not exist yet**, restores
+into it, and then asks both databases the same eight questions — table count, balances, ledger sum, open orders,
+markets, tokens, users, and the `watchlists_user_name_uq` index.
+
+**`P14 POSTGRES RESTORE — PASS, 9 passed / 0 failed / 0 OPEN.`** 291 KB dump, 338 ms to take, 1.7 s to restore,
+identical answers on both sides. Two of the nine checks are the ones worth keeping: **all 30 append-only triggers
+survived the round trip**, and the restored database *still refuses* an UPDATE against `audit_log`. A restore that
+silently loses a trigger is a restored box that will happily delete a ledger row, and nothing but a drilled restore
+would have said so.
+
+**The finding it did *not* fix, and said so instead.** The repo's own `db/seed.sql` cannot be applied to Postgres:
+it emits `1` where the schema declares `neg_risk BOOLEAN`, and epoch-ms integers where three columns are
+`TIMESTAMPTZ`. The generated SQL is shared between engines, so the seed — like the API — assumes the *sqlite*
+representation of columns the Postgres schema declares differently. The drill writes its own fixture, records the
+defect as a fact, and hands it to the Postgres-portability workstream, because the right fix is a decision about
+which representation is canonical rather than a cast bolted onto a generator. This is now the third face of one
+root: **the API is sqlite-only** (`services/api/app.py` imports `sqlite3`; there is no `asyncpg` in `services/` or
+`packages/`), while compose, `docker-compose.prod.yml` and P15 all specify Postgres for preview, canary and prod.
+That is launch blocker **F14**, and it is the largest thing left between this repository and a deploy.
+
+**Where P14 stands after today.** Four OPENs closed with executed evidence rather than prose — the payment-webhook
+control, image contents, image runtime hardening, and now a real Postgres restore. What remains open is what a
+machine cannot measure: the break-glass provider rate limit (needs real Turnkey keys), egress from a deployed
+subnet (needs a deployment), the managed instance's own PITR restore (needs the production account), MFA on the
+three accounts (needs their owners), and F14 itself.
+

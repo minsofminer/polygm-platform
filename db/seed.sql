@@ -3,8 +3,8 @@
 -- file stays fresh no matter when it is applied. Never replace it with a literal timestamp.
 
 -- events before markets: markets.event_id REFERENCES events(id)
-INSERT INTO events (id,slug,title,neg_risk,created_ms,updated_ms) VALUES ('0xEV1', 'mayor-2027', 'The 2027 mayoral race', 1, {{NOW_MS}}, {{NOW_MS}}) ON CONFLICT DO NOTHING;
-INSERT INTO events (id,slug,title,neg_risk,created_ms,updated_ms) VALUES ('0xEV128', 'nominee-2028', 'Republican Presidential Nominee 2028', 1, {{NOW_MS}}, {{NOW_MS}}) ON CONFLICT DO NOTHING;
+INSERT INTO events (id,slug,title,neg_risk,created_ms,updated_ms) VALUES ('0xEV1', 'mayor-2027', 'The 2027 mayoral race', TRUE, {{NOW_MS}}, {{NOW_MS}}) ON CONFLICT DO NOTHING;
+INSERT INTO events (id,slug,title,neg_risk,created_ms,updated_ms) VALUES ('0xEV128', 'nominee-2028', 'Republican Presidential Nominee 2028', TRUE, {{NOW_MS}}, {{NOW_MS}}) ON CONFLICT DO NOTHING;
 INSERT INTO users (id,created_ms,tier) VALUES ('u-demo', {{NOW_MS}}, 'trader') ON CONFLICT DO NOTHING;
 INSERT INTO markets (id,condition_id,event_id,question,slug,accepting_orders,seconds_delay,enable_order_book,minimum_tick_size,minimum_order_size,fee_type,neg_risk,end_ts,outcomes_json,first_seen_ms,updated_ms) VALUES ('0xM1', '0xC1', NULL, 'Will the Fed cut rates at the September meeting?', 'fed-cut-sept', TRUE, 0, TRUE, '0.01', '5', 'None', FALSE, {{NOW_MS}} + 1036800000, '["Yes", "No"]', {{NOW_MS}}, {{NOW_MS}}) ON CONFLICT (id) DO NOTHING;
 INSERT INTO markets (id,condition_id,event_id,question,slug,accepting_orders,seconds_delay,enable_order_book,minimum_tick_size,minimum_order_size,fee_type,neg_risk,end_ts,outcomes_json,first_seen_ms,updated_ms) VALUES ('0xM2', '0xC2', NULL, 'Will BTC close above $150k on 30 September?', 'btc-150k-sep', TRUE, 0, TRUE, '0.001', '5', 'None', FALSE, {{NOW_MS}} + 1123200000, '["Yes", "No"]', {{NOW_MS}}, {{NOW_MS}}) ON CONFLICT (id) DO NOTHING;

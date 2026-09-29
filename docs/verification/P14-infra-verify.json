@@ -6,8 +6,8 @@
       "why": "when the executor lands: from inside its subnet, curl a non-allowlisted host and a non-allowlisted port and record both refusals (the kit's 'proved by trying'), plus an allowed vendor call"
     },
     {
-      "check": "MANAGED-POSTGRES RESTORE UNPROVEN: the drill above is the SQLite twin, which is what this environment runs; no restore has been performed against the managed Postgres that production will use",
-      "why": "on the managed instance: take a PITR snapshot, restore to a scratch branch at a known timestamp, run the same money-path queries, and record the wall-clock time and the recovery point"
+      "check": "MANAGED-INSTANCE RESTORE UNPROVEN: the drills cover the sqlite twin and a local Postgres (pg_dump/pg_restore); neither is the managed instance, whose restore is PITR from its own console",
+      "why": "on the managed instance: take a PITR snapshot, restore to a scratch branch at a known timestamp, run the same money-path queries, and record the wall-clock time and the recovery point \u2014 an owner action, because it needs the account that holds production"
     },
     {
       "check": "VERCEL_TOKEN: MFA could not be read from Vercel account (deploys the API and the Mini App)'s API",
@@ -23,7 +23,7 @@
     }
   ],
   "facts": {
-    "at_ms": 1790655955959,
+    "at_ms": 1790657698632,
     "api_live": "https://polygm-api.vercel.app",
     "mini_app_live": "https://polygm-mini-app.vercel.app",
     "egress": {
@@ -31,10 +31,10 @@
         "services/executor-mock/transport.py:31:            with urllib.request.urlopen(req, timeout=timeout_ms / 1000) as r:",
         "services/ingest/net.py:3:Three rules, and they are the reason this module exists rather than a `urllib.request.urlopen` at each call",
         "services/ingest/net.py:232:            with urllib.request.urlopen(req, timeout=timeout[1]) as r:     # read timeout; see note above",
-        "packages/polygm_core/signals/webhook.py:235:    return urllib.request.urlopen(req, timeout=timeout)                          # noqa: S310 - guarded above",
+        "packages/polygm_core/signals/webhook.py:240:    return urllib.request.urlopen(req, timeout=timeout)                          # noqa: S310 - guarded above",
         "services/executor-mock/transport.py:31:            with urllib.request.urlopen(req, timeout=timeout_ms / 1000) as r:",
         "services/ingest/net.py:232:            with urllib.request.urlopen(req, timeout=timeout[1]) as r:     # read timeout; see note above",
-        "packages/polygm_core/signals/webhook.py:235:    return urllib.request.urlopen(req, timeout=timeout)                          # noqa: S310 - guarded above"
+        "packages/polygm_core/signals/webhook.py:240:    return urllib.request.urlopen(req, timeout=timeout)                          # noqa: S310 - guarded above"
       ],
       "count": 7,
       "config_urls": [
@@ -77,12 +77,19 @@
       }
     },
     "restore": {
-      "backup_ms": 15,
-      "restore_ms": 7,
+      "backup_ms": 16,
+      "restore_ms": 8,
       "tables": 125,
       "rows": 3275,
       "mismatches": {},
-      "money_answers_identical": true
+      "money_answers_identical": true,
+      "postgres": {
+        "artifact": "docs/verification/P14-postgres-restore.json",
+        "passed": 9,
+        "failed": 0,
+        "open": 0,
+        "seed_note": "db/seed.sql does not apply to Postgres: neg_risk is boolean, end_ts/created columns are timestamptz, and the generated SQL emits integers for both"
+      }
     },
     "iam": {
       "github": {
@@ -129,7 +136,7 @@
       },
       "anonymous_order": {
         "status": 401,
-        "body": "{\"error\":{\"code\":\"UNAUTHENTICATED\",\"message\":\"a session is required\",\"retryable\":false,\"requestId\":\"2df169eb9e304b5c\"}}"
+        "body": "{\"error\":{\"code\":\"UNAUTHENTICATED\",\"message\":\"a session is required\",\"retryable\":false,\"requestId\":\"ef05f8a8976a4baa\"}}"
       },
       "mini_app": {
         "status": 200,
@@ -194,12 +201,12 @@
     },
     {
       "status": "PASS",
-      "name": "a consistent backup of the migrated database was taken (15 ms, 1818624 bytes)",
+      "name": "a consistent backup of the migrated database was taken (16 ms, 1818624 bytes)",
       "why": ""
     },
     {
       "status": "PASS",
-      "name": "the restored copy holds every table and every row (125 tables, 3275 rows, 7 ms)",
+      "name": "the restored copy holds every table and every row (125 tables, 3275 rows, 8 ms)",
       "why": ""
     },
     {
@@ -213,9 +220,14 @@
       "why": ""
     },
     {
+      "status": "PASS",
+      "name": "a real Postgres restore has been drilled: logical dump, restore into a fresh database, identical money answers, and the append-only controls intact afterwards",
+      "why": ""
+    },
+    {
       "status": "OPEN",
-      "name": "MANAGED-POSTGRES RESTORE UNPROVEN: the drill above is the SQLite twin, which is what this environment runs; no restore has been performed against the managed Postgres that production will use",
-      "why": "on the managed instance: take a PITR snapshot, restore to a scratch branch at a known timestamp, run the same money-path queries, and record the wall-clock time and the recovery point"
+      "name": "MANAGED-INSTANCE RESTORE UNPROVEN: the drills cover the sqlite twin and a local Postgres (pg_dump/pg_restore); neither is the managed instance, whose restore is PITR from its own console",
+      "why": "on the managed instance: take a PITR snapshot, restore to a scratch branch at a known timestamp, run the same money-path queries, and record the wall-clock time and the recovery point \u2014 an owner action, because it needs the account that holds production"
     },
     {
       "status": "FAIL",

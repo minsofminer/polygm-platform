@@ -13,12 +13,13 @@ PASS the api container is read-only, drops all capabilities and cannot gain priv
 PASS the runtime hardening is proven by running the images, not by reading the Dockerfiles (uid, no network client, no login shell, read-only rootfs, and the artefact boots)
 FAIL the Supabase account was queried and lists 0 project(s)
         — status 401: the token in ~/.secrets/tokens.env is rejected by the provider: rotate it and re-run. The check cannot see the database this product will use until it does, so the D4 verdict stays FAIL
-PASS a consistent backup of the migrated database was taken (15 ms, 1818624 bytes)
-PASS the restored copy holds every table and every row (125 tables, 3275 rows, 7 ms)
+PASS a consistent backup of the migrated database was taken (16 ms, 1818624 bytes)
+PASS the restored copy holds every table and every row (125 tables, 3275 rows, 8 ms)
 PASS the restored copy answers the money-path reads identically (balances, ledger sum, open orders, intents, key wraps)
 PASS the restored database satisfies the API's boot schema guard
-OPEN MANAGED-POSTGRES RESTORE UNPROVEN: the drill above is the SQLite twin, which is what this environment runs; no restore has been performed against the managed Postgres that production will use
-        — on the managed instance: take a PITR snapshot, restore to a scratch branch at a known timestamp, run the same money-path queries, and record the wall-clock time and the recovery point
+PASS a real Postgres restore has been drilled: logical dump, restore into a fresh database, identical money answers, and the append-only controls intact afterwards
+OPEN MANAGED-INSTANCE RESTORE UNPROVEN: the drills cover the sqlite twin and a local Postgres (pg_dump/pg_restore); neither is the managed instance, whose restore is PITR from its own console
+        — on the managed instance: take a PITR snapshot, restore to a scratch branch at a known timestamp, run the same money-path queries, and record the wall-clock time and the recovery point — an owner action, because it needs the account that holds production
 FAIL the GitHub account that owns this repository has MFA enabled (minsofminer)
         — two_factor_authentication is false: the account that can rewrite every commit, and whose token holds admin:org and delete_repo, is protected by a password alone
 PASS the token scopes are recorded, and the dangerous ones are named ( admin:org,  admin:public_key,  delete_repo)
@@ -36,13 +37,13 @@ PASS the deployed API refuses a spoofed X-User-Id header on every user route ({"
 PASS an anonymous writer is refused with an identity answer, not a retryable signing error (401)
 PASS the Mini App sends a CSP that frames only Telegram, and no wildcard CORS
 
-P14 INFRA: FAIL — 20 checks passed, 2 failed, 5 OPEN
+P14 INFRA: FAIL — 21 checks passed, 2 failed, 5 OPEN
 
 OPEN (not passes, not failures — measurements this machine cannot take):
   * DEPLOYED-SUBNET EGRESS IS UNPROVEN: the executor is not deployed and there is no subnet to try from, so the firewall allowlist has not been tested by trying
       when the executor lands: from inside its subnet, curl a non-allowlisted host and a non-allowlisted port and record both refusals (the kit's 'proved by trying'), plus an allowed vendor call
-  * MANAGED-POSTGRES RESTORE UNPROVEN: the drill above is the SQLite twin, which is what this environment runs; no restore has been performed against the managed Postgres that production will use
-      on the managed instance: take a PITR snapshot, restore to a scratch branch at a known timestamp, run the same money-path queries, and record the wall-clock time and the recovery point
+  * MANAGED-INSTANCE RESTORE UNPROVEN: the drills cover the sqlite twin and a local Postgres (pg_dump/pg_restore); neither is the managed instance, whose restore is PITR from its own console
+      on the managed instance: take a PITR snapshot, restore to a scratch branch at a known timestamp, run the same money-path queries, and record the wall-clock time and the recovery point — an owner action, because it needs the account that holds production
   * VERCEL_TOKEN: MFA could not be read from Vercel account (deploys the API and the Mini App)'s API
       the provider exposes no MFA field on the endpoints this token can reach; check it in the dashboard and record the answer in docs/P14-security-testing.md (an MFA status nobody verified is not an MFA control)
   * SUPABASE_ACCESS_TOKEN: MFA could not be read from Supabase account (will hold the production database)'s API

@@ -284,9 +284,14 @@ def rows() -> dict:
     # events first: markets.event_id is a FOREIGN KEY, and a seed that references a row it never created
     # fails on the first statement that touches the constraint. Only 0xM5 belongs to an event; the others
     # use NULL, which is a legal FK value and the honest one (a single-market event is not an event).
-    events.append(("0xEV1", "mayor-2027", "The 2027 mayoral race", 1, now, now))
+    # P14 D4: `neg_risk` is a BOOLEAN column in the source of truth and these rows used to carry `1` /
+    # `int(...)`, which Postgres refuses ("column \"neg_risk\" is of type boolean but expression is of type
+    # integer") — so `db/seed.sql`, generated from here, could not be applied to Postgres at all. The SQL text
+    # in `emit_sql` is shared by both engines, and both engines accept the boolean literal (sqlite treats TRUE
+    # as 1 in an INTEGER column since 3.23), so the literal is the portable spelling.
+    events.append(("0xEV1", "mayor-2027", "The 2027 mayoral race", True, now, now))
     events.append((NOMINEE_EVENT["id"], NOMINEE_EVENT["slug"], NOMINEE_EVENT["title"],
-                   int(NOMINEE_EVENT["neg_risk"]), now, now))
+                   bool(NOMINEE_EVENT["neg_risk"]), now, now))
     fills: list[tuple] = []
     all_markets = list(MARKETS) + nominee_markets(now)
     for m in all_markets:

@@ -1,0 +1,23 @@
+P14 POSTGRES RESTORE — PASS
+9 passed, 0 failed, 0 OPEN
+
+PASS  postgres starts
+PASS  db/migrations applies to this database
+PASS  a post-migration money-path fixture is present to restore
+PASS  the live database has money-path rows to lose (not an empty drill)
+PASS  pg_dump -Fc produced a logical backup (338 ms, 291207 bytes)
+PASS  the dump restores into a freshly created database (1694 ms)
+PASS  the restored database holds every table, every row, and the same index
+PASS  the append-only triggers survived the round trip (30 in both)
+PASS  the restored database still refuses to mutate an append-only table
+
+facts:
+  after                  {"tables": "125", "balances": "250500000/1200000", "ledger_sum": "250500000", "open_orders": "0", "markets": "0", "tokens": "0", "users": "1", "watchlists_uq": "watchlists_user_name_uq", "append_only_triggers": "30"}
+  before                 {"tables": "125", "balances": "250500000/1200000", "ledger_sum": "250500000", "open_orders": "0", "markets": "0", "tokens": "0", "users": "1", "watchlists_uq": "watchlists_user_name_uq", "append_only_triggers": "30"}
+  differing              {}
+  dump                   {"ms": 338, "container_path": "/tmp/p14-restore-drill.dump", "size": "291207"}
+  fixture                "INSERT 0 1\nINSERT 0 1\nINSERT 0 1"
+  restore                {"ms": 1694, "target": "polygm_r1_restore_drill", "createdb_rc": 0, "pg_restore_rc": 0}
+  restored_append_only   "INSERT 0 1ERROR:  append-only table: audit_log is not updatable or deletable (see db/migrations/0005_triggers.sql)\nCONTEXT:  PL/pgSQL function polygm_reject_mutation() line 3 at RAISE"
+  runtime                "sudo -n docker compose"
+  seed_note              "db/seed.sql does not apply to Postgres: neg_risk is boolean, end_ts/created columns are timestamptz, and the generated SQL emits integers for both"
