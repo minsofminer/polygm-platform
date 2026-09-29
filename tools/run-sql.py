@@ -125,7 +125,16 @@ def run_postgres(d: Path, url: str) -> int:
                         return 2
                     continue
                 for stmt in split_statements(text):
-                    await con.execute(stmt)
+                    # P14 D4, learned the hard way on the first Postgres migration this repository ever ran: a
+                    # bare asyncpg traceback names the error and never the statement, so "functions in index
+                    # expression must be marked IMMUTABLE" arrived with no clue which of 22 files it came from.
+                    # The statement is printed with the failure; the exception is still the cause, not replaced.
+                    try:
+                        await con.execute(stmt)
+                    except Exception as exc:
+                        raise RuntimeError("migration %s failed\n  statement: %s\n  %s: %s"
+                                           % (f.name, " ".join(stmt.split())[:300],
+                                              type(exc).__name__, exc)) from exc
                 await con.execute("INSERT INTO schema_migrations (name, sha256, applied_ms) VALUES ($1,$2,$3)",
                                   f.name, h, _now_ms())
                 print("applied", f.name)

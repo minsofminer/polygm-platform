@@ -1,0 +1,42 @@
+P14 CONTAINER VERIFY — PASS
+18 passed, 0 failed, 0 OPEN
+
+PASS  polygm-api:p14-container runs as uid 10001, not root
+PASS  polygm-api:p14-container cannot write outside its working directory
+PASS  polygm-api:p14-container ships no network client to exfiltrate with
+PASS  polygm-api:p14-container's account has no login shell
+PASS  polygm-mock:p14-container runs as uid 10002, not root
+PASS  polygm-mock:p14-container cannot write outside its working directory
+PASS  polygm-mock:p14-container ships no network client to exfiltrate with
+PASS  polygm-mock:p14-container's account has no login shell
+PASS  with --read-only the rootfs refuses writes while /tmp still works (the prod shape)
+PASS  the API image boots and serves /healthz (the missing-COPY defect lived here)
+PASS  the booted image answers a real endpoint
+PASS  compose parses and declares the six services
+PASS  the stack starts (postgres, redis, pgbouncer, executor-mock)
+PASS  db/migrations applies to real Postgres (the source of truth had never been applied)
+PASS  the compose API answers /healthz
+PASS  a Postgres write succeeds and is then refused by the append-only trigger
+PASS  the REVOKE half denies UPDATE and DELETE to the application role
+PASS  every started service is running at the end
+
+facts:
+  compose                      "sudo -n docker compose"
+  compose.api                  "status=200 {\"ok\":true}"
+  compose.ps                   ["api running", "executor-mock running", "pgbouncer running", "postgres running", "redis running"]
+  compose.services             ["postgres", "migrate", "executor-mock", "api", "pgbouncer", "redis"]
+  docker                       "26.1.5+dfsg1"
+  image_api.log                "a754a04\",\"status\":200,\"ts\":1790655933956}\nINFO:     172.17.0.1:60310 - \"GET /healthz HTTP/1.1\" 200 OK\n{\"dur_ms\":6.64,\"ev\":\"http\",\"level\":\"info\",\"method\":\"GET\",\"path\":\"/v1/markets\",\"rid\":\"52abdd693ab44cbe\",\"status\":200,\"ts\":1790655933965}\nINFO:     172.17.0.1:60322 - \"GET /v1/markets HTTP/1.1\" 200 OK"
+  image_api.markets            "status=200 {\"cacheKey\":\"markets:endsSoon:None\",\"items\":[],\"nextCursor\":null,\"pageSizeHardCap\":100,\"sortBy\":\"endsSoon\",\"sortKeys\":[\""
+  migrate                      "postgres: 21 applied, 0 already present"
+  polygm-api:p14-container.id  "uid=10001(polygm) gid=999(polygm) groups=999(polygm)"
+  polygm-api:p14-container.network_tools "(none)"
+  polygm-api:p14-container.passwd "polygm:x:10001:999::/home/polygm:/usr/sbin/nologin"
+  polygm-api:p14-container.write_outside "touch: cannot touch '/p14_probe': Permission denied\ntouch: cannot touch '/etc/p14_probe': Permission denied\nrc=1"
+  polygm-mock:p14-container.id "uid=10002(mock) gid=999(mock) groups=999(mock)"
+  polygm-mock:p14-container.network_tools "(none)"
+  polygm-mock:p14-container.passwd "mock:x:10002:999::/home/mock:/usr/sbin/nologin"
+  polygm-mock:p14-container.write_outside "touch: cannot touch '/p14_probe': Permission denied\ntouch: cannot touch '/etc/p14_probe': Permission denied\nrc=1"
+  postgres.append_only         "INSERT 0 1ERROR:  append-only table: audit_log is not updatable or deletable (see db/migrations/0005_triggers.sql)\nCONTEXT:  PL/pgSQL function polygm_reject_mutation() line 3 at RAISE\nERROR:  append-only table: audit_log is not updatable or deletable (see db/migrations/0005_triggers.sql)\nCONTEXT:  PL/pgSQL function polygm_reject_mutation() line 3 at RAISE"
+  postgres.revoke              "DO\nREVOKE\nREVOKE\nGRANT\nSET\nRESETERROR:  permission denied for table cash_ledger\nERROR:  permission denied for table cash_ledger"
+  read_only_rootfs             "touch: cannot touch '/probe': Read-only file system\ntmpfs-writable"

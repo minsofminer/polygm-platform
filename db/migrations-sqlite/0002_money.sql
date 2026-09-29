@@ -30,6 +30,7 @@ CREATE TABLE order_intents (
  UNIQUE (user_id, idempotency_key));
 CREATE INDEX intents_open_ix  ON order_intents (user_id, state, created_ms)
     WHERE state IN ('pending','queued','submitting','uncertain','submitted');
+CREATE INDEX intents_stuck_ix ON order_intents (updated_ms) WHERE state = 'uncertain';
 CREATE TABLE orders (
     id                  TEXT PRIMARY KEY,
     intent_id           TEXT NOT NULL REFERENCES order_intents(id),
@@ -92,6 +93,7 @@ CREATE TABLE position_lots (
     source              TEXT NOT NULL CHECK (source IN ('fill','merge','transfer','adjust')),
     CHECK (shares_open_micro = 0 OR basis_micro > 0)
 );
+CREATE INDEX lots_user_token_ix ON position_lots (user_id, token_id) WHERE shares_open_micro > 0;
 CREATE TABLE position_snapshots (
     id                  INTEGER PRIMARY KEY,
     user_id             TEXT NOT NULL REFERENCES users(id),
@@ -101,6 +103,7 @@ CREATE TABLE position_snapshots (
     delta_micro         INTEGER GENERATED ALWAYS AS (shares_micro - our_computed_micro) STORED,
     source              TEXT NOT NULL CHECK (source IN ('on_chain','data_api','clob')),
     observed_ms         INTEGER NOT NULL);
+CREATE INDEX snap_delta_ix ON position_snapshots (observed_ms) WHERE shares_micro <> our_computed_micro;
 CREATE TABLE builder_attribution (
     id                  INTEGER PRIMARY KEY,
     order_id            TEXT,

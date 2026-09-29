@@ -100,9 +100,9 @@ CREATE TABLE withdrawal_addresses (
     confirmed_ms    INTEGER,
     removed_ms      INTEGER,
     added_via       TEXT NOT NULL DEFAULT 'user',
-    skip_cooldown   INTEGER NOT NULL DEFAULT FALSE,
+    skip_cooldown   INTEGER NOT NULL DEFAULT 0,
     CHECK (added_via IN ('user','support_verified','import')),
-    CHECK (skip_cooldown = FALSE)
+    CHECK (skip_cooldown = 0)
 );
 CREATE INDEX withdrawal_addresses_user ON withdrawal_addresses (user_id, removed_ms);
 CREATE TABLE telegram_nonces (
@@ -212,7 +212,7 @@ CREATE TABLE secret_inventory (
     owner           TEXT NOT NULL,
     rotate_by_ms    INTEGER NOT NULL,
     last_rotated_ms INTEGER NOT NULL DEFAULT 0,
-    can_rotate_live INTEGER NOT NULL DEFAULT TRUE,
+    can_rotate_live INTEGER NOT NULL DEFAULT 1,
     note            TEXT NOT NULL DEFAULT '',
     CHECK (environment IN ('dev','staging','prod')),
     CHECK (stored_in IN ('kms','secret_manager','env','provider_console')),
@@ -226,7 +226,7 @@ CREATE TABLE backup_restore_tests (
     restore_started_ms INTEGER NOT NULL,
     restore_done_ms INTEGER,
     verified_rows   INTEGER NOT NULL DEFAULT 0,
-    money_checks_ok INTEGER NOT NULL DEFAULT FALSE,
+    money_checks_ok INTEGER NOT NULL DEFAULT 0,
     tested_by       TEXT NOT NULL DEFAULT '',
     note            TEXT NOT NULL DEFAULT '',
     CHECK (kind IN ('pg_snapshot','sqlite_file','ledger_csv','keystore')),

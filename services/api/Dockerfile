@@ -13,6 +13,14 @@ COPY services/api /srv/app/services/api
 COPY db /srv/app/db
 COPY brand /srv/app/brand
 COPY tools /srv/app/tools
+# P14 D4, found by the first real image build: the API image did not boot at all. `app.py`'s import graph reads
+# two repository-root files — `contracts/startapp.json` (the Telegram channel) and `config/gtm.json` (the revenue
+# schedule) — and neither directory was copied, so `uvicorn` died with FileNotFoundError before binding a port.
+# This is the "a control in `main` is not a control on the box" class again: every test ran in the working tree,
+# where both files exist, and nothing had ever run the artefact. The boot proof (`docker run … /healthz`) is now
+# part of the P14 container check precisely because it is the only test that can see this.
+COPY contracts /srv/app/contracts
+COPY config /srv/app/config
 
 # Runs as non-root; binds 0.0.0.0 because compose maps it to 127.0.0.1 on the host.
 # `-s /usr/sbin/nologin` (P14 D4): the app user needs no login shell, and the default for

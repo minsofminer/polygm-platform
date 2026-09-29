@@ -115,7 +115,7 @@ CREATE TABLE IF NOT EXISTS alert_deliveries (
 );
 CREATE INDEX IF NOT EXISTS alert_deliveries_pending_idx ON alert_deliveries (priority, queued_ms)
     WHERE status = 'queued';
-CREATE INDEX IF NOT EXISTS alert_deliveries_latency_idx ON alert_deliveries (sent_ms - queued_ms, queued_ms)
+CREATE INDEX IF NOT EXISTS alert_deliveries_latency_idx ON alert_deliveries ((sent_ms - queued_ms), queued_ms)
     WHERE status = 'sent';
 CREATE UNIQUE INDEX IF NOT EXISTS markets_condition_uq ON markets (condition_id);
 CREATE TABLE IF NOT EXISTS signal_rules (

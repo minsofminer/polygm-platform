@@ -32,7 +32,11 @@ ARTIFACTS = (
      "trading, injection and business-logic probes, made by empowered accounts"),
     ("D2 key-compromise drills", "P14-key-drills.json", "six drills, each with a recorded time"),
     ("D3 AppSec", "P14-appsec-scan.json", "SAST, DAST, all-history secrets, logs, deps, IaC, containers"),
+    ("D3 containers", "P14-image-scan.json",
+     "both images built and scanned; every finding either fixed or recorded with a reason"),
     ("D4 infrastructure", "P14-infra-verify.json", "egress, runtime, the database, a tested restore, IAM, headers"),
+    ("D4 containers", "P14-container-verify.json",
+     "the images built, probed and booted; the Postgres schema created and protected by the database itself"),
     ("D5 rate-limit abuse", "P14-abuse-probe.json", "per-IP, per-user, 100 aggressive users, victim lockout"),
 )
 

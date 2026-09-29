@@ -9,6 +9,7 @@ CREATE TABLE IF NOT EXISTS market_meta (
     image_url           TEXT,
     updated_ms          INTEGER NOT NULL
 );
+CREATE INDEX IF NOT EXISTS market_meta_category_ix ON market_meta (category) WHERE category IS NOT NULL;
 CREATE TABLE IF NOT EXISTS market_activity (
     market_id           TEXT PRIMARY KEY REFERENCES markets(id),
     open_interest_micro INTEGER NOT NULL DEFAULT 0,

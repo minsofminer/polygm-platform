@@ -164,9 +164,21 @@ CREATE TABLE builder_attribution (
 );
 CREATE INDEX attribution_unreconciled_ix ON builder_attribution (placed_ms)
     WHERE fee_micro_observed IS NULL;
-CREATE INDEX attribution_day_ix ON builder_attribution (date_trunc('day', to_timestamp(placed_ms / 1000.0)),
-                                                        fee_micro_expected);
 -- attribution_day_ix exists because the founder's actual question is monthly ("are we being paid"), and an
 -- index that cannot answer it turns the answer into a full scan of the only table that grows with order
--- count. date_trunc in an index is allowed; the expression must be IMMUTABLE, hence to_timestamp on a
--- BIGINT rather than on now().
+-- count.
+--
+-- P14 D4, found by the first `docker compose up` this repository ever ran: this index had never been applied
+-- to a real Postgres, and Postgres refused it — `functions in index expression must be marked IMMUTABLE`.
+-- The expression above used to read `date_trunc('day', to_timestamp(placed_ms / 1000.0))`, and the reasoning
+-- that produced it was one notch short of the rule: `to_timestamp` on a BIGINT does avoid `now()`, but it
+-- returns `timestamptz`, and `date_trunc(text, timestamptz)` is **stable**, not immutable, because its
+-- result depends on the session's `TimeZone`. SQLite enforces no such rule, so the twin accepted it and the
+-- test suite stayed green while the production database could not be created at all.
+--
+-- `AT TIME ZONE 'UTC'` returns a plain `timestamp` (that operator is immutable for a literal zone), so the
+-- day bucket is both legal in an index and *pinned to UTC* rather than to whatever the connection happened
+-- to be set to. A query that wants this index must spell the same expression; it is written here, once.
+CREATE INDEX attribution_day_ix ON builder_attribution (
+    date_trunc('day', to_timestamp(placed_ms / 1000.0) AT TIME ZONE 'UTC'),
+    fee_micro_expected);

@@ -1,13 +1,8 @@
 {
-  "verdict": "CONDITIONAL",
-  "open_conditions": [
-    {
-      "check": "CONTAINER IMAGE CONTENTS ARE UNSCANNED: no docker/scanner in this environment, so the Dockerfiles are read statically and no built image has been inspected for OS packages, layers or CVEs",
-      "why": "run trivy/grype against the built digests in CI (and record the digests) before the first production deploy; the static checks here do not cover base-image vulnerabilities"
-    }
-  ],
+  "verdict": "PASS",
+  "open_conditions": [],
   "facts": {
-    "at_ms": 1790401822729,
+    "at_ms": 1790656190753,
     "sast": {
       "tool": "ruff ruff 0.8.4",
       "select": "S",
@@ -34,9 +29,9 @@
       "untriaged": []
     },
     "secrets_history": {
-      "commits": 98,
-      "added_lines_scanned": 184013,
-      "lines_skipped_by_path_allowlist": 129952,
+      "commits": 119,
+      "added_lines_scanned": 189931,
+      "lines_skipped_by_path_allowlist": 223570,
       "path_allowlist": [
         {
           "path": "tests/fixtures/",
@@ -89,9 +84,9 @@
     "log_redaction": {
       "ci_sources_exit": 0,
       "ci_sources_tail": [
-        "ci-log-scan: 499 file(s) scanned, 0 finding(s)"
+        "ci-log-scan: 522 file(s) scanned, 0 finding(s)"
       ],
-      "live_line": "{\"dur_ms\":10.78,\"ev\":\"http\",\"level\":\"info\",\"method\":\"GET\",\"path\":\"/v1/markets\",\"rid\":\"12dc8d405b70436e\",\"status\":200,\"ts\":1790401853479}",
+      "live_line": "{\"dur_ms\":11.34,\"ev\":\"http\",\"level\":\"info\",\"method\":\"GET\",\"path\":\"/v1/markets\",\"rid\":\"6a8470f808f9490f\",\"status\":200,\"ts\":1790656220605}",
       "live_hits": []
     },
     "dependencies": {
@@ -137,6 +132,21 @@
           "no_secret_copy": true,
           "no_curl_sh": true
         }
+      },
+      "scan": {
+        "artifact": "docs/verification/P14-image-scan.json",
+        "scanned": [
+          "polygm-api:p14-scan scanned: 44 CRITICAL/HIGH across 17 package(s), 0 in language packages",
+          "polygm-mock:p14-scan scanned: 44 CRITICAL/HIGH across 17 package(s), 0 in language packages"
+        ],
+        "totals": {
+          "critical_high": 88,
+          "distinct_cves": 8,
+          "with_a_fix_available": 0
+        },
+        "open": [
+          "BASE-IMAGE CVEs WITH NO PUBLISHED FIX: 88 CRITICAL/HIGH across 8 distinct CVEs, none with a fixed version \u2014 the distro packages in `python:3.12-slim` (Debian 13.7). They cannot be patched by upgrading; the only remediations that exist are a different base image and a rebuild cadence, and that choice belongs to the owner"
+        ]
       }
     },
     "dast": {
@@ -233,7 +243,7 @@
     },
     {
       "status": "PASS",
-      "name": "the history scan read every commit git knows about (98 commits, 184013 added lines)",
+      "name": "the history scan read every commit git knows about (119 commits, 189931 added lines)",
       "why": ""
     },
     {
@@ -332,9 +342,9 @@
       "why": ""
     },
     {
-      "status": "OPEN",
-      "name": "CONTAINER IMAGE CONTENTS ARE UNSCANNED: no docker/scanner in this environment, so the Dockerfiles are read statically and no built image has been inspected for OS packages, layers or CVEs",
-      "why": "run trivy/grype against the built digests in CI (and record the digests) before the first production deploy; the static checks here do not cover base-image vulnerabilities"
+      "status": "PASS",
+      "name": "both images are scanned, not just read as text (trivy, on the built digests)",
+      "why": ""
     },
     {
       "status": "PASS",

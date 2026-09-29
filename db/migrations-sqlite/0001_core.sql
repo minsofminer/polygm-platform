@@ -34,6 +34,7 @@ CREATE TABLE markets (
     CONSTRAINT market_size_sane CHECK (minimum_order_size > 0)
 );
 CREATE INDEX markets_event_ix ON markets (event_id);
+CREATE INDEX markets_ends_ix  ON markets (end_ts) WHERE accepting_orders;
 CREATE TABLE tokens (
     token_id     TEXT PRIMARY KEY,
     market_id    TEXT NOT NULL REFERENCES markets(id),
@@ -78,6 +79,7 @@ CREATE TABLE idempotency_keys (
     order_hash      TEXT,
     created_ms      INTEGER NOT NULL DEFAULT (CAST(strftime('%s','now') AS INTEGER) * 1000),
     PRIMARY KEY (user_id, key));
+CREATE INDEX idem_age_ix ON idempotency_keys (created_ms) WHERE state = 'in_progress';
 CREATE TABLE kill_switch_state (
     id              INTEGER PRIMARY KEY,
     engaged         INTEGER NOT NULL,

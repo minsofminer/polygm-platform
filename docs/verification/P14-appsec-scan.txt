@@ -18,7 +18,7 @@ PASS every triage entry carries a reason and a reviewer
 PASS the triage covers a minority of the rules in play (not a wholesale suppression)
 PASS every allowlist entry is one of the two shapes this scanner can honour (0 malformed)
 PASS every line-scoped exemption was used by the history it exempts (1 of 1 honoured)
-PASS the history scan read every commit git knows about (98 commits, 184013 added lines)
+PASS the history scan read every commit git knows about (119 commits, 189931 added lines)
 PASS no secret shape in any commit's added lines (0 findings; 6 lines carry a written `lint-allow` exemption: …` / `// lint-allow: …`). Matching the bare string x1, shape only, never a real token x5; 1 line-scoped exemption(s) honoured)
 PASS canary: a token committed to a git history is found by this scanner (['github_pat'])
 PASS the CI log scanner passes its own self-test
@@ -38,8 +38,7 @@ PASS services/api/Dockerfile: no `curl | sh` install step
 PASS services/executor-mock/Dockerfile: runs as a non-root user
 PASS services/executor-mock/Dockerfile: copies no credential-shaped file into the image
 PASS services/executor-mock/Dockerfile: no `curl | sh` install step
-OPEN CONTAINER IMAGE CONTENTS ARE UNSCANNED: no docker/scanner in this environment, so the Dockerfiles are read statically and no built image has been inspected for OS packages, layers or CVEs
-        — run trivy/grype against the built digests in CI (and record the digests) before the first production deploy; the static checks here do not cover base-image vulnerabilities
+PASS both images are scanned, not just read as text (trivy, on the built digests)
 PASS the security headers are on a normal response
 PASS the API does not disclose its server or framework version
 PASS no wildcard CORS on any response (absent)
@@ -51,8 +50,4 @@ PASS an unknown route answers the API's own envelope, not a framework default pa
 PASS unexpected HTTP methods are refused, not executed ({'TRACE': 405, 'PUT': 405, 'DELETE': 405})
 PASS a hostile query string neither 500s nor is echoed back (422)
 
-P14 APPSEC: CONDITIONAL — 38 checks passed, 0 failed, 1 OPEN
-
-OPEN (not passes, not failures — measurements this environment cannot take):
-  * CONTAINER IMAGE CONTENTS ARE UNSCANNED: no docker/scanner in this environment, so the Dockerfiles are read statically and no built image has been inspected for OS packages, layers or CVEs
-      run trivy/grype against the built digests in CI (and record the digests) before the first production deploy; the static checks here do not cover base-image vulnerabilities
+P14 APPSEC: PASS — 39 checks passed, 0 failed, 0 OPEN

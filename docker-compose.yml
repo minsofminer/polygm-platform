@@ -49,7 +49,13 @@ services:
     ports: ["127.0.0.1:5432:5432"]
 
   pgbouncer:
-    image: edoburu/pgbouncer:1.23.1
+    # P14 D4, found by the first real `docker compose up` this repository ever ran: this line read
+    # `edoburu/pgbouncer:1.23.1`, which does not exist — the publisher's tags carry a `v` and a patch suffix
+    # (`v1.23.1-p0` … `-p3`). Every build and every test had passed for the whole project, because nothing had
+    # ever asked a registry for the image: the stack failed at *pull*, before a single container started, which
+    # is the failure a deploy would have hit and a test could not. Version intent (1.23.1, not `latest`) is
+    # unchanged; the tag is now one the registry actually serves.
+    image: edoburu/pgbouncer:v1.23.1-p3
     environment:
       DB_HOST: postgres
       DB_PORT: "5432"
@@ -76,7 +82,23 @@ services:
   api:
     <<: *env
     build: {context: ., dockerfile: services/api/Dockerfile}
-    command: ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8080", "--proxy-headers"]
+    # P14 D4 — THE HONEST ENGINE LINE. The shared anchor above exports `POLYGM_ENGINE=postgres` and
+    # `PGM_DB_URL` for the services that speak Postgres, and `migrate` is one of them: it is what keeps the
+    # source of truth honest against a real server. The API is NOT one of them yet. `services/api/app.py`
+    # imports `sqlite3` and reads `PGM_DB_PATH`; there is no `asyncpg` anywhere in `services/` or `packages/`.
+    # With the anchor's values the container came up "healthy: starting" and then crash-looped with
+    # "database /srv/app/var/polygm.db has no schema" — the deployed shape running on a database the deploy
+    # never mentioned, because `restart: unless-stopped` hid the failure from `compose ps`.
+    #
+    # So the dev stack runs the API on the portable subset, migrated at boot from the GENERATED files
+    # (`db/migrations-sqlite/`, built from `db/migrations/` by tools/build-sqlite-migrations.py --check, which
+    # is in the P11 gate) — not on a hand-written second schema. `sqlite` for the API here is a statement of
+    # fact, not a preference, and the Postgres API path is tracked as the launch blocker F14 in the P14 gate.
+    environment:
+      POLYGM_ENGINE: sqlite
+      PGM_DB_PATH: /srv/app/var/polygm.db
+    tmpfs: ["/srv/app/var:mode=0777,size=512m"]   # the sqlite file: scratch, re-migrated on every boot
+    command: ["sh", "-c", "python3 tools/run-sql.py --sqlite --dir db/migrations-sqlite && exec uvicorn app:app --host 0.0.0.0 --port 8080 --proxy-headers"]
     volumes: ["./services/api:/srv/app/services/api", "./packages:/srv/app/packages",
               "./db:/srv/app/db", "./brand:/srv/app/brand"]
     ports: ["127.0.0.1:8080:8080"]

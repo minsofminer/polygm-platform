@@ -1,0 +1,127 @@
+{
+ "checks": [
+  {
+   "name": "built polygm-api:p14-scan from services/api/Dockerfile",
+   "status": "PASS",
+   "why": ""
+  },
+  {
+   "name": "polygm-api:p14-scan scanned: 44 CRITICAL/HIGH across 17 package(s), 0 in language packages",
+   "status": "PASS",
+   "why": ""
+  },
+  {
+   "name": "built polygm-mock:p14-scan from services/executor-mock/Dockerfile",
+   "status": "PASS",
+   "why": ""
+  },
+  {
+   "name": "polygm-mock:p14-scan scanned: 44 CRITICAL/HIGH across 17 package(s), 0 in language packages",
+   "status": "PASS",
+   "why": ""
+  },
+  {
+   "name": "BASE-IMAGE CVEs WITH NO PUBLISHED FIX: 88 CRITICAL/HIGH across 8 distinct CVEs, none with a fixed version \u2014 the distro packages in `python:3.12-slim` (Debian 13.7). They cannot be patched by upgrading; the only remediations that exist are a different base image and a rebuild cadence, and that choice belongs to the owner",
+   "status": "OPEN",
+   "why": "mitigations already in the deployed shape: non-root uid 10001/10002, no login shell, no network client in the image, `cap_drop: [ALL]`, `no-new-privileges`, `read_only: true` with a tmpfs for /tmp; several of these CVEs need CAP_SYS_ADMIN or mount privileges the container does not hold. Owner decision: accept-and-rebuild-on-schedule, or move to a distroless/alpine base and re-run this tool (it prints the diff). Re-scan on every base-image bump: the record names the digest so a new scan can be compared against it"
+  }
+ ],
+ "facts": {
+  "docker": "sudo -n docker",
+  "polygm-api:p14-scan": {
+   "base": "python:3.12-slim",
+   "built_at": "2026-09-29T04:27:22Z",
+   "distinct_cves": {
+    "CVE-2025-69720": "ncurses: ncurses: Buffer overflow vulnerability may lead to arbitrary code execu",
+    "CVE-2026-16742": "systemd: systemd-homed: Local privilege escalation via missing home-record signa",
+    "CVE-2026-54369": "acl: Symlink traversal privilege escalation via libacl functions",
+    "CVE-2026-76642": "util-linux: util-linux: failed external mount helper still runs privileged X-mou",
+    "CVE-2026-78408": "util-linux: util-linux: nsenter --join-cgroup leaks root cgroup migration author",
+    "CVE-2026-78409": "util-linux: util-linux: X-mount.subdir detached-tree resolution can escape via i",
+    "CVE-2026-78410": "util-linux: util-linux: restricted bind mounts do not pin the source, allowing X",
+    "CVE-2026-9538": "perl-Archive-Tar: perl-Archive-Tar: Denial of Service via crafted tar header wit"
+   },
+   "dockerfile": "services/api/Dockerfile",
+   "fixable": [],
+   "lang_package_findings": 0,
+   "os": "13.7",
+   "packages": {
+    "bsdutils": 4,
+    "libacl1": 1,
+    "libblkid1": 4,
+    "liblastlog2-2": 4,
+    "libmount1": 4,
+    "libncursesw6": 1,
+    "libsmartcols1": 4,
+    "libsystemd0": 1,
+    "libtinfo6": 1,
+    "libudev1": 1,
+    "libuuid1": 4,
+    "login": 4,
+    "mount": 4,
+    "ncurses-base": 1,
+    "ncurses-bin": 1,
+    "perl-base": 1,
+    "util-linux": 4
+   },
+   "repo_digest": "(local only, unpushed)",
+   "severity": {
+    "HIGH": 44
+   }
+  },
+  "polygm-mock:p14-scan": {
+   "base": "python:3.12-slim",
+   "built_at": "2026-09-29T04:27:31Z",
+   "distinct_cves": {
+    "CVE-2025-69720": "ncurses: ncurses: Buffer overflow vulnerability may lead to arbitrary code execu",
+    "CVE-2026-16742": "systemd: systemd-homed: Local privilege escalation via missing home-record signa",
+    "CVE-2026-54369": "acl: Symlink traversal privilege escalation via libacl functions",
+    "CVE-2026-76642": "util-linux: util-linux: failed external mount helper still runs privileged X-mou",
+    "CVE-2026-78408": "util-linux: util-linux: nsenter --join-cgroup leaks root cgroup migration author",
+    "CVE-2026-78409": "util-linux: util-linux: X-mount.subdir detached-tree resolution can escape via i",
+    "CVE-2026-78410": "util-linux: util-linux: restricted bind mounts do not pin the source, allowing X",
+    "CVE-2026-9538": "perl-Archive-Tar: perl-Archive-Tar: Denial of Service via crafted tar header wit"
+   },
+   "dockerfile": "services/executor-mock/Dockerfile",
+   "fixable": [],
+   "lang_package_findings": 0,
+   "os": "13.7",
+   "packages": {
+    "bsdutils": 4,
+    "libacl1": 1,
+    "libblkid1": 4,
+    "liblastlog2-2": 4,
+    "libmount1": 4,
+    "libncursesw6": 1,
+    "libsmartcols1": 4,
+    "libsystemd0": 1,
+    "libtinfo6": 1,
+    "libudev1": 1,
+    "libuuid1": 4,
+    "login": 4,
+    "mount": 4,
+    "ncurses-base": 1,
+    "ncurses-bin": 1,
+    "perl-base": 1,
+    "util-linux": 4
+   },
+   "repo_digest": "(local only, unpushed)",
+   "severity": {
+    "HIGH": 44
+   }
+  },
+  "scanner": "sudo -n trivy",
+  "totals": {
+   "critical_high": 88,
+   "distinct_cves": 8,
+   "with_a_fix_available": 0
+  }
+ },
+ "open_conditions": [
+  {
+   "check": "BASE-IMAGE CVEs WITH NO PUBLISHED FIX: 88 CRITICAL/HIGH across 8 distinct CVEs, none with a fixed version \u2014 the distro packages in `python:3.12-slim` (Debian 13.7). They cannot be patched by upgrading; the only remediations that exist are a different base image and a rebuild cadence, and that choice belongs to the owner",
+   "why": "mitigations already in the deployed shape: non-root uid 10001/10002, no login shell, no network client in the image, `cap_drop: [ALL]`, `no-new-privileges`, `read_only: true` with a tmpfs for /tmp; several of these CVEs need CAP_SYS_ADMIN or mount privileges the container does not hold. Owner decision: accept-and-rebuild-on-schedule, or move to a distroless/alpine base and re-run this tool (it prints the diff). Re-scan on every base-image bump: the record names the digest so a new scan can be compared against it"
+  }
+ ],
+ "verdict": "PASS"
+}

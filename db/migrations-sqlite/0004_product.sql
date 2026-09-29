@@ -49,6 +49,7 @@ CREATE TABLE alert_rules (
     created_ms      INTEGER NOT NULL,
     CONSTRAINT rule_has_target CHECK (market_id IS NOT NULL OR event_id IS NOT NULL)
 );
+CREATE INDEX alert_rules_live_ix ON alert_rules (enabled, kind) WHERE enabled;
 CREATE TABLE alert_fires (
     id              INTEGER PRIMARY KEY,
     rule_id         TEXT NOT NULL REFERENCES alert_rules(id),
@@ -87,8 +88,8 @@ CREATE TABLE watchlists (
     id              TEXT PRIMARY KEY,
     user_id         TEXT NOT NULL REFERENCES users(id),
     name            TEXT NOT NULL,
-    position        INTEGER NOT NULL DEFAULT 0,
-    UNIQUE (user_id));
+    position        INTEGER NOT NULL DEFAULT 0);
+CREATE UNIQUE INDEX watchlists_user_name_uq ON watchlists (user_id, lower(name));
 CREATE TABLE watchlist_items (
     watchlist_id    TEXT NOT NULL REFERENCES watchlists(id),
     market_id       TEXT NOT NULL,

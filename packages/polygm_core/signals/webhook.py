@@ -231,7 +231,12 @@ def signature(secret: str, body: bytes, *, at_ms: int) -> str:
 def _open(url: str, body: bytes, headers: dict, timeout: float):
     """The one place a socket is opened. `urllib` rather than a client library because the request is a POST
     with headers and nothing else, and a dependency is a thing that has to be patched."""
-    req = urllib.request.Request(url, data=body, headers=headers, method="POST")
+    # `# noqa: S310` on both lines of the one guarded call: the guard (`_classify`, https only, no
+    # userinfo, resolution re-checked at send time, every redirect hop re-guarded) runs in `deliver`
+    # before this function is reached, so the scheme here is https by construction. Ruff flags the
+    # `Request` construction as well as the `urlopen`, and marking only the second line is how the
+    # finding reappeared in the D3 scan with a bare marker above it reading "guarded above".
+    req = urllib.request.Request(url, data=body, headers=headers, method="POST")   # noqa: S310 - see below
     return urllib.request.urlopen(req, timeout=timeout)                          # noqa: S310 - guarded above
 
 

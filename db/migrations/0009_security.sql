@@ -129,9 +129,15 @@ CREATE TABLE withdrawal_addresses (
     confirmed_ms    INTEGER,
     removed_ms      INTEGER,
     added_via       TEXT NOT NULL DEFAULT 'user',
-    skip_cooldown   INTEGER NOT NULL DEFAULT FALSE,
+    -- P14 D4: this read `INTEGER NOT NULL DEFAULT FALSE` with `CHECK (skip_cooldown = FALSE)`. The column is
+    -- an integer everywhere it is touched (the store inserts 0, the tests try 1 as the attack the CHECK is
+    -- there to refuse), and `FALSE` is a boolean literal: Postgres refused the *default* ("column
+    -- skip_cooldown is of type integer but default expression is of type boolean") and would have refused the
+    -- CHECK next ("operator does not exist: integer = boolean"). sqlite is untyped enough to accept both, so
+    -- the twin was happy and the production schema was unbuildable. Spelled in the type the column has.
+    skip_cooldown   INTEGER NOT NULL DEFAULT 0,
     CHECK (added_via IN ('user','support_verified','import')),
-    CHECK (skip_cooldown = FALSE)
+    CHECK (skip_cooldown = 0)
 );
 CREATE INDEX withdrawal_addresses_user ON withdrawal_addresses (user_id, removed_ms);
 
@@ -263,7 +269,10 @@ CREATE TABLE secret_inventory (
     owner           TEXT NOT NULL,                      -- a human, not a team alias
     rotate_by_ms    INTEGER NOT NULL,                   -- a date, or "rotation procedure" is a slogan
     last_rotated_ms INTEGER NOT NULL DEFAULT 0,
-    can_rotate_live INTEGER NOT NULL DEFAULT TRUE,     -- FALSE means a maintenance window: said out loud
+    can_rotate_live INTEGER NOT NULL DEFAULT 1,         -- 0 means a maintenance window: said out loud.
+                                                -- P14 D4: was `DEFAULT TRUE` on an INTEGER column; Postgres
+                                                -- refuses a boolean default for an integer (and the writers in
+                                                -- security/store.py already send 0/1).
     note            TEXT NOT NULL DEFAULT '',
     CHECK (environment IN ('dev','staging','prod')),
     CHECK (stored_in IN ('kms','secret_manager','env','provider_console')),
@@ -278,7 +287,8 @@ CREATE TABLE backup_restore_tests (
     restore_started_ms INTEGER NOT NULL,
     restore_done_ms INTEGER,
     verified_rows   INTEGER NOT NULL DEFAULT 0,
-    money_checks_ok INTEGER NOT NULL DEFAULT FALSE,
+    money_checks_ok INTEGER NOT NULL DEFAULT 0,         -- P14 D4: was `DEFAULT FALSE`; same class as
+                                                -- can_rotate_live — integer column, boolean literal.
     tested_by       TEXT NOT NULL DEFAULT '',
     note            TEXT NOT NULL DEFAULT '',
     CHECK (kind IN ('pg_snapshot','sqlite_file','ledger_csv','keystore')),

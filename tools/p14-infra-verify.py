@@ -177,13 +177,38 @@ def section_runtime(g: Gate, facts: dict) -> None:
     c = facts["runtime"]["compose_api"]
     g.check("the api container is read-only, drops all capabilities and cannot gain privileges",
             c["read_only"] and c["cap_drop_all"] and c["no_new_privileges"], json.dumps(c))
-    code, _out = subprocess.run(["which", "docker"], capture_output=True, text=True).returncode, None
-    if code != 0:
-        g.open("NO IMAGE-LEVEL PROOF OF THE RUNTIME HARDENING: no docker here, so the Dockerfiles and compose are "
-               "read as text; nobody has yet run `id` inside the built image or tried to write to `/`",
-               "run the kit's own probes on the built image: `docker run … id` (expect uid 10001, not 0), "
-               "`touch /srv/app/x` (expect permission denied), `nc -l` (absent), `getent passwd polygm` (expect "
-               "nologin), then record the output")
+    # P14 D4: this used to record an OPEN whenever `which docker` failed, which was a statement about the
+    # BUILD MACHINE and not about the product. It has been run for real — `tools/p14-container-verify.py` builds
+    # both images, runs the four probes on each, boots the API image and brings the compose stack up (18 checks,
+    # recorded in docs/verification/P14-container-verify.json). This section now CONSUMES that record: the
+    # Dockerfiles are still read as text here (cheap, always available), and the runtime claim cites the run.
+    container = VERIF / "P14-container-verify.json"
+    if container.exists():
+        data = json.loads(container.read_text())
+        checks = data.get("checks") or []
+        failed = sum(1 for c in checks if c.get("status") == "FAIL")
+        opened = len(data.get("open_conditions") or [])
+        facts["runtime"]["container_verify"] = {
+            "artifact": "docs/verification/P14-container-verify.json",
+            "passed": sum(1 for c in checks if c.get("status") == "PASS"), "failed": failed, "open": opened,
+        }
+        image_checks = [c for c in checks if c.get("status") == "PASS"
+                        and ("runs as uid" in c.get("name", "") or "network client" in c.get("name", "")
+                             or "login shell" in c.get("name", ""))]
+        g.check("the runtime hardening is proven by running the images, not by reading the Dockerfiles "
+                "(uid, no network client, no login shell, read-only rootfs, and the artefact boots)",
+                failed == 0 and opened == 0 and len(image_checks) >= 6,
+                "docs/verification/P14-container-verify.json: %s passed, %s failed, %s open"
+                % (facts["runtime"]["container_verify"]["passed"], failed, opened))
+    elif shutil.which("docker") is None:
+        g.open("IMAGE-LEVEL PROOF OF THE RUNTIME HARDENING HAS NOT BEEN RE-RUN HERE: the recorded run is missing "
+               "and this machine has no docker",
+               "run `python3 tools/p14-container-verify.py --record docs/verification/P14-container-verify.txt "
+               "--json docs/verification/P14-container-verify.json` on a machine with a docker runtime")
+    else:
+        g.check("docker is available, so the image proof can be produced", False,
+                "docker is present but docs/verification/P14-container-verify.json is missing — run "
+                "tools/p14-container-verify.py --record … --json …")
 
 
 # ------------------------------------------------------------------------------------------- 3. database

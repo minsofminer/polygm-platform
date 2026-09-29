@@ -15,6 +15,7 @@ CREATE TABLE IF NOT EXISTS telegram_updates (
     CHECK (state IN ('claimed','done','failed'))
 );
 CREATE INDEX IF NOT EXISTS telegram_updates_chat_ix ON telegram_updates (chat_id, first_ms);
+CREATE INDEX IF NOT EXISTS telegram_updates_state_ix ON telegram_updates (state, first_ms) WHERE state = 'claimed';
 CREATE TABLE IF NOT EXISTS telegram_sessions (
     chat_id      TEXT PRIMARY KEY,
     step         TEXT NOT NULL DEFAULT 'idle',
@@ -53,6 +54,8 @@ CREATE TABLE IF NOT EXISTS telegram_outbox (
     CHECK (attempts >= 0)
 );
 CREATE INDEX IF NOT EXISTS telegram_outbox_ready_ix ON telegram_outbox (state, due_ms, priority, id);
+CREATE INDEX IF NOT EXISTS telegram_outbox_claim_ix ON telegram_outbox (state, claim_ms) WHERE state = 'sending';
+CREATE UNIQUE INDEX IF NOT EXISTS telegram_outbox_dedupe_ix ON telegram_outbox (dedupe_key) WHERE dedupe_key <> '';
 CREATE TABLE IF NOT EXISTS telegram_commands (
     id          INTEGER PRIMARY KEY,
     at_ms       INTEGER NOT NULL,

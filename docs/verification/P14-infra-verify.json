@@ -6,10 +6,6 @@
       "why": "when the executor lands: from inside its subnet, curl a non-allowlisted host and a non-allowlisted port and record both refusals (the kit's 'proved by trying'), plus an allowed vendor call"
     },
     {
-      "check": "NO IMAGE-LEVEL PROOF OF THE RUNTIME HARDENING: no docker here, so the Dockerfiles and compose are read as text; nobody has yet run `id` inside the built image or tried to write to `/`",
-      "why": "run the kit's own probes on the built image: `docker run \u2026 id` (expect uid 10001, not 0), `touch /srv/app/x` (expect permission denied), `nc -l` (absent), `getent passwd polygm` (expect nologin), then record the output"
-    },
-    {
       "check": "MANAGED-POSTGRES RESTORE UNPROVEN: the drill above is the SQLite twin, which is what this environment runs; no restore has been performed against the managed Postgres that production will use",
       "why": "on the managed instance: take a PITR snapshot, restore to a scratch branch at a known timestamp, run the same money-path queries, and record the wall-clock time and the recovery point"
     },
@@ -27,7 +23,7 @@
     }
   ],
   "facts": {
-    "at_ms": 1790401948759,
+    "at_ms": 1790655955959,
     "api_live": "https://polygm-api.vercel.app",
     "mini_app_live": "https://polygm-mini-app.vercel.app",
     "egress": {
@@ -35,10 +31,12 @@
         "services/executor-mock/transport.py:31:            with urllib.request.urlopen(req, timeout=timeout_ms / 1000) as r:",
         "services/ingest/net.py:3:Three rules, and they are the reason this module exists rather than a `urllib.request.urlopen` at each call",
         "services/ingest/net.py:232:            with urllib.request.urlopen(req, timeout=timeout[1]) as r:     # read timeout; see note above",
+        "packages/polygm_core/signals/webhook.py:235:    return urllib.request.urlopen(req, timeout=timeout)                          # noqa: S310 - guarded above",
         "services/executor-mock/transport.py:31:            with urllib.request.urlopen(req, timeout=timeout_ms / 1000) as r:",
-        "services/ingest/net.py:232:            with urllib.request.urlopen(req, timeout=timeout[1]) as r:     # read timeout; see note above"
+        "services/ingest/net.py:232:            with urllib.request.urlopen(req, timeout=timeout[1]) as r:     # read timeout; see note above",
+        "packages/polygm_core/signals/webhook.py:235:    return urllib.request.urlopen(req, timeout=timeout)                          # noqa: S310 - guarded above"
       ],
-      "count": 5,
+      "count": 7,
       "config_urls": [
         "https://clob.polymarket.com",
         "https://data-api.polymarket.com",
@@ -65,6 +63,12 @@
         "cap_drop_all": true,
         "no_new_privileges": true,
         "user": false
+      },
+      "container_verify": {
+        "artifact": "docs/verification/P14-container-verify.json",
+        "passed": 18,
+        "failed": 0,
+        "open": 0
       }
     },
     "database": {
@@ -73,10 +77,10 @@
       }
     },
     "restore": {
-      "backup_ms": 16,
+      "backup_ms": 15,
       "restore_ms": 7,
-      "tables": 124,
-      "rows": 3274,
+      "tables": 125,
+      "rows": 3275,
       "mismatches": {},
       "money_answers_identical": true
     },
@@ -125,7 +129,7 @@
       },
       "anonymous_order": {
         "status": 401,
-        "body": "{\"error\":{\"code\":\"UNAUTHENTICATED\",\"message\":\"a session is required\",\"retryable\":false,\"requestId\":\"eba7f6bc580c442d\"}}"
+        "body": "{\"error\":{\"code\":\"UNAUTHENTICATED\",\"message\":\"a session is required\",\"retryable\":false,\"requestId\":\"2df169eb9e304b5c\"}}"
       },
       "mini_app": {
         "status": 200,
@@ -140,7 +144,7 @@
   "checks": [
     {
       "status": "PASS",
-      "name": "no outbound call site builds its URL from a request value (5 call site(s) total)",
+      "name": "no outbound call site builds its URL from a request value (7 call site(s) total)",
       "why": ""
     },
     {
@@ -179,9 +183,9 @@
       "why": ""
     },
     {
-      "status": "OPEN",
-      "name": "NO IMAGE-LEVEL PROOF OF THE RUNTIME HARDENING: no docker here, so the Dockerfiles and compose are read as text; nobody has yet run `id` inside the built image or tried to write to `/`",
-      "why": "run the kit's own probes on the built image: `docker run \u2026 id` (expect uid 10001, not 0), `touch /srv/app/x` (expect permission denied), `nc -l` (absent), `getent passwd polygm` (expect nologin), then record the output"
+      "status": "PASS",
+      "name": "the runtime hardening is proven by running the images, not by reading the Dockerfiles (uid, no network client, no login shell, read-only rootfs, and the artefact boots)",
+      "why": ""
     },
     {
       "status": "FAIL",
@@ -190,12 +194,12 @@
     },
     {
       "status": "PASS",
-      "name": "a consistent backup of the migrated database was taken (16 ms, 1765376 bytes)",
+      "name": "a consistent backup of the migrated database was taken (15 ms, 1818624 bytes)",
       "why": ""
     },
     {
       "status": "PASS",
-      "name": "the restored copy holds every table and every row (124 tables, 3274 rows, 7 ms)",
+      "name": "the restored copy holds every table and every row (125 tables, 3275 rows, 7 ms)",
       "why": ""
     },
     {

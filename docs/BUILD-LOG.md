@@ -1263,3 +1263,63 @@ being a scanner.
 **Verified.** unittest **1574 OK**, pytest **1594 passed** (+31 each), lint-rules 192 files / 0 findings, P04 56/56,
 P05 14/14, P11 30/30, `build-sqlite-migrations --check` clean, gate document regenerated and `--check` matching.
 
+---
+
+## The container half of P14, and the five defects it found · 2026-09-29
+
+**Two OPENs had stood since D4 was written**, both for one reason: `docs/verification/P14-infra-verify.txt` said it
+out loud — *"no docker here, so the Dockerfiles and compose are read as text; nobody has yet run `id` inside the
+built image or tried to write to `/`"* — and D3 carried the same shape for image contents. A check that reports an
+OPEN because of the machine it runs on is not a check; it is a note. This sandbox turned out to have passwordless
+`sudo`, so the machine was no longer the excuse: docker and trivy were installed, the images were built, and the
+stack was brought up for the first time in this repository's life.
+
+**What running it found — none of which any test could see, because every test ran in the working tree:**
+
+1. **The API image could not boot.** `services/api/Dockerfile` never copied `contracts/` or `config/`, and
+   `app.py`'s import graph reads `contracts/startapp.json` (the Telegram channel) and `config/gtm.json` (the
+   revenue schedule). `uvicorn` died with `FileNotFoundError` before binding a port. Every test passed, the whole
+   time, because both files exist in the tree.
+2. **`edoburu/pgbouncer:1.23.1` does not exist.** The publisher's tags carry a `v` and a patch suffix
+   (`v1.23.1-p0`…`-p3`), so `docker compose up` failed at *pull* — before a single container started. The stack
+   had never been started, so nothing had ever asked a registry for the image.
+3. **The Postgres migrations had never been applied to Postgres.** Four SQL defects, each invisible to the sqlite
+   twin and each fatal to the source of truth: `date_trunc('day', to_timestamp(...))` is not IMMUTABLE
+   (`0002`), `unique (user_id, lower(name))` is not legal as a table constraint and `substr(trim(jsonb))` resolves
+   to `btrim(jsonb)`, which does not exist (`0004`), and `INTEGER NOT NULL DEFAULT FALSE` mixes types twice over
+   (`0009`). Also `(sent_ms - queued_ms DESC)` — an unparenthesised expression in an index, invalid in *both*
+   engines, invisible because the transpiler had been dropping every partial index from the subset.
+4. **The append-only trigger raised `TG_TABLENAME`**, a variable that does not exist, so the control P11's c27
+   counts across 30 tables produced an error *about the error* on every attempt. The sqlite twin has its own
+   triggers, so the pgSQL function had never executed anywhere.
+5. **`btrim`/`FALSE` the other way round**: `audit_log`'s object CHECK was written in the *sqlite* spelling inside
+   the Postgres file, because the transpiler could not translate the Postgres one. The generator now translates
+   `jsonb_typeof(x) = 'object'` outward — Postgres in, sqlite out, the direction it exists to work in.
+
+**The tools, so this is repeatable rather than a story.** `tools/p14-container-verify.py` builds both images, runs
+the four probes the OPEN text named (`id`, a write outside the working directory, network clients, `getent passwd`)
+plus a read-only-rootfs probe, boots the API image, then brings the compose stack up and proves the *database*
+enforces append-only: a real `INSERT`, then an `UPDATE` and a `DELETE` refused by the trigger, then the REVOKE
+half refused for the application role. `tools/p14-image-scan.py` builds and scans both images with trivy and
+records every finding one of two ways — fixed, or recorded with a reason. Both write the house artifact shape
+(`verdict`/`checks`/`open_conditions`), because a tool that invents its own shape is invisible to the gate: the
+first container record rendered as MISSING while the run behind it had passed 18 checks.
+
+**The results.** `P14 CONTAINER VERIFY — PASS, 18 passed / 0 failed / 0 OPEN`. `P14 IMAGE SCAN — PASS, 4 passed, 1
+OPEN`: **88 CRITICAL/HIGH across 8 distinct CVEs in the distro layer of `python:3.12-slim`, none with a published
+fix** — real, written down with its mitigations (non-root, no login shell, no network client, `cap_drop: [ALL]`,
+`no-new-privileges`, read-only rootfs) and left as an owner decision between accepting a rebuild cadence and moving
+to a distroless base, because that is not a decision a build agent should take silently. And `0005`'s refusal now
+says what it means: `append-only table: audit_log is not updatable or deletable`.
+
+**Verified this block.** pytest **1594 passed**; P04 **56/56**; P05 **14/14**; P07 **32/32**; P08 **16/16**;
+**P11 30/30**; sqlite `--check` clean (with the twin now carrying the partial-unique indexes it had been silently
+dropping — `telegram_outbox`'s dedupe guarantee among them); lint-rules clean; P14 gate document regenerated with
+two new rows (D3 containers, D4 containers) and `--check` matching.
+
+**One housekeeping note.** The workspace snapshot this block started from had `HEAD` at an ancestor of
+`origin/main` — the `.git` directory was a stale copy while the remote was two commits ahead. The recovery was
+`git fetch` + `git reset --mixed origin/main`: the working tree is preserved, the history moves forward, and the
+only things left dirty are this block's own changes. A `--hard` there would have thrown away the work; the check
+that makes it safe is `git merge-base --is-ancestor <local> <remote>`, which said "no divergence" first.
+

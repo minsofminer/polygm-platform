@@ -205,10 +205,34 @@ def reorder_checks(sql: str, moved: list[str]) -> str:
     return "".join(pieces)
 
 
+#: Functions that only Postgres can evaluate in an index expression. `date_trunc(text, timestamptz)` is the one
+#: that started this list: it is STABLE (the bucket depends on the session TimeZone), Postgres refuses it in an
+#: index, and the fix on the Postgres side — `AT TIME ZONE 'UTC'` first — is exactly what sqlite cannot parse.
+PG_INDEX_ONLY = ("DATE_TRUNC", "AT TIME ZONE", "TO_TIMESTAMP", "NOW()", "GENERATED ALWAYS AS")
+
+
+def index_statements(cleaned: str) -> dict[str, str]:
+    """Map each `CREATE INDEX`'s first line to its WHOLE statement, normalized.
+
+    P14 D4, and a lesson about line-based rules: the drop rule for expression indexes read only the first
+    line of the statement, so the day `attribution_day_ix` was reformatted to put its columns on their own
+    lines, `DATE_TRUNC` left the first line, the rule stopped firing, and the tool emitted an index
+    containing `AT TIME ZONE 'UTC'` into the sqlite subset — which sqlite rejected (`near "AT": syntax
+    error`). The generator's own run-the-output check caught it, which is the reason this was a five-minute
+    fix rather than a broken gate, but the rule should not depend on where somebody wrapped a line.
+    """
+    found: dict[str, str] = {}
+    for m in re.finditer(r"CREATE\s+(?:UNIQUE\s+)?INDEX\b[^;]*;", cleaned, re.I | re.S):
+        stmt = " ".join(m.group(0).split())
+        found[m.group(0).splitlines()[0].strip()] = stmt
+    return found
+
+
 def transpile(text: str, dropped: list[str]) -> str:
     out: list[str] = []
     skip_until_semi = False
     in_dollar = False
+    indexes = index_statements(strip_inline_comments(text))
     # P07 found the hole: the PG-only test below is a *prefix* test, and this loop reads lines, not
     # statements. A column whose name begins with a PG-only keyword - `revoked_ms`, `revoked_reason`,
     # `revoked`, `grant_id`, `comment_count` - was classified as `REVOKE`/`COMMENT ON`/`GRANT`, its line
@@ -249,8 +273,19 @@ def transpile(text: str, dropped: list[str]) -> str:
             skip_until_semi = (";" not in st) and not in_dollar
             continue
         if at_statement_start and up.startswith(("CREATE UNIQUE INDEX", "CREATE INDEX")):
-            if " WHERE " in up or "DATE_TRUNC" in up or "LOWER(" in up:
-                dropped.append("partial/expression index: " + st[:70])
+            # The decision is made over the WHOLE statement (`index_statements`), not just this line, and the
+            # `skip_until_semi` on the drop path is what stops a multi-line expression index from leaking its
+            # continuation lines into the subset as bare fragments.
+            whole = indexes.get(st, up)
+            # The question is PORTABILITY, not "is it an expression index". The old rule dropped anything with
+            # `WHERE` or `LOWER(` in it, which quietly removed ten indexes from the twin — including partial
+            # UNIQUE indexes that are safety guarantees rather than performance aids (`telegram_outbox`'s
+            # dedupe index among them). SQLite has supported partial and expression indexes since 3.8/3.9, so
+            # those belong in the subset; what must be dropped is anything whose *expression* needs a Postgres
+            # function (date_trunc over timestamptz, `AT TIME ZONE`, to_timestamp, now()), because there is no
+            # honest way to spell it in sqlite and a silent no-op would be worse than a recorded drop.
+            if any(tok in whole.upper() for tok in PG_INDEX_ONLY):
+                dropped.append("index over a PG-only expression: " + whole[:70])
                 skip_until_semi = ";" not in st
                 continue
             out.append(raw.replace(" DESC", ""))
@@ -261,7 +296,18 @@ def transpile(text: str, dropped: list[str]) -> str:
             dropped.append("generated column over a PG-only function - the service computes it on sqlite")
             out.append(SENTINEL)
             continue
-        if re.search(r"jsonb_typeof|detail_json::text", keep, re.I):
+        jsonb_object = re.search(r"jsonb_typeof\s*\(\s*(\w+)\s*\)\s*=\s*'object'", keep, re.I)
+        if jsonb_object and "CHECK" in keep.upper():
+            # P14 D4: `CHECK (jsonb_typeof(x) = 'object')` is the correct Postgres spelling of "this column
+            # holds a JSON object", and it is now what the Postgres file says. Its sqlite spelling is
+            # `substr(trim(x), 1, 1) = '{'`, which is what the schema used to say *in both engines* — the
+            # sqlite-shaped text had leaked into the source of truth, where `trim(jsonb)` resolves to
+            # `btrim(jsonb)`, a function that does not exist, so 0004 could never be applied to Postgres at
+            # all. The translation belongs here, in the direction the generator already works (Postgres in,
+            # sqlite out), not in the migration.
+            keep = re.sub(r"jsonb_typeof\s*\(\s*(\w+)\s*\)\s*=\s*'object'",
+                          lambda mm: "substr(trim(%s), 1, 1) = '{'" % mm.group(1), keep, flags=re.I)
+        elif re.search(r"jsonb_typeof|detail_json::text", keep, re.I):
             dropped.append("CHECK using a PG-only expression (asserted in the API/CI instead): " + st[:60])
             # A COLUMN LINE that carries such a CHECK (`detail_json JSONB NOT NULL DEFAULT '{}'
             # CHECK (jsonb_typeof(...))`) must survive with its CHECK removed - emitting a bare sentinel

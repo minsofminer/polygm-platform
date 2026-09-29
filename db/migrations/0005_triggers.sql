@@ -7,7 +7,7 @@
 CREATE OR REPLACE FUNCTION polygm_reject_mutation() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
     RAISE EXCEPTION 'append-only table: % is not updatable or deletable (see db/migrations/0005_triggers.sql)',
-        TG_TABLENAME
+        TG_TABLE_NAME
         USING ERRCODE = 'insufficient_privilege';
 END $$;
 
@@ -17,7 +17,7 @@ CREATE OR REPLACE FUNCTION polygm_immutable_columns() RETURNS trigger LANGUAGE p
 BEGIN
     IF TG_OP = 'UPDATE' THEN
         IF NEW.id IS DISTINCT FROM OLD.id THEN
-            RAISE EXCEPTION 'id is immutable on %', TG_TABLENAME USING ERRCODE = 'check_violation';
+            RAISE EXCEPTION 'id is immutable on %', TG_TABLE_NAME USING ERRCODE = 'check_violation';
         END IF;
     END IF;
     RETURN NEW;

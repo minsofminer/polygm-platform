@@ -125,9 +125,16 @@ CREATE TABLE watchlists (
     id              TEXT PRIMARY KEY,
     user_id         TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     name            TEXT NOT NULL,
-    position        INT NOT NULL DEFAULT 0,
-    unique (user_id, lower(name))
+    position        INT NOT NULL DEFAULT 0
 );
+-- P14 D4, found by the first `docker compose up` this repository ever ran: this was a table-level
+-- `unique (user_id, lower(name))`, which Postgres rejects outright — a table constraint may name columns, not
+-- expressions ("syntax error at or near \"("\"). SQLite accepts the expression form, so the twin generated
+-- from this file carried `UNIQUE (user_id)` instead: the generator's rule for "expression UNIQUE" keeps the
+-- plain columns and drops the expression, which made the twin *stricter than production* in a way nothing
+-- could see — one watchlist per user on sqlite, many on Postgres, and the case-insensitive half of the
+-- guarantee gone from both. A unique INDEX is the form both engines accept the same way.
+CREATE UNIQUE INDEX watchlists_user_name_uq ON watchlists (user_id, lower(name));
 CREATE TABLE watchlist_items (
     watchlist_id    TEXT NOT NULL REFERENCES watchlists(id) ON DELETE CASCADE,
     market_id       TEXT NOT NULL,
@@ -165,10 +172,12 @@ CREATE TABLE audit_log (
     request_id      TEXT NOT NULL,               -- joins to the log lines; without it this table is
                                                  -- decorative, and decorative tables are not read at 3am
     detail_json     JSONB NOT NULL DEFAULT '{}',
-    -- The object check, as a TABLE-level clause: `jsonb_typeof(detail_json) = 'object'` did not survive the
-    -- SQLite transpiler, so the dev engine was enforcing nothing while the production schema claimed to
-    -- enforce something (P06's new parity check in tools/build-sqlite-migrations.py found it). Same rule,
-    -- both dialects.
+    -- The object check, as a TABLE-level clause, spelled in POSTGRES: `jsonb_typeof(detail_json) = 'object'`.
+    -- (P14 D4: this clause used to read `substr(trim(detail_json), 1, 1) = '{'` — the SQLITE spelling of the
+    -- same rule, written here because the transpiler could not translate the Postgres one. Postgres resolves
+    -- `trim(jsonb)` to `btrim(jsonb)`, which does not exist, so migration 0004 — and therefore the entire
+    -- production database — could never be created. The generator now translates this idiom outward, which is
+    -- the direction it exists to work in: the source of truth speaks Postgres, sqlite gets a translation.)
     --
     -- The OTHER clause that used to live here — `detail_json::text !~ '("private_key"|"mnemonic"|...)'`, a
     -- no-secrets guard — is deliberately NOT replaced with a portable LIKE. A LIKE cannot tell a key named
@@ -177,7 +186,7 @@ CREATE TABLE audit_log (
     -- invariant is kept where it can be exact: services/api redacts before writing, and
     -- tools/lint-rules.py::no-secrets greps the writers. Losing a schema CHECK is the price of the dev
     -- engine not having regex; the price of the wrong CHECK is a silent gap in the trail.
-    CHECK (substr(trim(detail_json), 1, 1) = '{')
+    CHECK (jsonb_typeof(detail_json) = 'object')
 );
 CREATE INDEX audit_actor_ix ON audit_log (actor_id, at_ms DESC);
 CREATE INDEX audit_action_ix ON audit_log (action, at_ms DESC);

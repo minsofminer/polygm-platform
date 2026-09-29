@@ -161,9 +161,7 @@
     "0001_core.sql": {
       "dropped": [
         "PG-only statement: CREATE EXTENSION IF NOT EXISTS pgcrypto;",
-        "generated column over a PG-only function - the service computes it on sqlite",
-        "partial/expression index: CREATE INDEX markets_ends_ix  ON markets (end_ts) WHERE accepting_orde",
-        "partial/expression index: CREATE INDEX idem_age_ix ON idempotency_keys (created_ms) WHERE state "
+        "generated column over a PG-only function - the service computes it on sqlite"
       ],
       "check_clauses_reordered": [
         "markets"
@@ -171,10 +169,7 @@
     },
     "0002_money.sql": {
       "dropped": [
-        "partial/expression index: CREATE INDEX intents_stuck_ix ON order_intents (updated_ms) WHERE stat",
-        "partial/expression index: CREATE INDEX lots_user_token_ix ON position_lots (user_id, token_id) W",
-        "partial/expression index: CREATE INDEX snap_delta_ix ON position_snapshots (observed_ms DESC) WH",
-        "partial/expression index: CREATE INDEX attribution_day_ix ON builder_attribution (date_trunc('da"
+        "index over a PG-only expression: CREATE INDEX attribution_day_ix ON builder_attribution ( date_trunc('d"
       ],
       "check_clauses_reordered": [
         "balances",
@@ -184,10 +179,7 @@
       ]
     },
     "0004_product.sql": {
-      "dropped": [
-        "partial/expression index: CREATE INDEX alert_rules_live_ix ON alert_rules (enabled, kind) WHERE ",
-        "expression UNIQUE(lower(name)) -> plain UNIQUE(user_id): sqlite forbids expressions in UNIQUE/PRIMARY KEY"
-      ],
+      "dropped": [],
       "check_clauses_reordered": [
         "alert_rules",
         "copy_configs",
@@ -281,9 +273,7 @@
       ]
     },
     "0010_market_surfaces.sql": {
-      "dropped": [
-        "partial/expression index: CREATE INDEX IF NOT EXISTS market_meta_category_ix ON market_meta (cat"
-      ],
+      "dropped": [],
       "check_clauses_reordered": []
     },
     "0011_terminal.sql": {
@@ -333,9 +323,6 @@
     },
     "0019_telegram.sql": {
       "dropped": [
-        "partial/expression index: CREATE INDEX IF NOT EXISTS telegram_updates_state_ix ON telegram_updat",
-        "partial/expression index: CREATE INDEX IF NOT EXISTS telegram_outbox_claim_ix ON telegram_outbox",
-        "partial/expression index: CREATE UNIQUE INDEX IF NOT EXISTS telegram_outbox_dedupe_ix ON telegra",
         "PG-only statement: CREATE TRIGGER append_only_telegram_broadcasts BEFORE UPDATE OR DELETE ON tele",
         "PG-only statement: CREATE TRIGGER append_only_telegram_kill_state BEFORE UPDATE OR DELETE ON tele",
         "PG-only statement: DO $$"

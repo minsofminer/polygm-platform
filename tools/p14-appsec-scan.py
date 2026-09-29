@@ -41,6 +41,7 @@ import json
 import os
 import pathlib
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -531,13 +532,28 @@ def section_containers(g: Gate, facts: dict) -> None:
         g.check("%s: runs as a non-root user" % name, c["non_root"], "USER is root or absent")
         g.check("%s: copies no credential-shaped file into the image" % name, c["no_secret_copy"], "COPY of a secret")
         g.check("%s: no `curl | sh` install step" % name, c["no_curl_sh"], "a piped shell install is unpinnable")
-    # The honest gap: image *contents* cannot be checked here, so the scan says so rather than implying it did.
-    code, out = sh(["docker", "--version"])
-    if code != 0:
-        g.open("CONTAINER IMAGE CONTENTS ARE UNSCANNED: no docker/scanner in this environment, so the Dockerfiles "
-               "are read statically and no built image has been inspected for OS packages, layers or CVEs",
-               "run trivy/grype against the built digests in CI (and record the digests) before the first "
-               "production deploy; the static checks here do not cover base-image vulnerabilities")
+    # P14 D3: this used to record an OPEN whenever `docker --version` failed — a statement about the build
+    # machine, not about the product. It has now been run for real: `tools/p14-image-scan.py` builds both images,
+    # scans them with trivy and records the result (docs/verification/P14-image-scan.json). This section consumes
+    # that record, so the static checks above and the executed scan are read together.
+    scan = VERIF / "P14-image-scan.json"
+    if scan.exists():
+        data = json.loads(scan.read_text())
+        checks = data.get("checks") or []
+        facts["containers"]["scan"] = {
+            "artifact": "docs/verification/P14-image-scan.json",
+            "scanned": [c["name"] for c in checks if c.get("status") == "PASS" and "scanned" in c.get("name", "")],
+            "totals": (data.get("facts") or {}).get("totals"),
+            "open": [c.get("check") for c in (data.get("open_conditions") or [])],
+        }
+        g.check("both images are scanned, not just read as text (trivy, on the built digests)",
+                len(facts["containers"]["scan"]["scanned"]) == 2,
+                "docs/verification/P14-image-scan.json: %s" % json.dumps(facts["containers"]["scan"]["totals"]))
+    elif shutil.which("trivy") is None:
+        g.open("CONTAINER IMAGE CONTENTS ARE UNSCANNED HERE: no recorded scan and no scanner on this machine, so "
+               "the Dockerfiles are read statically and no built image has been inspected for OS packages or CVEs",
+               "run `python3 tools/p14-image-scan.py --record docs/verification/P14-image-scan.txt --json "
+               "docs/verification/P14-image-scan.json` where docker and trivy are installed")
 
 
 # -------------------------------------------------------------------------------------------------- 7. DAST

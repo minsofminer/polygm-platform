@@ -1,0 +1,42 @@
+# P14 D4 — what the daemon is allowed to see.
+#
+# There was no `.dockerignore` until the first real image build: compose's context is the repository root, so every
+# build tarred `.git` (40 MB of history), `web/node_modules` (577 MB) and `web/.next` (78 MB) and shipped them to
+# the daemon before the first instruction ran. Neither Dockerfile copies any of it — the copies are explicit
+# (`packages`, `services/api`, `db`, `brand`, `tools` and `requirements.txt`) — so this changes no image, it stops
+# the build from carrying the workspace.
+#
+# The rule for entries here: exclude only what no `COPY` needs. `tools/` and `brand/` are copied by the API image;
+# the web tree and the git history are not copied by anything, and `.git` additionally carries every secret that
+# was ever committed before it was rotated.
+.git
+.gitignore
+.dockerignore
+
+# Dependencies and build output: never inside an image, all of it rebuildable.
+**/node_modules
+**/.next
+**/dist
+**/build
+**/coverage
+**/.venv
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+**/.ruff_cache
+**/.mypy_cache
+
+# The agent/skill scaffolding and local tool caches: workspace furniture, not product.
+.agents
+skills
+.arena
+.cache
+.local
+plans
+
+# Anything an operator keeps beside the code but never inside an artefact.
+**/.env
+**/.env.*
+**/.secrets
+**/*.pem
+**/*.key

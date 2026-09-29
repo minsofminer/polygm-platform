@@ -453,7 +453,8 @@ def c7_refresh_rotation_reuse_revokes_the_family(p: Plane) -> tuple[str, bool, s
 
 
 def c8_cooldown_is_a_schema_fact_not_a_code_path(p: Plane) -> tuple[str, bool, str]:
-    """`skip_cooldown = FALSE` is a CHECK, and an address in cooldown cannot be deleted either."""
+    """`skip_cooldown = 0` is a CHECK (an integer column, spelled as one since P14 D4), and an address in
+    cooldown cannot be deleted either."""
     conn = p.sql()
     conn.row_factory = sqlite3.Row
     tries = {}

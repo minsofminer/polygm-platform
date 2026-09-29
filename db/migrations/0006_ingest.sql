@@ -163,7 +163,12 @@ CREATE TABLE IF NOT EXISTS alert_deliveries (
 );
 CREATE INDEX IF NOT EXISTS alert_deliveries_pending_idx ON alert_deliveries (priority, queued_ms)
     WHERE status = 'queued';
-CREATE INDEX IF NOT EXISTS alert_deliveries_latency_idx ON alert_deliveries (sent_ms - queued_ms DESC, queued_ms DESC)
+-- P14 D4: the first element is an EXPRESSION, and both engines require one to be parenthesised before the
+-- sort order is read — `(sent_ms - queued_ms DESC, …)` is a syntax error in Postgres ("syntax error at or
+-- near -") and in sqlite. It went unseen because this index is partial, and the transpiler used to drop every
+-- partial index from the subset, so nothing had ever parsed it; the subset now carries the partial indexes
+-- that are guarantees, and the migration set is finally parsed by a real Postgres.
+CREATE INDEX IF NOT EXISTS alert_deliveries_latency_idx ON alert_deliveries ((sent_ms - queued_ms) DESC, queued_ms DESC)
     WHERE status = 'sent';                          -- the SLO query, without a full scan at 10k deliveries/min
 
 -- The bridge. Every ingest table above is keyed on the venue's condition id because that is what the venue
