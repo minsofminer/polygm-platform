@@ -1,6 +1,7 @@
 import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
-import { Toasts, pushRefusal, useToasts } from "./Toast";
+import { Toasts } from "./Toast";
+import { pushRefusal, useToasts } from "./toast-store";
 
 describe("toast dedupe", () => {
   beforeEach(() => useToasts.setState({ toasts: [] }));

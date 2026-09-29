@@ -32,7 +32,7 @@ vi.mock("@/api/client", () => ({
     return { ok: true, data: { intentId: "int_1", state: "queued" } };
   },
 }));
-vi.mock("@/ui/Toast", () => ({ pushRefusal: () => undefined }));
+vi.mock("@/ui/toast-store", () => ({ pushRefusal: () => undefined }));
 
 afterEach(() => {
   cleanup();

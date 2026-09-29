@@ -46,6 +46,7 @@ import {
   type BuilderDraft,
 } from "./automation";
 import type { AutomationList, AutomationRule, AutomationRunRow, TemplateCatalog } from "./wire";
+import { confirmSentence } from "./automation-logic";
 
 const MAX_RUNS_SHOWN = 25;
 
@@ -334,9 +335,5 @@ export function AutomationView({ initial, catalog }: { initial: AutomationList |
   );
 }
 
-/** The list's own helper for the confirmation step: what the rule will do, in words, before it is armed. */
-export function confirmSentence(rule: AutomationRule): string {
-  return t("terminal.automation.confirm", { name: rule.name, actions: actionSummary(rule.actions), cap: rule.maxPerDay });
-}
 
 export const MAX_LOSS_TEXT = (micro: number): number => microToCents(micro);

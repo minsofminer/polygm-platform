@@ -135,7 +135,9 @@ body {
    the element, so a resize never re-renders React at 60fps (web/DESIGN.md §4). */
 .frame {
   display: grid;
-  grid-template-columns: var(--pgm-rail-left, auto) minmax(0, 1fr) var(--pgm-rail-right, auto);
+  /* All three tracks come from `useRails` on one scale (see widthVars): the centre is the complement of
+     the two rails, not a lone `1fr`, or the rails take 40 of the 41 parts between them. */
+  grid-template-columns: var(--pgm-rail-left, auto) minmax(0, var(--pgm-rail-center, 1fr)) var(--pgm-rail-right, auto);
   gap: var(--pgm-space-2);
   padding: var(--pgm-space-2);
   min-height: 100dvh;

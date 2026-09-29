@@ -1,31 +1,15 @@
 "use client";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Dialog, announce } from "@/ui/Dialog";
+import { Dialog } from "@/ui/Dialog";
+import { announce } from "@/ui/announce";
 import { request } from "@/api/client";
 import { ROUTES } from "@/api/routes";
 import { MOBILE_TABS } from "./shortcuts";
 import { t } from "@/i18n/t";
-
-export type PaletteEntry = { group: "markets" | "traders" | "actions"; label: string; href?: string; run?: () => void; note?: string };
+import { filterEntries, type PaletteEntry } from "./palette-logic";
 
 const DEBOUNCE_MS = 180;
-/** A wallet is 0x + 40 hex. Only then do we offer the trader search: an address-typed query that hits the
- *  market index returns nothing useful and teaches the user that search is broken. */
-const ADDRESS = /^0x[0-9a-fA-F]{40}$/;
-
-export function filterEntries(query: string, markets: { id: string; question: string }[]): PaletteEntry[] {
-  const q = query.trim().toLowerCase();
-  const groups: PaletteEntry[] = [];
-  if (ADDRESS.test(q)) {
-    groups.push({ group: "traders", label: q, href: `/traders/${q}` });
-  }
-  for (const m of markets) {
-    if (!q || m.question.toLowerCase().includes(q)) groups.push({ group: "markets", label: m.question, href: `/markets/${m.id}` });
-  }
-  for (const tab of MOBILE_TABS) groups.push({ group: "actions", label: t("shell.palette.goTo", { label: tab.label }), href: tab.href });
-  return groups;
-}
 
 /**
  * The palette: search markets, jump to traders, run actions (P08 D4's "highest-leverage UX feature"). The

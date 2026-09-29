@@ -41,6 +41,7 @@ import {
   unrealisedKnown,
 } from "./portfolio";
 import type { Portfolio, PortfolioPosition } from "./wire";
+import { portfolioSummaryText } from "./portfolio-logic";
 
 /** Every literal key this screen asks for, in one place: a `t()` with a computed key fails the i18n check. */
 const TOTAL_LABEL: Record<string, string> = {
@@ -290,7 +291,4 @@ function Curve({ book }: { book: Portfolio }) {
   );
 }
 
-/** Kept for the route's server-side first paint and for tests. */
-export function portfolioSummaryText(book: Portfolio): string {
-  return moneyText(book.totals.equityMicro);
-}
+

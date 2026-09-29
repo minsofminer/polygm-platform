@@ -13,6 +13,7 @@
  */
 import { useCallback, useMemo, useState } from "react";
 import { t } from "@/i18n/terminal";
+import { windowLabel } from "./dossier-logic";
 import { freshnessOf } from "@/api/envelope";
 import { microToCents } from "@/money/cents";
 import { Number } from "@/num/Number";
@@ -50,12 +51,6 @@ import {
  * These tables are the fix: every key is literal, every key is checkable, and the window names read as what they
  * select ("7 days") rather than as a wire value.
  */
-const WINDOW_LABEL: Record<string, string> = {
-  "7d": t("terminal.dossier.window7"),
-  "30d": t("terminal.dossier.window30"),
-  "90d": t("terminal.dossier.window90"),
-  all: t("terminal.dossier.windowAll"),
-};
 
 const METRIC_LABEL: Record<string, string> = {
   volume: t("terminal.dossier.metric.volume"),
@@ -74,10 +69,6 @@ const SIDE_LABEL: Record<string, string> = {
   BUY: t("terminal.dossier.buy"),
   SELL: t("terminal.dossier.sell"),
 };
-
-export function windowLabel(key: string): string {
-  return WINDOW_LABEL[key] ?? key;
-}
 
 export type DossierInitial = {
   anonWallet: string;

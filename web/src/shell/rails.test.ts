@@ -11,7 +11,7 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { RAIL_MAX, RAIL_MIN, RAIL_STEP, clampFraction, nudgeFraction, railsFit } from "./rails";
+import { RAIL_MAX, RAIL_MIN, RAIL_STEP, clampFraction, nudgeFraction, railsFit, widthVars } from "./rails";
 
 const SHELL = readFileSync(path.join(process.cwd(), "src", "shell", "Shell.tsx"), "utf8");
 
@@ -99,5 +99,39 @@ describe("the rails still refuse an impossible layout", () => {
     // produce a state that is reachable by keyboard but not by pointer.
     expect(railsFit({ left: RAIL_MIN, right: RAIL_MIN }, { left: false, right: false })).toBe(true);
     expect(railsFit({ left: RAIL_MAX, right: RAIL_MAX }, { left: false, right: false })).toBe(false);
+  });
+});
+
+describe("the frame's three tracks", () => {
+  const fr = (v: string | undefined) => Number.parseFloat((v ?? "").replace(/^.*,\s*/, "").replace("fr)", ""));
+  const track = (vars: Record<string, string>, name: string) => vars[name] ?? "";
+  const css = readFileSync(path.join(process.cwd(), "src", "globals.css"), "utf8");
+
+  it("is a share of 100, not three bare fr values", () => {
+    // What shipped until 2026-09-29: rails of 18fr/22fr beside a centre of `1fr`. `fr` divides *free* space,
+    // so the centre got 1 of 41 parts — 34px of a 1440px viewport, and both rails hundreds of px of nothing.
+    // Every screenshot of an app screen was that, and no test looked at the sum.
+    const vars = widthVars({ left: 0.18, right: 0.22 }, { left: false, right: false });
+    expect(fr(vars["--pgm-rail-left"]) + fr(vars["--pgm-rail-center"]) + fr(vars["--pgm-rail-right"])).toBeCloseTo(100, 6);
+    expect(track(vars, "--pgm-rail-left")).toContain("18fr");
+    expect(track(vars, "--pgm-rail-center")).toContain("60fr");
+    expect(track(vars, "--pgm-rail-right")).toContain("22fr");
+  });
+
+  it("gives the whole width to the centre when a rail is collapsed", () => {
+    const left = widthVars({ left: 0.18, right: 0.22 }, { left: true, right: false });
+    expect(track(left, "--pgm-rail-left")).toBe("0");
+    expect(fr(left["--pgm-rail-center"]) + fr(left["--pgm-rail-right"])).toBeCloseTo(100, 6);
+    const both = widthVars({ left: 0.18, right: 0.22 }, { left: true, right: true });
+    expect(fr(both["--pgm-rail-center"])).toBe(100);
+  });
+
+  it("is read by the stylesheet: the frame's centre track is the complement variable", () => {
+    expect(css).toMatch(/\.frame\s*\{[^}]*grid-template-columns:\s*var\(--pgm-rail-left[^;]*--pgm-rail-center/);
+    // And the component writes all three, or the centre falls back to `1fr` and the bug returns silently.
+    const useRails = readFileSync(path.join(process.cwd(), "src", "shell", "useRails.ts"), "utf8");
+    for (const name of ["--pgm-rail-left", "--pgm-rail-center", "--pgm-rail-right"]) {
+      expect(useRails).toContain(`style.setProperty("${name}"`);
+    }
   });
 });

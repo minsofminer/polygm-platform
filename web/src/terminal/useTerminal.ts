@@ -31,6 +31,7 @@ import type {
   TraderDossier,
   WhaleView,
 } from "./wire";
+import { pollMsFor, csvColumns } from "./terminal-logic";
 
 export type LiveStatus = "live" | "disconnected";
 
@@ -38,13 +39,6 @@ export type LiveStatus = "live" | "disconnected";
 export type TapePage = { rows: TerminalFill[]; nextCursor: number | null; counts: unknown; asOf: number;
                          staleAfter: number };
 
-/** The poll interval for a measured arrival rate: a busy tape is polled more often, and a dead one, less. */
-export function pollMsFor(ratePerSecond: number): number {
-  if (ratePerSecond >= 40) return 500;
-  if (ratePerSecond >= 20) return 750;
-  if (ratePerSecond >= 5) return 1_500;
-  return 3_000;
-}
 
 type TapeState = {
   rows: TerminalFill[];
@@ -517,7 +511,4 @@ export function useNow(intervalMs = 1_000): number {
   return now;
 }
 
-/** The columns a CSV export must contain (from the portfolio payload), so the file matches the table. */
-export function csvColumns(portfolio: Portfolio | null): string[] {
-  return portfolio?.csv.columns ?? [];
-}
+

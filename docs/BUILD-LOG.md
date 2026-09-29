@@ -1358,3 +1358,48 @@ machine cannot measure: the break-glass provider rate limit (needs real Turnkey 
 subnet (needs a deployment), the managed instance's own PITR restore (needs the production account), MFA on the
 three accounts (needs their owners), and F14 itself.
 
+
+---
+
+## 2026-09-29 — the web screen that was not there, and the grid defect it was hiding behind
+
+**The ask was "start building the website".** The website exists (Next.js App Router, 14+ routes), so the work
+started where the product actually was: one screen returning HTTP 500, and a verification pass that had never run
+against a rebuilt server. Both of those turned out to be smaller than what was underneath them.
+
+**`/terminal` was a 500, and the reason is a rule, not a typo.** The console showed a Trusted-Types
+`TrustedScriptURL` error, which was a cascade: the server log named the real cause —
+*`Attempted to call marketTitle() from the server but marketTitle is on the client`*. `TerminalScreen.tsx` is a
+`"use client"` module, and `app/(app)/terminal/page.tsx` is a server component importing a plain function from it.
+Anything exported from a client module becomes a **client reference** for a server importer: callable from the
+browser, fatal at render on the server. The helper itself was pure — a title lookup over a market object — so it
+moved to a plain module (`web/src/terminal/market-view.ts`) that both sides may import.
+
+**A rule that one bug found is worth a test that finds the next one.** `web/src/client-boundary.test.ts` walks every
+`"use client"` module under `src/` and fails if it exports anything callable that is not a component (`PascalCase`)
+or a hook (`use*`). Written against the tree as it stood, it found **18 offenders in 10 files**, all of them latent
+copies of the same bug — a server component that imported one of them would have 500'd exactly like `/terminal` did.
+All 18 moved to plain modules beside their screens (`terminal-logic.ts`, `automation-logic.ts`, `portfolio-logic.ts`,
+`palette-logic.ts`, `dossier-logic.ts`, `whales-logic.ts`, `layout-logic.ts`, `data-cache.ts`, `announce.ts`,
+`toast-store.ts`), and every importer was repointed. The guard's own first version was wrong in a way worth
+recording: it sliced the first 200 characters looking for the directive and therefore *skipped* six client modules
+whose file headers are longer than that (`useLive`, `Number`, `Button`, `Dialog`, `Field`, `Toast`). It now skips
+comments before looking.
+
+**The real user-visible defect was one CSS track.** With `/terminal` finally returning 200, the screenshot showed a
+34-pixel-wide screen and two enormous empty rails. The frame's tracks were
+`var(--pgm-rail-left) minmax(0, 1fr) var(--pgm-rail-right)`, and `rails.ts` emitted `18fr` and `22fr` for the rails:
+`fr` divides *free* space, so the centre got **one part in forty-one**. Every authenticated screen was like that —
+portfolio, wallet, alerts, leaderboard — and it had survived the design review, the animation pass and the browser
+pass, because each of those looked at the part of the page it was about. The fix is one scale for all three tracks:
+the rails carry their fraction, the centre carries the complement, and the sum is asserted in `rails.test.ts`
+(`18 + 60 + 22 = 100`), including the collapsed cases. Found by looking at a screenshot, fixed in arithmetic, and
+pinned by a test that would have caught it.
+
+**Verified after the fix.** `npx tsc --noEmit` clean; `vitest run` **632 passed / 71 files** (up from 629: the
+boundary guard's 2 and the rails track tests' 3); `make web-build` passes with `sources-sha256: f5ea6524c7d2da1d`
+and no route over budget; the browser suite is **18 passed / 8 skipped / 4 failed**, where the 4 failures are
+exactly the two parked specs (`buy-flow`, `wallet-ceremony`) and are the next work item. Screenshots in
+`/home/user/shots/` now show a real terminal — market titles, watchlist, trending, a trade ticket — instead of a
+blank page, and `/portfolio` renders its honest refusal panel, which is the correct product behaviour when the
+session cookie is synthetic.

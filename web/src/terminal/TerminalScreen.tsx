@@ -51,7 +51,9 @@ import {
 } from "./watchlist";
 import type { Candle, Interval } from "@/lib/ladders";
 
-export type TerminalMarketRef = { marketId: string; question: string; slug?: string; volume24h?: string };
+import { marketTitle, volumeCents, type TerminalMarketRef } from "@/terminal/market-view";
+
+export type { TerminalMarketRef };
 
 const TAB_LABEL: Record<string, string> = {
   activity: t("terminal.tabs.activity"),
@@ -446,14 +448,8 @@ function useMarket(marketId: string): MarketRead {
   };
 }
 
-/** Exported for the route's server-side first paint of the market label. */
-export function marketTitle(ref: TerminalMarketRef): string {
-  return ref.question || ref.marketId;
-}
-
-/** The volume column the trending list sorts by, in the rail's own units (cents). */
-export function volumeCents(ref: TerminalMarketRef): number {
-  return Math.trunc(microOf(ref.volume24h ?? "0") / 10 ** 4);
-}
+// `marketTitle` and `volumeCents` live in `@/terminal/market-view` — pure functions in a `"use client"` module
+// cannot be called from a server component, and `app/(app)/terminal/page.tsx` does exactly that for the first
+// paint. Keeping them here is what made `/terminal` a 500 (2026-09-29).
 
 export type { Interval };

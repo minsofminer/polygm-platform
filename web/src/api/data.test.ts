@@ -14,7 +14,8 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { invalidate, peek, resetCache, useAction, useResource } from "./data";
+import { useAction, useResource } from "./data";
+import { invalidate, peek, resetCache } from "./data-cache";
 
 beforeEach(() => {
   resetCache();

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { filterEntries } from "./CommandPalette";
+import { filterEntries } from "./palette-logic";
 
 const markets = [
   { id: "1", question: "Will BTC close above 100k this year?" },

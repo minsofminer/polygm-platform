@@ -24,6 +24,7 @@ export function useRails(frameRef: React.RefObject<HTMLElement | null>) {
       const el = frameRef.current;
       if (!el) return;
       el.style.setProperty("--pgm-rail-left", vars["--pgm-rail-left"] ?? "");
+      el.style.setProperty("--pgm-rail-center", vars["--pgm-rail-center"] ?? "");
       el.style.setProperty("--pgm-rail-right", vars["--pgm-rail-right"] ?? "");
     },
     [collapsed, frameRef],

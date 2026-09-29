@@ -64,9 +64,25 @@ export function railsFit(fractions: RailFractions, collapsed: { left: boolean; r
   return used <= 0.66;
 }
 
+/**
+ * The three grid tracks the shell frame is built from. The unit is a share of 100, not a bare `fr`: `fr`
+ * distributes *free space*, so two tracks of `18fr` and `22fr` next to a centre of `1fr` give the centre
+ * one part in forty-one — which is exactly what shipped, and what a 2026-09-29 screenshot of `/portfolio`
+ * showed: both rails ~620px of empty panel, the screen itself 34px wide.
+ *
+ * So every track is emitted on the same scale and the centre is the complement, which makes the three sum to
+ * 100fr and the rails land on their actual fractions of the viewport. `rails.test.ts` asserts the sum, because
+ * this is arithmetic a unit test can check and a screenshot is a slow way to find.
+ */
 export function widthVars(fractions: RailFractions, collapsed: { left: boolean; right: boolean }): Record<string, string> {
+  const left = collapsed.left ? 0 : fractions.left;
+  const right = collapsed.right ? 0 : fractions.right;
+  const centre = Math.max(0, 1 - left - right);
   return {
-    "--pgm-rail-left": collapsed.left ? "0" : `minmax(var(--pgm-space-10), ${Math.round(fractions.left * 100)}fr)`,
-    "--pgm-rail-right": collapsed.right ? "0" : `minmax(var(--pgm-space-10), ${Math.round(fractions.right * 100)}fr)`,
+    "--pgm-rail-left": collapsed.left ? "0" : `minmax(var(--pgm-space-10), ${Math.round(left * 100)}fr)`,
+    // Bare `<n>fr`, not a `minmax(...)`: the stylesheet wraps it in `minmax(0, …)` so the centre may shrink
+    // below its content instead of overflowing, and `minmax(0, minmax(0, 60fr))` is not a valid track.
+    "--pgm-rail-center": `${Math.round(centre * 100)}fr`,
+    "--pgm-rail-right": collapsed.right ? "0" : `minmax(var(--pgm-space-10), ${Math.round(right * 100)}fr)`,
   };
 }

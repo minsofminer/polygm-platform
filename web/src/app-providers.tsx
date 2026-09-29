@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { useToasts } from "@/ui/Toast";
+import { useToasts } from "@/ui/toast-store";
 import { isTma, telegramTheme, bottomInsetPx } from "@/telegram/bridge";
 import { silentReauth } from "@/telegram/reauth";
 import { useAuth } from "@/auth/session";

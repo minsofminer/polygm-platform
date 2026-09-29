@@ -6,7 +6,7 @@ import { Field } from "@/ui/Field";
 import { t } from "@/i18n/t";
 import { useAuth } from "./session";
 import { isTma, tma } from "@/telegram/bridge";
-import { pushRefusal } from "@/ui/Toast";
+import { pushRefusal } from "@/ui/toast-store";
 
 /**
  * Sign in. Three things this form must not do, and each is a line of code rather than a promise:

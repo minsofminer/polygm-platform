@@ -8,7 +8,7 @@ excluded from the budget: https://telegram.org/js/telegram-web-app.js — fetche
   /tma       http 200 · 11 chunk(s) · JS 196.8 KB · CSS 7.0 KB · money layer absent · platform bridge 18.0 KB (not budgeted)
   /profile   http 200 · 10 chunk(s) · JS 185.2 KB · CSS 7.0 KB · money layer absent
 
-sources-sha256: b83a11556d628184
+sources-sha256: f5ea6524c7d2da1d
 routes over budget: none
 route-level splitting: proven — the landing document does not fetch the money module and /markets does
 status: pass

@@ -30,7 +30,7 @@ vi.mock("@/api/client", () => ({
   },
 }));
 
-vi.mock("@/ui/Toast", () => ({ pushRefusal: () => undefined }));
+vi.mock("@/ui/toast-store", () => ({ pushRefusal: () => undefined }));
 
 afterEach(() => {
   sent.length = 0;

@@ -108,20 +108,4 @@ export function Dialog({ open, onClose, title, busy, children, describeBy }: Dia
   );
 }
 
-const liveRegion = (id: string) => {
-  let el = document.getElementById(id);
-  if (el) return el;
-  el = document.createElement("div");
-  el.id = id;
-  el.setAttribute("role", "status");
-  el.setAttribute("aria-live", "polite");
-  el.className = "a11y-only";
-  document.body.appendChild(el);
-  return el;
-};
-
-/** One polite region, reused. A `aria-live` on the tape itself would make the product unusable
- *  (web/DESIGN.md §7), so announcements come from here instead, at most one per few seconds by nature. */
-export function announce(text: string): void {
-  liveRegion("pgm-announcer").textContent = text;
-}
+import { announce } from "./announce";

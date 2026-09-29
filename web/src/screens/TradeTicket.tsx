@@ -5,10 +5,10 @@ import { Button } from "@/ui/Button";
 import { MoneyField } from "@/ui/Field";
 import { centsFromDecimal } from "@/money/cents";
 import { newIdempotencyKey, request } from "@/api/client";
-import { pushRefusal } from "@/ui/Toast";
+import { pushRefusal } from "@/ui/toast-store";
 import { t } from "@/i18n/t";
 import { hapticConfirm, showMainButton, usesMainButton } from "@/telegram/bridge";
-import { announce } from "@/ui/Dialog";
+import { announce } from "@/ui/announce";
 
 /**
  * The ticket is in P08 because the *gate* is in P08: the shell is what decides whether a trade may be sent,

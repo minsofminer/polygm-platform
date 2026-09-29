@@ -1,7 +1,8 @@
 import { t } from "@/i18n/terminal";
 import { serverRead } from "@/api/server-read";
 import { serverAuth } from "@/auth/server";
-import { marketTitle, TerminalScreen, type TerminalMarketRef } from "@/terminal/TerminalScreen";
+import { TerminalScreen } from "@/terminal/TerminalScreen";
+import { marketTitle, type TerminalMarketRef } from "@/terminal/market-view";
 
 export const dynamic = "force-dynamic";
 
